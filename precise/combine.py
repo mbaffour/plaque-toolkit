@@ -38,7 +38,13 @@ import numpy as np
 import cv2
 from skimage.feature import blob_log
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+# repo root: under a PyInstaller bundle the data files (_research/clf) are extracted
+# under sys._MEIPASS; from source they sit at the project root (two dirs up).
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _ROOT = sys._MEIPASS
+else:
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 try:
     from scalebar import draw_scale_bar       # physical mm scale bar on the overlay
 except Exception:
@@ -52,8 +58,7 @@ except Exception:
 #  convention used to mine the training data, scored by _research/clf/infer.py,
 #  and kept only if P(plaque) >= PRECISE_CLF_THR.
 # --------------------------------------------------------------------------- #
-CLF_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "_research", "clf")
+CLF_DIR = os.path.join(_ROOT, "_research", "clf")
 # patch geometry -- MUST mirror stage2_mine.crop_norm so the classifier sees the
 # same distribution it was trained on.
 CLF_PATCH = 48

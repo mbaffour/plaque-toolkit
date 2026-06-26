@@ -24,9 +24,12 @@ Verify with:  python -m precise.pipeline IMAGE [OUT_DIR]
 import os
 import sys
 
-# repo root on sys.path so plaque_gui / plaque_size_tool / scalebar import whether we are
-# run as a script, as a module, or frozen.
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# repo root: under a PyInstaller bundle the data files (_plaqseg/models, _research/clf)
+# are extracted under sys._MEIPASS; from source they sit at the project root (two dirs up).
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _ROOT = sys._MEIPASS
+else:
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
