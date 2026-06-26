@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+# analysis outputs (regenerated; keep raw images + code under version control)
+out/
+out_turbidity/
+# temporary brightness-adjusted files written by the size CLI
+*.tmp.tif
+*.tmp.tiff
+*.tmp.jpg
+*.tmp.jpeg
+*.tmp.png
+# scratch/test artifacts
+_tb*/
+_h*/
+_vt*/
+_gen_samples.py
+# app build artifacts (the .spec / .iss are kept; built outputs are not)
+dist/
+build/_work/
+build/_pyi_work/
+build/PlaqueToolkit/
+*.log
+Output/
+*.egg-info/
+_roboflow_key.txt

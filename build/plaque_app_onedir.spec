@@ -12,6 +12,14 @@ datas += collect_data_files("pillow_heif")
 datas += collect_data_files("matplotlib")
 datas += [(os.path.join(ROOT, "app", "resources"), "app/resources")]
 
+# NOTE on Precise in the frozen build:
+# The packaged .exe is for users WITHOUT Python and intentionally does NOT support the
+# Precise engine. Precise spawns subprocesses in two conda envs (plaque + plaqseg) that
+# import the source modules (plaque_gui, plaque_size_tool, etc.), so it needs the source
+# checkout + both envs — i.e. the run-from-source path. The frozen app therefore reports
+# Precise as unavailable (Published / Current / Sensitive all work). Keeping torch and the
+# 23 MB weights out of the bundle is what keeps it light.
+
 binaries = []
 binaries += collect_dynamic_libs("pillow_heif")
 

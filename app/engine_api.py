@@ -145,6 +145,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
     # so the table / overlay / scale bar have what they need regardless of the precise CSV.
     base = detect_single(path, plate_mm=plate_mm, small=True)
 
+    # run_precise.py is launched with the running interpreter, which from source is the
+    # 'plaque' env python (a real interpreter that can run the .py and import plaque_gui).
+    # Precise is a run-from-source feature; the frozen build reports it unavailable before
+    # reaching here (precise/ is not bundled — see plaque_app_onedir.spec).
     cmd = [sys.executable, runner, "--image", path, "--out", out_dir,
            "--tag", tag, "--plate-mm", str(plate_mm or 100)]
     if progress:
