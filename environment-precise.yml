@@ -1,0 +1,30 @@
+# OPTIONAL second environment for the "Precise" engine (PST + PlaqSeg YOLO-seg).
+# Only needed if you want to run the Precise detection mode; the app works fully
+# without it (Published / Current / Sensitive modes use only the 'plaque' env).
+#
+#   conda env create -f environment-precise.yml      # creates env 'plaqseg'
+#
+# Then run the app from the 'plaque' env as usual. The app auto-detects this env
+# via app/env_paths.py (envs/plaqseg/python.exe on Windows, envs/plaqseg/bin/python
+# on macOS/Linux). To point at a non-standard location instead, set PLAQSEG_PY.
+#
+# Notes:
+#  - CPU-only PyTorch is requested via the pytorch-cpu / cpuonly route on conda-forge;
+#    this keeps the install light and avoids CUDA. On Apple Silicon torch ships an
+#    arm64 wheel automatically. If conda resolution is slow, use `mamba env create`.
+#  - The PlaqSeg model weights (_plaqseg/models/small.pt) must also be present.
+name: plaqseg
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - torch>=2.0          # CPU build resolves automatically off PyPI on win/mac;
+                            #   on Linux use the CPU index if you want to avoid CUDA:
+                            #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - ultralytics>=8.3
+      - scikit-image>=0.22
+      - opencv-python>=4.6,<5
+      - numpy>=1.24
+      - pandas>=1.3

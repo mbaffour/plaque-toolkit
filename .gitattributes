@@ -1,0 +1,18 @@
+# Keep Unix line endings on scripts that must run on macOS/Linux.
+# Without this, core.autocrlf=true on Windows would store CRLF and break the
+# shebang / bash parsing on the target OS.
+*.sh        text eol=lf
+*.command   text eol=lf
+build_macos.sh text eol=lf
+
+# Windows batch files want CRLF.
+*.bat       text eol=crlf
+
+# Don't munge binary assets.
+*.png       binary
+*.ico       binary
+*.icns      binary
+*.tif       binary
+*.tiff      binary
+*.heic      binary
+*.pt        binary
