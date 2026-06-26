@@ -90,30 +90,59 @@ def _project_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def precise_available():
-    """Best-effort check that the Precise two-env pipeline *could* run here.
-    Returns (ok: bool, reason: str). Cheap — only checks files/dirs + cross-platform env
-    discovery, never imports torch or launches a (heavy) subprocess.
+def _torch_inprocess_available():
+    """True iff torch + ultralytics import in THIS interpreter (the unified/frozen env),
+    so Precise can run in-process with no conda subprocesses. Cheap-ish (imports torch),
+    so cache the result."""
+    global _TORCH_INPROC
+    try:
+        return _TORCH_INPROC
+    except NameError:
+        pass
+    try:
+        import torch        # noqa: F401
+        import ultralytics  # noqa: F401
+        _TORCH_INPROC = True
+    except Exception:
+        _TORCH_INPROC = False
+    return _TORCH_INPROC
 
-    The plaqseg interpreter is located portably via app.env_paths.plaqseg_python(), which
-    works on Windows/macOS/Linux and honours the PLAQSEG_PY override and env_paths.json."""
+
+def precise_available():
+    """Best-effort check that the Precise pipeline *could* run here.
+    Returns (ok: bool, reason: str). Cheap — checks files/dirs + import availability,
+    never launches a (heavy) subprocess.
+
+    Two ways Precise can run:
+      1. IN-PROCESS — torch + ultralytics importable in the current interpreter (the
+         unified 'plaqueapp' env or the frozen self-contained app). No conda needed.
+      2. TWO-ENV SUBPROCESS — a separate 'plaqseg' conda env, located portably via
+         app.env_paths.plaqseg_python() (the run-from-source path on dev machines)."""
     root = _project_root()
+    weights = os.path.join(root, "_plaqseg", "models", "small.pt")
+    if not os.path.exists(weights):
+        return False, "the PlaqSeg model weights (_plaqseg/models/small.pt) were not found."
+
+    # Path 1: in-process torch (unified env / frozen app).
+    if _torch_inprocess_available():
+        return True, ""
+
+    # Path 2: two-env subprocess fallback (run-from-source on a machine with both envs).
     runner = os.path.join(root, "precise", "run_precise.py")
     if not os.path.exists(runner):
-        return False, "precise/run_precise.py is not bundled with this build."
+        return False, ("precise/run_precise.py is not bundled and torch/ultralytics are "
+                       "not importable in this interpreter.")
     try:
         from app.env_paths import plaqseg_python
     except Exception:  # pragma: no cover - app pkg always importable here
         from env_paths import plaqseg_python
     plaqseg_py = plaqseg_python()
-    weights = os.path.join(root, "_plaqseg", "models", "small.pt")
     if not plaqseg_py or not os.path.exists(plaqseg_py):
-        return False, ("the PlaqSeg environment was not found. Precise needs a second "
-                       "conda env ('plaqseg') with PyTorch + ultralytics installed. "
-                       "Set the PLAQSEG_PY environment variable to point at its python "
-                       "if it lives in a non-standard location.")
-    if not os.path.exists(weights):
-        return False, "the PlaqSeg model weights (_plaqseg/models/small.pt) were not found."
+        return False, ("the PlaqSeg environment was not found. Precise needs either "
+                       "torch + ultralytics in this Python, or a second conda env "
+                       "('plaqseg') with PyTorch + ultralytics. Set the PLAQSEG_PY "
+                       "environment variable to point at its python if it lives in a "
+                       "non-standard location.")
     return True, ""
 
 
@@ -145,10 +174,35 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
     # so the table / overlay / scale bar have what they need regardless of the precise CSV.
     base = detect_single(path, plate_mm=plate_mm, small=True)
 
+    # ---- IN-PROCESS path (unified 'plaqueapp' env or frozen self-contained app) -------- #
+    # If torch + ultralytics import here, run the whole Precise pipeline in THIS process —
+    # no conda envs, no subprocess. This is what makes the self-contained installer work.
+    if _torch_inprocess_available():
+        if progress:
+            progress("Running Precise pipeline in-process (PST + PlaqSeg + classifier)…")
+        try:
+            from precise.pipeline import run_inprocess
+            summ = run_inprocess(path, plate_mm=(plate_mm or 100), out_dir=out_dir,
+                                 clf=True, blob=False, tag=tag)
+        except Exception as e:  # surface a friendly message; keep the GUI alive
+            raise PreciseUnavailable(
+                "The in-process Precise pipeline failed:\n\n%s\n\n"
+                "Published / Current / Sensitive modes still work." % e)
+        csv_path = summ.get("csv") or os.path.join(out_dir, "precise_%s.csv" % tag)
+        pdf = pd.read_csv(csv_path)
+        overlay = summ.get("overlay")
+        result = dict(base)
+        result["precise"] = True
+        result["precise_df"] = pdf
+        result["precise_summary"] = summ
+        result["precise_overlay"] = overlay
+        result["precise_csv"] = csv_path
+        result["n_plaques"] = int(summ.get("n_final", len(pdf)))
+        return result
+
+    # ---- TWO-ENV SUBPROCESS fallback (run-from-source with separate plaque/plaqseg envs) #
     # run_precise.py is launched with the running interpreter, which from source is the
     # 'plaque' env python (a real interpreter that can run the .py and import plaque_gui).
-    # Precise is a run-from-source feature; the frozen build reports it unavailable before
-    # reaching here (precise/ is not bundled — see plaque_app_onedir.spec).
     cmd = [sys.executable, runner, "--image", path, "--out", out_dir,
            "--tag", tag, "--plate-mm", str(plate_mm or 100)]
     if progress:
