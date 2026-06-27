@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaque Toolkit — all versions</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1a212b; --card2:#212b38; --ink:#e7edf3; --mut:#9fb0c0;
+    --line:#2c3a4a; --warn:#ffcf6b; --val:#6bd1ff; --enh:#ffa86b;
+    --pill:#26323f;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f4f7fa; --card:#ffffff; --card2:#eef3f8; --ink:#16202b; --mut:#566573;
+           --line:#d7e0ea; --val:#1577c2; --enh:#c4631a; --warn:#9a6b00; --pill:#e9eff5; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px;}
+  h1{font-size:27px;margin:0 0 4px;}
+  h2{font-size:19px;margin:34px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px;}
+  .sub{color:var(--mut);margin:0 0 18px;}
+  a{color:var(--val);}
+  code,.cmd{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+  .banner{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0 4px;}
+  .bcard{flex:1 1 260px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;}
+  .bcard h3{margin:0 0 6px;font-size:15px;}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+       padding:2px 8px;border-radius:20px;background:var(--pill);}
+  .tag.val{color:var(--val);} .tag.enh{color:var(--enh);}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:6px;}
+  .vc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;transition:.15s;}
+  .vc.hl{outline:2px solid var(--enh);}
+  .vc h3{margin:0 0 2px;font-size:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .vc .file{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--mut);margin:6px 0 8px;
+            background:var(--card2);padding:4px 8px;border-radius:6px;display:inline-block;}
+  .vc p{margin:6px 0;}
+  .vc .when{color:var(--mut);font-size:13.5px;}
+  .picker{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 2px;}
+  .picker button{cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink);
+                 padding:9px 13px;border-radius:9px;font-size:14px;}
+  .picker button:hover{border-color:var(--enh);}
+  .builder{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:8px;}
+  .row{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:8px 0;}
+  .row label.lab{min-width:120px;color:var(--mut);font-size:13.5px;}
+  .opt{display:inline-flex;align-items:center;gap:6px;background:var(--card2);border:1px solid var(--line);
+       padding:6px 11px;border-radius:8px;cursor:pointer;font-size:14px;}
+  .opt input{accent-color:var(--enh);}
+  .opt.dis{opacity:.4;cursor:not-allowed;}
+  input[type=text],input[type=number]{background:var(--card2);border:1px solid var(--line);color:var(--ink);
+       border-radius:8px;padding:7px 10px;font-size:14px;}
+  input[type=text]{min-width:280px;flex:1;}
+  .out{margin-top:14px;}
+  .cmd{background:#0b1118;color:#d6f3e6;border:1px solid var(--line);border-radius:10px;padding:13px 14px;
+       white-space:pre-wrap;word-break:break-all;font-size:13.5px;}
+  @media (prefers-color-scheme: light){ .cmd{background:#0f1722;color:#d6f3e6;} }
+  .copy{margin-top:8px;cursor:pointer;border:1px solid var(--line);background:var(--card2);color:var(--ink);
+        padding:7px 13px;border-radius:8px;font-size:13.5px;}
+  .copy:hover{border-color:var(--enh);}
+  .lnote{color:var(--mut);font-size:13px;margin-top:8px;}
+  .callout{background:linear-gradient(180deg,rgba(255,207,107,.10),transparent);border:1px solid var(--line);
+           border-left:4px solid var(--warn);border-radius:10px;padding:13px 16px;margin:14px 0;}
+  .callout b{color:var(--warn);}
+  .steps{margin:6px 0 0;padding-left:20px;} .steps li{margin:4px 0;}
+  footer{margin-top:40px;color:var(--mut);font-size:13px;border-top:1px solid var(--line);padding-top:14px;}
+  kbd{background:var(--card2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>🧫 Plaque Toolkit — all versions</h1>
+  <p class="sub">Every way to measure your plaques, in one place. Pick a version below, or build an exact command.
+     All launchers here run the real tools in the parent folder, so you can keep this folder as your home base.</p>
+
+  <div class="banner">
+    <div class="bcard">
+      <span class="tag val">Validated</span>
+      <h3>Original published tool</h3>
+      <p style="margin:6px 0 0;color:var(--mut)">Reproduces <b>Trofimova &amp; Jaschke 2021</b> exactly. This is the
+      one you cite as a published, peer-reviewed method. Use it for the numbers that go in your paper.</p>
+    </div>
+    <div class="bcard">
+      <span class="tag enh">Enhanced</span>
+      <h3>Current tool + GUI + app</h3>
+      <p style="margin:6px 0 0;color:var(--mut)">Same engine, plus turbidity, watershed, the click-editor, the dish
+      overlay, and the <b>sensitive</b> (tiny-plaque) mode. Great for exploring — but the extras are <i>not</i> the
+      published validation.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>For publication, in one line:</b> use the <b>Original published tool</b> as your citable engine; anything you
+    change (especially <b>sensitive</b> mode) you must validate yourself on your own plates and report separately —
+    it does <i>not</i> inherit the published validation. The sensitive mode trades precision for recall, so verify its
+    detections by eye.
+  </div>
+
+  <h2>Which version should I use?</h2>
+  <div class="picker" id="picker">
+    <button data-go="v4">I want publishable numbers</button>
+    <button data-go="v2">I want to fix what the auto-detector missed</button>
+    <button data-go="v1">I just want a CSV for one photo</button>
+    <button data-go="v3">I have a whole folder of plates</button>
+    <button data-go="v6">I want to compare turbidity across phages</button>
+    <button data-go="v7">Give me one app with everything</button>
+  </div>
+
+  <h2>The versions</h2>
+  <div class="grid">
+    <div class="vc" id="v1">
+      <h3>1 · Measure plaques <span class="tag enh">Enhanced</span></h3>
+      <div class="file">1 - Measure plaques (current).bat</div>
+      <p>Drag one or more photos onto it → annotated image + CSV (size <i>and</i> turbidity columns).</p>
+      <p class="when">When: quick measurement of a few photos with the current engine.</p>
+    </div>
+    <div class="vc" id="v2">
+      <h3>2 · Edit plaques — click GUI <span class="tag enh">Enhanced</span></h3>
+      <div class="file">2 - Edit plaques - click GUI.bat</div>
+      <p>Opens a window: <b>zoom</b> to find missed plaques, left-drag to add, <kbd>t</kbd>+click to trace,
+         right-click to remove, <b>Sensitive ON/OFF</b> button, orange <b>dish circle</b> for a calibration check.</p>
+      <p class="when">When: the auto-detector missed some and you want to correct by hand.</p>
+    </div>
+    <div class="vc" id="v3">
+      <h3>3 · Batch a folder <span class="tag enh">Enhanced</span></h3>
+      <div class="file">3 - Batch a folder (current).bat</div>
+      <p>Drag a folder of plate photos → one <code>data-green-&lt;plate&gt;.csv</code> each + a combined
+         <code>summary.csv</code>. Name each file after its plate.</p>
+      <p class="when">When: many plates at once with the current engine.</p>
+    </div>
+    <div class="vc" id="v4">
+      <h3>4 · ORIGINAL tool — one plate <span class="tag val">Validated</span></h3>
+      <div class="file">4 - ORIGINAL published tool - one plate.bat</div>
+      <p>Exact published algorithm on a single photo. Diameters within ≤0.04&nbsp;mm of the literal original.</p>
+      <p class="when">When: the value goes in your paper. This is the citable one.</p>
+    </div>
+    <div class="vc" id="v5">
+      <h3>5 · ORIGINAL tool — batch <span class="tag val">Validated</span></h3>
+      <div class="file">5 - ORIGINAL published tool - batch.bat</div>
+      <p>Exact published algorithm over a whole folder → CSV per plate + summary.</p>
+      <p class="when">When: publishable numbers for many plates.</p>
+    </div>
+    <div class="vc" id="v6">
+      <h3>6 · Compare turbidity <span class="tag enh">Enhanced</span></h3>
+      <div class="file">6 - Compare turbidity (cross-phage).bat</div>
+      <p>A folder of phages (best: transmitted-light photos + a blank-agar reference) → optical-density turbidity,
+         clarity, optional titer, per-phage stats &amp; figures.</p>
+      <p class="when">When: comparing plaque clarity across phages imaged the same day.</p>
+    </div>
+    <div class="vc" id="v7">
+      <h3>7 · Plaque Toolkit app <span class="tag enh">Enhanced</span></h3>
+      <div class="file">7 - Plaque Toolkit app (everything).bat</div>
+      <p>One window: <b>Measure</b> tab (open → detect → edit → save, with a sensitive checkbox + Re-detect) and a
+         <b>Compare turbidity</b> tab. No command line.</p>
+      <p class="when">When: you want everything in a single point-and-click app.</p>
+    </div>
+  </div>
+
+  <h2>Build an exact command</h2>
+  <div class="builder">
+    <div class="row">
+      <span class="lab">Interface</span>
+      <label class="opt"><input type="radio" name="iface" value="measure" checked> Measure → CSV</label>
+      <label class="opt"><input type="radio" name="iface" value="gui"> Edit in click-GUI</label>
+      <label class="opt"><input type="radio" name="iface" value="app"> Full app</label>
+    </div>
+    <div class="row" data-needs="measure gui">
+      <span class="lab">Engine</span>
+      <label class="opt"><input type="radio" name="engine" value="current" checked> Current (enhanced)</label>
+      <label class="opt"><input type="radio" name="engine" value="published"> Original published (validated)</label>
+    </div>
+    <div class="row" data-needs="measure">
+      <span class="lab">Target</span>
+      <label class="opt"><input type="radio" name="target" value="image" checked> One image</label>
+      <label class="opt"><input type="radio" name="target" value="folder"> A folder</label>
+    </div>
+    <div class="row" data-needs="measure gui">
+      <span class="lab">Path</span>
+      <input type="text" id="path" placeholder="drag a file/folder here, or type the path (optional)">
+    </div>
+    <div class="row" data-needs="measure gui">
+      <span class="lab">Options</span>
+      <label class="opt"><input type="checkbox" id="small" checked> Small plaques (&lt;2.5&nbsp;mm)</label>
+      <label class="opt" id="sensOpt"><input type="checkbox" id="sensitive"> Sensitive (catch tiny)</label>
+      <span class="lab" style="min-width:auto">Dish</span>
+      <input type="number" id="mm" value="100" min="1" step="1" style="width:90px"> mm
+    </div>
+    <div class="out">
+      <div class="cmd" id="cmd">…</div>
+      <button class="copy" id="copyBtn">Copy command</button>
+      <div class="lnote" id="lnote"></div>
+    </div>
+  </div>
+
+  <div class="callout" id="sensNote" style="display:none">
+    <b>Sensitive mode is on.</b> It catches sub-0.4&nbsp;mm plaques but also more artifacts (bubbles, glare, dust).
+    Verify by eye, keep it <i>out</i> of published-mode runs, and report sensitive vs normal counts separately.
+  </div>
+
+  <h2>First time? / setup</h2>
+  <ol class="steps">
+    <li>These launchers need the <code>plaque</code> conda environment (Python 3.9). It's already set up on this machine.</li>
+    <li>To measure your own plates: put photos in the <code>plates</code> folder (or just drag them onto a launcher).
+        <b>iPhone HEIC is supported.</b></li>
+    <li>Results land in the <code>out</code> folder next to the tool (annotated image + CSV).</li>
+  </ol>
+
+  <footer>
+    Deeper docs (in the parent folder's <code>docs\</code> folder):
+    <a href="../README.md">README.md</a> ·
+    <a href="../docs/USER_GUIDE.md">USER_GUIDE.md</a> ·
+    <a href="../docs/ENGINES.md">ENGINES.md</a> ·
+    <a href="../docs/PUBLICATION.md">PUBLICATION.md</a> ·
+    <a href="../docs/guide.html">guide.html</a> ·
+    <a href="../docs/setup_and_run.html">setup_and_run.html</a> ·
+    <a href="../docs/PLAQUE_SIZE_TOOL.md">PLAQUE_SIZE_TOOL.md</a><br>
+    Engine: validated Plaque Size Tool (Trofimova &amp; Jaschke, <i>Virology</i> 2021). Enhanced features are in-house additions.
+  </footer>
+</div>
+
+<script>
+  var PY = '"C:\\\\Users\\\\mbaff\\\\Miniconda3\\\\envs\\\\plaque\\\\python.exe"';
+  function q(s){return document.querySelector(s);}
+  function qa(s){return Array.prototype.slice.call(document.querySelectorAll(s));}
+  function val(name){var el=document.querySelector('input[name="'+name+'"]:checked');return el?el.value:'';}
+
+  function update(){
+    var iface=val('iface'), engine=val('engine'), target=val('target');
+    var small=q('#small').checked, sensitive=q('#sensitive').checked, mm=q('#mm').value||'100';
+    var path=q('#path').value.trim();
+
+    // show/hide rows by interface
+    qa('[data-needs]').forEach(function(r){
+      r.style.display = r.getAttribute('data-needs').split(' ').indexOf(iface)>=0 ? '' : 'none';
+    });
+    // published forces sensitive off
+    var sensOpt=q('#sensOpt');
+    if(engine==='published'){ q('#sensitive').checked=false; sensitive=false; sensOpt.classList.add('dis'); q('#sensitive').disabled=true; }
+    else { sensOpt.classList.remove('dis'); q('#sensitive').disabled=false; }
+    q('#sensNote').style.display = sensitive ? '' : 'none';
+
+    var cmd, lnote='';
+    if(iface==='app'){
+      cmd = '& '+PY+' "plaque_app.py"';
+      lnote = 'Or just double-click  →  7 - Plaque Toolkit app (everything).bat   (then pick options inside the app).';
+    } else {
+      var script = (iface==='gui') ? '"plaque_gui.py"' : '"plaque_size_tool.py"';
+      var parts = ['& '+PY+' '+script];
+      var tgt = (iface==='gui') ? 'image' : target;     // GUI is single-image only
+      var pathTok = path ? path : (tgt==='folder' ? 'PATH\\TO\\FOLDER' : 'PATH\\TO\\IMAGE');
+      parts.push((tgt==='folder' ? '-d' : '-i') + ' "' + pathTok + '"');
+      parts.push('-p ' + mm);
+      if(small) parts.push('-small');
+      if(engine==='published') parts.push('--published');
+      else if(sensitive) parts.push('--sensitive');
+      cmd = parts.join(' ');
+
+      // recommend the matching launcher
+      if(iface==='gui') lnote='Or double-click  →  2 - Edit plaques - click GUI.bat  (drag your photo onto it).';
+      else if(engine==='published') lnote = (tgt==='folder')
+          ? 'Or drag your folder onto  →  5 - ORIGINAL published tool - batch.bat'
+          : 'Or drag your photo onto  →  4 - ORIGINAL published tool - one plate.bat';
+      else lnote = (tgt==='folder')
+          ? 'Or drag your folder onto  →  3 - Batch a folder (current).bat'
+          : 'Or drag your photo(s) onto  →  1 - Measure plaques (current).bat';
+    }
+    q('#cmd').textContent = cmd;
+    q('#lnote').textContent = lnote;
+  }
+
+  qa('input').forEach(function(el){ el.addEventListener('input',update); el.addEventListener('change',update); });
+  q('#copyBtn').addEventListener('click',function(){
+    navigator.clipboard.writeText(q('#cmd').textContent).then(function(){
+      q('#copyBtn').textContent='Copied ✓'; setTimeout(function(){q('#copyBtn').textContent='Copy command';},1400);
+    }).catch(function(){ q('#copyBtn').textContent='Select &amp; copy manually'; });
+  });
+
+  // "which version" picker -> highlight + scroll the card
+  qa('#picker button').forEach(function(b){
+    b.addEventListener('click',function(){
+      var id=b.getAttribute('data-go');
+      qa('.vc').forEach(function(c){c.classList.remove('hl');});
+      var card=q('#'+id); card.classList.add('hl'); card.scrollIntoView({behavior:'smooth',block:'center'});
+      setTimeout(function(){card.classList.remove('hl');},2200);
+    });
+  });
+
+  update();
+</script>
+</body>
+</html>

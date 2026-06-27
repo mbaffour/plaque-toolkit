@@ -1,383 +1,124 @@
-# Plaque Size Tool User Manual
+# Plaque Toolkit
+
+A desktop + command-line toolkit for measuring bacteriophage **plaques** on Petri-dish
+photos: **size** (area and diameter in mm), **turbidity** (clarity / optical density),
+**count**, and **titer (PFU/mL)** — with an interactive editor, batch cross-phage
+comparison, and publication-ready figures.
+
+It is built on the **published, peer-reviewed Plaque Size Tool**
+(Trofimova & Jaschke, *Virology* 2021, [doi:10.1016/j.virol.2021.05.011](https://doi.org/10.1016/j.virol.2021.05.011)).
+The validated detection/sizing algorithm is preserved unchanged as a selectable **Published**
+mode; everything else (turbidity, the GUI, the Sensitive and Precise detection modes, HEIC
+support, watershed splitting, the ML classifier) is an **in-house extension** that has **not**
+been independently validated. The distinction matters for publication — see
+[**Engines**](docs/ENGINES.md) and [**Publication**](docs/PUBLICATION.md).
+
+> **Honesty note.** Only **Published** mode reproduces a peer-reviewed method and may be
+> cited as such. **Current**, **Sensitive**, **Precise**, and the classifier are useful but
+> unvalidated; to publish counts/sizes from them you must validate them on your *own* plates
+> (see [PUBLICATION.md](docs/PUBLICATION.md)).
 
-[Introduction](#Introduction)
+---
 
-[Prerequisites installation](#prerequisites-installation)
+## 60-second quick start
 
-- [Python installation](#python-installation)
+### Option A — the desktop app (point-and-click)
 
-- [Pip3 installation](#pip3-installation)
+- **Already installed?** Open **Plaque Toolkit** from the Start menu (or run
+  `dist\PlaqueToolkit.exe`).
+- **Installer:** run **`Output\PlaqueToolkitSetup.exe`** (~85 MB; Published/Current/Sensitive
+  modes) or **`Output\PlaqueToolkitFullSetup.exe`** (~302 MB; **Precise built in**, no conda
+  needed). See [INSTALL.md](docs/INSTALL.md).
+- **From source (any OS):** `conda env create -f environment.yml` then double-click
+  **`Plaque Toolkit.bat`** (Windows) / **`Plaque Toolkit.command`** (macOS) /
+  **`Plaque Toolkit.sh`** (Linux).
 
-[Plaque Size Tool installation](#plaque-size-tool-installation)
+The app has a **Measure** tab (engine dropdown, drag-and-drop, summary card, editable canvas,
+scale bar), a **Compare turbidity** tab, and an **About** tab.
 
-- [GitHub archive download](#github-archive-download)
+### Option B — drag-and-drop launchers (no app, no commands)
 
-- [Installation using pip](#installation-using-pip)
+Drag a photo (or folder) onto one of the `.bat` files in this folder. iPhone **HEIC works
+directly**.
 
-[Plaque Size Tool usage](#plaque-size-tool-usage)
+| Drag onto… | What it does |
+|---|---|
+| **`Measure Plaques.bat`** | Auto-measure size + turbidity → CSV + annotated image in `out\` |
+| **`Edit Plaques (GUI).bat`** | Open the click-editor to add/remove plaques by hand, then save |
+| **`Batch Plates (CSV per plate).bat`** | Measure a whole folder → one CSV per plate + `summary.csv` |
+| **`Original Plaque Size Tool (1 plate).bat`** / **`(batch).bat`** | The exact **Published** (citable) engine |
+| **`Compare Turbidity.bat`** | Cross-phage optical-density turbidity, clarity, titer, figures |
+| **`Precise Detect (best engine).bat`** | The best detector (PST + PlaqSeg YOLO) |
+| **`Add Scale Bar.bat`** | Stamp a physical "5 mm" scale bar onto a photo |
+| **`Plaque Toolkit (app).bat`** | Launch the desktop app from source |
 
-- [Plaque Size Tool usage options](#plaque-size-tool-usage-options)
+There is also a **`Plaque Toolkit (all versions)\`** hub with an interactive HTML readme that
+builds the exact command for you.
 
-- [Single file processing](#single-file-processing)
+---
 
-- [Examples](#examples)
+## The four detection engines
 
-[Batch files processing](#batch-files-processing)
+This is the core concept. Pick the engine for the job; only one is citable.
 
-- [Example](#example)
+| Engine | What it is | Validation status | Use it for |
+|---|---|---|---|
+| **Published** | The exact Trofimova & Jaschke 2021 algorithm, byte-for-byte. | **Peer-reviewed & validated.** The only citable mode. Reproduces the literature within ~0.04 mm. | Numbers that go in a paper. |
+| **Current** | Same algorithm + bug-fixes + a corrected dish/calibration (picks the roundest large contour so the dark surround can't hijack the mm scale) + non-truncated values. | In-house. Differs from Published only by ≤ ~0.04 mm / count unchanged on the bundled plates. | Routine day-to-day measuring (the **default**). |
+| **Sensitive** | Current with the size gates lowered to catch sub-0.4 mm plaques. | **In-house, not validated.** Higher recall **but more false positives** — verify by eye. | Finding tiny plaques; exploratory counts. |
+| **Precise** | PST dish + calibration → artifact masks → **PlaqSeg YOLO** primary → density switch → gated PST-sensitive recall → union; optional learned plaque-vs-texture classifier gate. | **In-house, not validated;** PlaqSeg itself is not peer-reviewed. | The best detector on dense, countable plates. |
 
-[Output files](#output-files)
+Full detail, including *why* ImageJ and the published ViralPlaque macro fail on these
+top-lit iPhone plates: [**docs/ENGINES.md**](docs/ENGINES.md).
 
-# Introduction
+---
 
-Plaque Size Tool is an open-source application written in Python 3 that
-is able to detect and measure bacteriophage plaques on a Petri dish
-image.
+## Documentation map
 
-The source files are located at
-<https://github.com/ellinium/plaque_size_tool>.
+| Doc | What's inside |
+|---|---|
+| [**docs/USER_GUIDE.md**](docs/USER_GUIDE.md) | How to do each task: measure, edit, batch, compare turbidity, scale bars, outputs, troubleshooting. |
+| [**docs/ENGINES.md**](docs/ENGINES.md) | The four detection modes in depth: how each works, when to use it, and its validation status. |
+| [**docs/INSTALL.md**](docs/INSTALL.md) | Install on Windows / macOS / Linux: the two installers, run-from-source, and the optional Precise environment. |
+| [**docs/PUBLICATION.md**](docs/PUBLICATION.md) | The honest validation playbook: what to validate, how (Fiji ground truth, Bland-Altman/ICC, plate-level stats, negative control), and what to write in Methods. |
+| [**docs/DEVELOPER.md**](docs/DEVELOPER.md) | File map, the two-env vs unified-env design, the ML classifier, and how to rebuild the installers. |
+| [**docs/STRUCTURE.md**](docs/STRUCTURE.md) | Every top-level file/folder mapped to its purpose. |
+| [**docs/PLAQUE_SIZE_TOOL.md**](docs/PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
+| `docs/guide.html`, `docs/setup_and_run.html` | The interactive HTML guides (open in a browser). |
 
-**Web Google Colab version** is available here - https://colab.research.google.com/drive/1HJe8V26l7n82zX8vJ7bO5C8-xrs_aWuq?usp=sharing
+The original upstream Plaque Size Tool manual (install via pip, Colab link, original CLI
+options) is preserved at [**docs/UPSTREAM_README.md**](docs/UPSTREAM_README.md).
 
-To cite Plaque Size Tool, please use https://doi.org/10.1016/j.virol.2021.05.011: 
-```
-"Trofimova E, Jaschke PR. Plaque Size Tool: An automated plaque analysis tool for simplifying and standardising bacteriophage plaque morphology measurements. Virology. 2021;561(April):1–5. doi: 10.1016/j.virol.2021.05.011"
-```
+---
 
-The tool can be installed on any operation system supporting Python.
+## What it measures
 
-The installation guide is provided for two most frequently used OS –
-Windows and MacOS.
+| Quantity | Where |
+|---|---|
+| Plaque **area** (px² and mm²) and **diameter** (px and mm) | every engine |
+| Plaque **count** | every engine |
+| **Brightness** inside each plaque (`MEAN_GRAY`, 0–255) | every engine |
+| **Turbidity** — within-plate clarity index (`TURBIDITY_REL`) | size tool & GUI |
+| **Turbidity** — absolute optical density (OD) + clarity class | Compare Turbidity tool |
+| **Titer (PFU/mL)** | Compare Turbidity tool |
+| **Per-phage statistics + box/histogram figures** | Compare Turbidity tool |
 
-To execute installation commands on Mac use ‘Terminal’ or any other
-command line interpreter (CLI) preferred, on Windows use ‘Command
-Prompt’ (or any other CLI preferred).
+mm values require the dish diameter (`-p`, e.g. `100`). Without it you still get pixel values.
 
-The CLI screenshots taken for this manual were made on macOS High Sierra
-and Windows 10.
+---
 
-Plaque size tool was tested on the Python versions 3.7, 3.8 and 3.9.4,
-and if you are experiencing any problems with the higher versions,
-please send an email with the error to <ellina.trofimova@hdr.mq.edu.au>
-or create an issue at
-<https://github.com/ellinium/plaque_size_tool/issues> (requires
-registration on GitHub).
+## Citation
 
-# Prerequisites installation
+If you use this for published work, cite the underlying validated tool, and describe any
+in-house extensions you used (and your own validation of them) in your Methods — see
+[PUBLICATION.md](docs/PUBLICATION.md).
 
-*Python 3.6* or higher and *pip3* should be installed on the system.
+> Trofimova E, Jaschke PR. *Plaque Size Tool: An automated plaque analysis tool for
+> simplifying and standardising bacteriophage plaque morphology measurements.* Virology.
+> 2021;561(April):1–5. doi:10.1016/j.virol.2021.05.011
 
-It is possible to test whether they are installed on your OS by
-executing a command in Terminal (macOS) or Command Prompt (Windows):
+The upstream source is at <https://github.com/ellinium/plaque_size_tool>.
 
-MacOS: execute 
-```
-python3 --version
-```
-![](Manual_images/media/image1.jpg)
-  
-Windows: execute 
-```
-py --version
-```
-![](Manual_images/media/image2.PNG)
+## License
 
-*pip3* should be installed on the system.
-
-Pip3 is usually already installed on your system if you are using Python
-3.6 or higher.
-
-To check whether it is installed or not, execute the command ‘pip3’ in
-your CLI (the same command is used both for Windows and MacOS).
-
-![](Manual_images/media/image3.jpg)
-
-## Python installation
-
-If Python3 is not found in your system, please navigate
-to <https://www.python.org/downloads/>.
-
-On the main page there is a link to the latest version of Python3
-depending on your OS.
-
-MacOS:
-
-![](Manual_images/media/image4.jpg)
-
-Windows:
-
-![](Manual_images/media/image5.jpg)
-
-Install the latest version of Python by clicking ‘Download Python
-&lt;latest version&gt;’ and running the downloaded package.
-
-The detailed instructions for Python download and installation are also
-provided at <https://wiki.python.org/moin/BeginnersGuide/Download>.
-
-After Python installation, check that Python3 and pip3 were installed
-properly by executing the same commands as above:
-
-MacOS:
-```
-python3 –-version
-```
-```
-pip3
-```
-Windows:
-```
-py –-version
-```
-```
-pip3
-```
-## Pip3 installation
-
-If Python3 is installed in your system but *pip3* is missing, it is
-possible to install it separately.
-
-For that, navigate to <https://pip.pypa.io/en/stable/installing/> and
-the section **'Installing with get-pip.py'**.
-
-![](Manual_images/media/image6.jpg)
-
-Execute the following command to download get-pip.py file:
-
-MacOS: 
-```
-python3 get-pip.py
-```
-
-Windows: 
-```
-py get-pip.py
-```
-![](Manual_images/media/image7.jpg)
-
-If pip3 is installed but outdated, please upgrade it by executing the
-following command:
-
-MacOS: 
-```
-python3 -m pip install --upgrade pip
-```
-
-Windows: 
-```
-py -m pip install --upgrade pip
-```
-
-# Plaque Size Tool installation
-
-## GitHub archive download
-
-Navigate to <https://github.com/ellinium/plaque_size_tool>. After that,
-click the green button 'Code' in the right corner and select the option
-'Download Zip'.
-
-![](Manual_images/media/image8.jpg)
-
-The archive called ‘plaque\_size\_tool-main.zip’ will be downloaded.
-Unpack the archive into the directory of your choice.
-
-&lt; OPTIONAL &gt;: If you have already installed the program git,
-another option to download the files is to use the command:
-```
-git clone https://github.com/ellinium/plaque_size_tool directory
-```
-, where directory is a directory for Plaque Size Tool
-on a local machine.
-
-## Installation using pip
-
-Next, within Terminal (macOS) or Command Prompt (Windows) navigate to
-the directory you unpacked the downloaded zip file into. For example, if
-you unpacked ‘plaque\_size\_tool-main.zip‘ into the
-‘/home/plaque\_size\_tool/ plaque\_size\_tool-main’ directory, navigate
-to this directory. To confirm you are in the directory containing the
-plaque size tool files, type ‘ls’ on Terminal (MacOS) or ‘dir’ on
-Command Prompt (Windows). You should see the following files listed:
-
-Test\_plates
-LICENSE
-plaque\_size\_tool.py
-pyproject.toml
-README.md
-setup.py
-
-Once in the directory containing plaque size tool, execute the following
-command which installs all required libraries for Plaque Size Tool:
-
-```
-pip3 install plaque-size-tool
-```
-
-If the pip3 command worked properly you should see something like this
-on your screen:
-
-![](Manual_images/media/image9.jpg)
-
-MacOS and Windows use the same command for installation.
-
-# Plaque Size Tool usage
-
-## Plaque Size Tool usage options
-
-The tool can be run on a single image file (TIF, TIFF, JPG, JPEG, PNG
-image formats are supported) or on a directory containing several image
-files. The output of Plaque Size Tool will be placed into a
-sub-directory called ‘out’ within the /plaque\_size\_tool-main
-directory.
-
-You can execute the command to run Plaque Size Tool from the directory
-used in **Installation Step 3.1.** If your current directory differs,
-you need to include a full path to the tool (see below for examples).
-
-***Input parameters:***
-
--i to process a single image file
-
--d to process a directory with image files
-
--p is an optional parameter for the Petri dish size in millimetres
-
--small an optional flag, is recommended to use when the plaques are less
-than 2.5 mm or images are of low resolution and size
-
-## 
- 
-## Single File processing
-
-MacOS: 
-
-```
-python3 PATH_TO_PST/plaque_size_tool.py -i PATH_TO_THE_IMAGE_FILE [-p plate_size] [-small]
-```
-Windows: 
-```
-py PATH_TO_PST/plaque_size_tool.py -i PATH_TO_THE_IMAGE_FILE [-p plate_size] [-small]
-```
-When the tool is executed from the directory Plaque Size Tool is
-installed into, the PATH_TO_PST can be omitted:
-
-MacOS: 
-```
-python3 plaque_size_tool.py -i PATH_TO_THE_IMAGE_FILE [-p plate_size] [-small]
-```
-
-Windows: 
-```
-py plaque_size_tool.py -i PATH_TO_THE_IMAGE_FILE [-p plate_size] [-small]
-```
-
-### Examples
-
-<u>To use the following examples on Windows **‘python3’** is required to
-be replaced with **‘py’**.</u>
-
-MacOS: 
-```
-python3 plaque_size_tool.py -i Test_plates/large/Plate_4.tif
-```
-• runs the tool on the file Plate_4.tif located in the sub-directory
-Test_plates/large
-
-• creates two files within the /out directory called:
-‘data-green-Plate\_4.csv’ and ‘out\_Plate\_4.tif’
-
-• all results within ‘data-green-Plate\_4.csv’ will be shown in pixels
-as the plate size is not specified.
-
-MacOS: 
-```
-python3 plaque_size_tool.py -i Test_plates/large/Plate_4.tif -p 90
-```
-• runs the tool on the file Plate\_4.tif that has a plate size 90 mm.
-
-• the results file ‘data-green-Plate\_4.csv’ will contain measurements
-in both mm and pixels.
-
-![](Manual_images/media/image10.jpg)
-
-MacOS: 
-```
-python3 plaque_size_tool.py -i Test_plates/small/Plate_16.tif -p 90 -small
-```
-
-• runs the tool on the file Plate\_16.tif that has small plaques. The
-results on a plate will be shown in mm.
-
-![](Manual_images/media/image11.jpg)
-
-## 
-
-• If executing the tool while the current working directory (which can
-be checked with command ‘pwd’ on MacOS, ‘cd’ on Windows) is not
-‘/plaque\_size\_tool-main’ then the full path to the
-‘plaque\_size\_tool.py’ file AND the image file must be specified, or an
-error will be shown because python3 cannot find the executable file and
-image file.
-
-MacOS: 
-```
-python3 /Users/paul/plaque_size_tool-main/plaque_size_tool.py -i /Users/paul/plaque_size_tool-main/Test_plates/large/Plate_4.tif
-```
-## Batch files processing
-
-MacOS: 
-```
-python3 PATH_TO_PST/plaque_size_tool.py -d PATH_TO_THE_DIRECTORY [-p plate_size] [-small]
-```
-Windows: 
-```
-py PATH_TO_PST/plaque_size_tool.py -d PATH_TO_THE_DIRECTORY [-p plate_size] [-small]
-```
-### Example
-
-MacOS: 
-```
-python3 plaque_size_tool.py -d Test_plates/small -p 90 -small
-```
-Windows: 
-```
-Windows: py plaque_size_tool.py -d Test_plates/small -p 90 -small
-```
-• runs the tool on the directory Test\_plates/small that contains plates
-with small plaques (&lt;= 2.5 mm). The results on a plate will be shown
-in mm.
-
-![](Manual_images/media/image12.jpg)
-
-## Output files
-
-The tool produces two output files in the ‘out’ sub-directory that is
-created automatically:
-
-**out\_&lt;file\_name&gt;** - an image with identified non-overlapping
-plaques circled with a green line, where &lt;file\_name&gt; is the name
-of the original file.
-
-> If -p (plate size) parameter is specified, the results will be shown
-> in mm. If -p is not specified, then the results are shown in pixels.
-
-![](Manual_images/media/image13.jpg)
-
-
-
-**data-green-&lt;file\_name&gt;.csv** a CSV file with detected plaques
-parameters:
-
-> INDEX\_COL - the ID of the plaque that corresponds to the ID on the
-> output image
->
-> AREA\_PXL - Area of a plaque in square pixels
->
-> AREA\_MM2 - Area of a plaque in square millimetres if plate size is
-> specified
->
-> DIAMETER\_PXL - Diameter of a plaque in pixels
->
-> DIAMETER\_MM - Diameter of a plaque in millimetres if plate size is
-> specified
-
-![](Manual_images/media/image14.png)
+See [LICENSE](LICENSE).

@@ -1,0 +1,712 @@
+"""Unified Plaque Toolkit desktop app (PySide6). Two workflows in one window:
+   • Measure — open an image, auto-detect, edit by hand, save size + turbidity.
+   • Compare — batch a folder of phages, get optical-density turbidity + titer + figures.
+The validated engine is reached only through app.engine_api."""
+import os
+import sys
+
+import matplotlib
+matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
+
+import pandas as pd
+from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
+    QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
+    QFrame, QProgressBar, QStyle)
+
+from app import __version__, engine_api, style
+from app.workers import Worker
+from app.widgets import PandasTableModel, NumericSortProxy
+from app.canvas_editor import EditorWidget
+
+IMG_FILTER = "Images (*.tif *.tiff *.jpg *.jpeg *.png *.heic *.heif)"
+IMG_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
+
+# Engine/mode catalogue: label -> (kwargs/flag, helper text).
+MODES = [
+    ("Published (validated)", "published",
+     "The peer-reviewed Trofimova & Jaschke (2021) algorithm, unchanged. "
+     "Cite this mode for published results."),
+    ("Current (corrected)", "current",
+     "The maintained engine with bug-fixes and improved dish/calibration handling. "
+     "Recommended default for routine measuring."),
+    ("Sensitive (tiny plaques)", "sensitive",
+     "Lowers the size gates to catch sub-0.4 mm plaques. Detects many more, but adds "
+     "false positives — verify by eye. In-house, not independently validated."),
+    ("Precise (PST + PlaqSeg)", "precise",
+     "Best accuracy: fuses the classic detector with a PlaqSeg deep-learning model. "
+     "Beta, slower (runs a second environment). In-house, not independently validated."),
+]
+
+
+def _shadow(widget, blur=18, dy=2, alpha=40):
+    """Soft drop shadow for cards (purely cosmetic)."""
+    try:
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        from PySide6.QtGui import QColor
+        eff = QGraphicsDropShadowEffect(widget)
+        eff.setBlurRadius(blur)
+        eff.setXOffset(0)
+        eff.setYOffset(dy)
+        eff.setColor(QColor(0, 0, 0, alpha))
+        widget.setGraphicsEffect(eff)
+    except Exception:
+        pass
+
+
+def _icon(sp):
+    """Standard Qt pixmap icon by enum (keeps us dependency-free for glyphs)."""
+    app = QApplication.instance()
+    if app is None:
+        return QIcon()
+    return app.style().standardIcon(sp)
+
+
+# --------------------------------------------------------------------------- #
+class MeasureTab(QWidget):
+    def __init__(self, pool):
+        super().__init__()
+        self.pool = pool
+        self.det = None
+        self.image_path = None
+        self.editor = None
+        self.busy = False
+        self.setAcceptDrops(True)
+
+        # ---- parameters row ------------------------------------------------ #
+        self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
+        self.plate.setSuffix(" mm"); self.plate.setDecimals(1)
+        self.plate.setToolTip("Diameter of the Petri dish, in millimetres. Used to convert "
+                              "pixels to mm via the detected dish. Set to 0 to report pixels only.")
+
+        self.mode = QComboBox()
+        for label, _key, _help in MODES:
+            self.mode.addItem(label)
+        self.mode.setCurrentIndex(1)   # Current (corrected) by default
+        self.mode.setToolTip("Detection engine / mode. Hover an option or read the line below.")
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+
+        self.watershed = QCheckBox("Split touching plaques")
+        self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch. "
+                                  "Helpful on crowded plates; ignored under Published mode.")
+
+        self.open_btn = QPushButton(" Open image…"); self.open_btn.setObjectName("Primary")
+        self.open_btn.setIcon(_icon(QStyle.SP_DirOpenIcon))
+        self.open_btn.clicked.connect(self.open_image)
+        self.open_btn.setToolTip("Open a plaque image (Ctrl+O). TIFF, JPEG, PNG and iPhone HEIC "
+                                 "are supported. You can also drag-and-drop an image here.")
+
+        self.redetect_btn = QPushButton(" Re-detect")
+        self.redetect_btn.setIcon(_icon(QStyle.SP_BrowserReload))
+        self.redetect_btn.clicked.connect(self.redetect)
+        self.redetect_btn.setEnabled(False)
+        self.redetect_btn.setToolTip("Re-run detection on the current image with the options above "
+                                     "(replaces the current detections).")
+
+        self.save_btn = QPushButton(" Save results")
+        self.save_btn.setIcon(_icon(QStyle.SP_DialogSaveButton))
+        self.save_btn.clicked.connect(self.save)
+        self.save_btn.setEnabled(False)
+        self.save_btn.setToolTip("Write the measurement table, overlay and turbidity to an 'out' "
+                                 "folder next to the image (Ctrl+S).")
+
+        params_box = QGroupBox("Parameters")
+        pl = QHBoxLayout(params_box); pl.setSpacing(10)
+        pl.addWidget(QLabel("Dish")); pl.addWidget(self.plate)
+        sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setStyleSheet("color:#d6dbe5")
+        pl.addSpacing(4); pl.addWidget(sep); pl.addSpacing(4)
+        pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
+        pl.addWidget(self.watershed)
+        pl.addStretch()
+        pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
+
+        # mode helper + progress strip
+        self.mode_help = QLabel(MODES[1][2]); self.mode_help.setObjectName("ModeHelp")
+        self.mode_help.setWordWrap(True)
+        self.progress = QProgressBar(); self.progress.setRange(0, 0)   # indeterminate
+        self.progress.setVisible(False); self.progress.setMaximumWidth(220)
+        self.busy_label = QLabel(""); self.busy_label.setObjectName("ModeHelp")
+        strip = QHBoxLayout(); strip.setContentsMargins(2, 0, 2, 0)
+        strip.addWidget(self.mode_help, 1)
+        strip.addWidget(self.busy_label); strip.addWidget(self.progress)
+
+        # ---- canvas (left) ------------------------------------------------- #
+        self.canvas_holder = QFrame(); self.canvas_holder.setObjectName("Card")
+        self.canvas_layout = QVBoxLayout(self.canvas_holder)
+        self.canvas_layout.setContentsMargins(6, 6, 6, 6)
+        self.placeholder = QLabel(
+            "Drop a plaque image here, or click  Open image…\n\n"
+            "TIFF · JPEG · PNG · iPhone HEIC supported")
+        self.placeholder.setObjectName("Placeholder")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setMinimumHeight(360)
+        self.canvas_layout.addWidget(self.placeholder)
+
+        # ---- right panel: summary card + table ----------------------------- #
+        self.summary_card = self._build_summary_card()
+
+        self.table = QTableView()
+        self.model = PandasTableModel()
+        self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
+        self.table.setModel(self.proxy)
+        self.table.setSortingEnabled(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setHighlightSections(False)
+
+        table_card = QFrame(); table_card.setObjectName("Card")
+        tcl = QVBoxLayout(table_card); tcl.setContentsMargins(12, 10, 12, 12)
+        cap = QLabel("Per-plaque measurements"); cap.setObjectName("SummaryHeading")
+        tcl.addWidget(cap); tcl.addWidget(self.table)
+
+        right = QWidget(); rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(12)
+        rl.addWidget(self.summary_card)
+        rl.addWidget(table_card, 1)
+
+        split = QSplitter()
+        split.addWidget(self.canvas_holder); split.addWidget(right)
+        split.setSizes([720, 470]); split.setChildrenCollapsible(False)
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        lay.addWidget(params_box)
+        lay.addLayout(strip)
+        lay.addWidget(split, 1)
+
+    # -- summary card ------------------------------------------------------- #
+    def _build_summary_card(self):
+        card = QFrame(); card.setObjectName("SummaryCard")
+        _shadow(card)
+        grid = QGridLayout(card); grid.setContentsMargins(16, 12, 16, 12)
+        grid.setHorizontalSpacing(26); grid.setVerticalSpacing(2)
+
+        def metric(col, key, label):
+            cap = QLabel(label); cap.setObjectName("SummaryHeading")
+            val = QLabel("—")
+            val.setStyleSheet("font-size:20px; font-weight:700;")
+            grid.addWidget(cap, 0, col)
+            grid.addWidget(val, 1, col)
+            self._metrics[key] = val
+
+        self._metrics = {}
+        metric(0, "count", "PLAQUES")
+        metric(1, "median", "MEDIAN Ø (mm)")
+        metric(2, "mean", "MEAN Ø (mm)")
+        metric(3, "cal", "CALIBRATION")
+        self.flag_label = QLabel("")
+        self.flag_label.setWordWrap(True)
+        self.flag_label.setStyleSheet("font-size:12px; font-weight:600;")
+        grid.addWidget(self.flag_label, 2, 0, 1, 4)
+        return card
+
+    def _set_summary(self, n=None, median=None, mean=None, cal=None, flag=None, mode=None):
+        self._metrics["count"].setText("—" if n is None else str(n))
+        self._metrics["median"].setText("—" if median is None else f"{median:.2f}")
+        self._metrics["mean"].setText("—" if mean is None else f"{mean:.2f}")
+        self._metrics["cal"].setText("—" if not cal else (f"{cal:.4f} mm/px"))
+        if flag:
+            self.flag_label.setText(flag)
+            self.flag_label.setStyleSheet(
+                f"font-size:12px; font-weight:600; color:{style.LIGHT['warn']};")
+            self.flag_label.setVisible(True)
+        else:
+            self.flag_label.setVisible(False)
+
+    # -- mode handling ------------------------------------------------------ #
+    def _mode_key(self):
+        return MODES[self.mode.currentIndex()][1]
+
+    def _mode_changed(self, idx):
+        self.mode_help.setText(MODES[idx][2])
+        key = MODES[idx][1]
+        self.watershed.setEnabled(key not in ("published",))
+
+    # -- drag and drop ------------------------------------------------------ #
+    def dragEnterEvent(self, e):
+        md = e.mimeData()
+        if md.hasUrls():
+            for u in md.urls():
+                if u.toLocalFile().lower().endswith(IMG_EXTS):
+                    e.acceptProposedAction(); return
+        e.ignore()
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            p = u.toLocalFile()
+            if p.lower().endswith(IMG_EXTS):
+                self.image_path = p
+                self._detect()
+                e.acceptProposedAction()
+                return
+        e.ignore()
+
+    # -- actions ------------------------------------------------------------ #
+    def open_image(self):
+        if self.busy:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Select a plaque image", "", IMG_FILTER)
+        if not path:
+            return
+        self.image_path = path
+        self._detect()
+
+    def redetect(self):
+        if self.image_path and not self.busy:
+            self._detect()
+
+    def _set_busy(self, on, message=""):
+        self.busy = on
+        self.progress.setVisible(on)
+        self.busy_label.setText(message if on else "")
+        for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,
+                  self.watershed):
+            w.setEnabled(not on)
+        if not on:
+            self.save_btn.setEnabled(self.editor is not None)
+            self.redetect_btn.setEnabled(self.image_path is not None)
+            self._mode_changed(self.mode.currentIndex())
+
+    def _detect(self):
+        key = self._mode_key()
+        name = os.path.basename(self.image_path)
+        if key == "precise":
+            self._detect_precise(name)
+            return
+        self._set_busy(True, "Detecting…")
+        self.window().statusBar().showMessage(f"Detecting ({MODES[self.mode.currentIndex()][0]})…")
+        self.placeholder.setText("Detecting…")
+        kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked())
+        if key == "published":
+            kw["published"] = True
+        elif key == "sensitive":
+            kw["small"] = True; kw["sensitive"] = True
+        else:  # current
+            kw["small"] = True
+        w = Worker(engine_api.detect_single, self.image_path, **kw)
+        w.signals.finished.connect(self.on_detected)
+        w.signals.error.connect(self.on_error)
+        self.pool.start(w)
+
+    def _detect_precise(self, name):
+        ok, reason = engine_api.precise_available()
+        if not ok:
+            QMessageBox.information(
+                self, "Precise engine unavailable",
+                "Precise mode needs a second environment (PlaqSeg / PyTorch) and the model "
+                "weights, which are not installed on this machine:\n\n" + reason +
+                "\n\nFalling back is easy — pick Published, Current or Sensitive above.")
+            self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+            return
+        self._set_busy(True, "Running Precise (PST + PlaqSeg)…")
+        self.window().statusBar().showMessage("Precise pipeline running (this can take a minute)…")
+        self.placeholder.setText("Running the Precise pipeline (PST + PlaqSeg)…\nThis can take a minute.")
+        w = Worker(engine_api.detect_precise, self.image_path,
+                   plate_mm=self.plate.value())
+        w.signals.finished.connect(self.on_precise_detected)
+        w.signals.error.connect(self.on_precise_error)
+        self.pool.start(w)
+
+    def _mount_editor(self):
+        if self.editor is not None:
+            self.editor.setParent(None)
+        else:
+            self.placeholder.setParent(None)
+        self.editor = EditorWidget(self.det, self.image_path,
+                                   os.path.join(os.path.dirname(self.image_path), "out"),
+                                   on_change=self.refresh_table,
+                                   face=style.LIGHT["surface"])
+        self.canvas_layout.addWidget(self.editor)
+
+    def on_detected(self, det):
+        self.det = det
+        self._mount_editor()
+        self._set_busy(False)
+        self.refresh_table()
+        label = MODES[self.mode.currentIndex()][0]
+        self.window().statusBar().showMessage(f"{det['n_plaques']} plaques detected · {label}")
+
+    def on_precise_detected(self, det):
+        self.det = det
+        self._mount_editor()
+        self._set_busy(False)
+        # use the precise CSV for the summary/table where present
+        self.refresh_table(precise=det)
+        n = det["n_plaques"]
+        self.window().statusBar().showMessage(f"{n} plaques (Precise · PST+PlaqSeg)")
+
+    def refresh_table(self, precise=None):
+        if self.det is None or self.editor is None:
+            return
+        det = self.det
+        flag = None
+        plate = det.get("plate")
+        if plate and plate.get("axis_ratio") and plate["axis_ratio"] > 1.03:
+            flag = (f"⚠ Dish looks tilted (axis ratio {plate['axis_ratio']:.2f}). "
+                    "mm calibration may be biased — re-shoot square-on for best accuracy.")
+
+        if isinstance(precise, dict) and precise.get("precise"):
+            summ = precise.get("precise_summary", {})
+            df = precise.get("precise_df")
+            self.model.set_dataframe(df)
+            n = int(summ.get("n_final", len(df)))
+            median = summ.get("median_diam_mm")
+            mean = summ.get("mean_diam_mm")
+            cal = det.get("pxl_per_mm")
+            if summ.get("uncertainty_flag"):
+                extra = "⚠ Detectors disagree on count — verify by eye."
+                flag = (flag + "  " + extra) if flag else extra
+            self._set_summary(n=n, median=median, mean=mean, cal=cal, flag=flag)
+            return
+
+        df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
+                                      det["pxl_per_mm"], det["lawn_gray"])
+        self.model.set_dataframe(df)
+        n = len(df)
+        dm = pd.to_numeric(df["DIAMETER_MM"], errors="coerce").dropna()
+        cal = det["pxl_per_mm"]
+        self._set_summary(
+            n=n,
+            median=(dm.median() if len(dm) else None),
+            mean=(dm.mean() if len(dm) else None),
+            cal=cal, flag=flag)
+
+    def save(self):
+        if self.editor is None:
+            return
+        try:
+            self.editor.save()
+            out_dir = os.path.join(os.path.dirname(self.image_path), "out")
+            self.window().statusBar().showMessage(f"Saved to {out_dir}")
+            QMessageBox.information(self, "Saved", f"Results written to:\n{out_dir}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", str(e))
+
+    def on_error(self, msg):
+        self._set_busy(False)
+        self.placeholder.setText("Detection failed. Try another image or mode.")
+        self.window().statusBar().showMessage("Detection failed.")
+        QMessageBox.critical(self, "Detection failed", msg[:1000])
+
+    def on_precise_error(self, msg):
+        self._set_busy(False)
+        self.placeholder.setText("Precise detection unavailable.")
+        self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+        QMessageBox.information(self, "Precise engine unavailable", msg[:1200])
+
+
+# --------------------------------------------------------------------------- #
+class CompareTab(QWidget):
+    def __init__(self, pool):
+        super().__init__()
+        self.pool = pool
+
+        self.folder = self._pathrow("Plate folder (filename = phage)", browse_dir=True,
+                                     tip="A folder of plate images; the file name is used as the "
+                                         "phage label.")
+        self.blank = self._pathrow("Blank-agar image (optional)", file=True,
+                                   tip="An image of blank agar with no lawn — enables absolute "
+                                       "optical-density (OD) readings.")
+        self.flat = self._pathrow("Flat-field image (optional)", file=True,
+                                  tip="An even-illumination reference image to correct uneven "
+                                      "lighting across the plate.")
+
+        self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
+        self.plate.setSuffix(" mm")
+        self.small = QCheckBox("Small plaques")
+        self.watershed = QCheckBox("Watershed")
+        self.group = QCheckBox("Group replicates by name prefix"); self.group.setChecked(True)
+        self.core = QDoubleSpinBox(); self.core.setRange(0.2, 1.0); self.core.setValue(1.0)
+        self.core.setSingleStep(0.1)
+        self.dilution = QLineEdit(); self.dilution.setPlaceholderText("dilution factor (e.g. 1e6)")
+        self.volume = QLineEdit(); self.volume.setPlaceholderText("plated volume µL")
+
+        opts_box = QGroupBox("Options")
+        opts = QGridLayout(opts_box); opts.setHorizontalSpacing(14); opts.setVerticalSpacing(8)
+        opts.addWidget(QLabel("Dish"), 0, 0); opts.addWidget(self.plate, 0, 1)
+        opts.addWidget(self.small, 0, 2); opts.addWidget(self.watershed, 0, 3)
+        opts.addWidget(self.group, 1, 0, 1, 2)
+        opts.addWidget(QLabel("Core fraction"), 1, 2); opts.addWidget(self.core, 1, 3)
+        opts.addWidget(QLabel("Titer"), 2, 0)
+        opts.addWidget(self.dilution, 2, 1); opts.addWidget(self.volume, 2, 2)
+
+        self.run_btn = QPushButton(" Run comparison"); self.run_btn.setObjectName("Primary")
+        self.run_btn.setIcon(_icon(QStyle.SP_MediaPlay))
+        self.run_btn.clicked.connect(self.run)
+        self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setVisible(False)
+        self.progress.setMaximumWidth(220)
+        runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addStretch()
+        runrow.addWidget(self.progress)
+
+        self.qc = QLabel("—"); self.qc.setWordWrap(True); self.qc.setObjectName("ModeHelp")
+        self.table = QTableView(); self.model = PandasTableModel()
+        self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
+        self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        self.figs = QWidget(); self.figs_layout = QVBoxLayout(self.figs)
+        self.figs_placeholder = QLabel(
+            "Comparison figures will appear here after a run\n"
+            "(per-phage bars, diameter histograms).")
+        self.figs_placeholder.setObjectName("Placeholder")
+        self.figs_placeholder.setAlignment(Qt.AlignCenter)
+        self.figs_layout.addWidget(self.figs_placeholder)
+        self.figs_layout.addStretch()
+        figscroll = QScrollArea(); figscroll.setWidgetResizable(True); figscroll.setWidget(self.figs)
+        figscroll.setFrameShape(QFrame.NoFrame)
+
+        left = QFrame(); left.setObjectName("Card")
+        ll = QVBoxLayout(left); ll.setContentsMargins(12, 10, 12, 12)
+        cap = QLabel("Per-phage summary"); cap.setObjectName("SummaryHeading")
+        ll.addWidget(cap); ll.addWidget(self.table); ll.addWidget(self.qc)
+        right = QFrame(); right.setObjectName("Card")
+        rl = QVBoxLayout(right); rl.setContentsMargins(8, 8, 8, 8)
+        rl.addWidget(figscroll)
+
+        results = QSplitter()
+        results.addWidget(left); results.addWidget(right)
+        results.setSizes([520, 560]); results.setChildrenCollapsible(False)
+
+        inputs_box = QGroupBox("Inputs")
+        ib = QVBoxLayout(inputs_box)
+        for r in (self.folder, self.blank, self.flat):
+            ib.addLayout(r["row"])
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        lay.addWidget(inputs_box)
+        lay.addWidget(opts_box)
+        lay.addLayout(runrow)
+        lay.addWidget(results, 1)
+
+    def _pathrow(self, label, file=False, browse_dir=False, tip=""):
+        edit = QLineEdit(); edit.setToolTip(tip)
+        btn = QPushButton("Browse…"); btn.setToolTip(tip)
+        lab = QLabel(label); lab.setMinimumWidth(220)
+        def pick():
+            if file:
+                p, _ = QFileDialog.getOpenFileName(self, label, "", IMG_FILTER)
+            else:
+                p = QFileDialog.getExistingDirectory(self, label)
+            if p:
+                edit.setText(p)
+        btn.clicked.connect(pick)
+        row = QHBoxLayout(); row.addWidget(lab); row.addWidget(edit, 1); row.addWidget(btn)
+        return {"row": row, "edit": edit}
+
+    def run(self):
+        directory = self.folder["edit"].text().strip()
+        if not directory or not os.path.isdir(directory):
+            QMessageBox.warning(self, "Pick a folder", "Choose a folder of phage plate images.")
+            return
+        out_dir = os.path.join(directory, "out_turbidity")
+        kw = dict(plate_mm=self.plate.value(), small=self.small.isChecked(),
+                  blank=self.blank["edit"].text().strip() or None,
+                  flat=self.flat["edit"].text().strip() or None,
+                  core=self.core.value(), group_by_prefix=self.group.isChecked(),
+                  watershed=self.watershed.isChecked(), out_dir=out_dir)
+        try:
+            if self.dilution.text().strip():
+                kw["dilution"] = float(self.dilution.text())
+            if self.volume.text().strip():
+                kw["volume_ul"] = float(self.volume.text())
+        except ValueError:
+            QMessageBox.warning(self, "Titer", "Dilution and volume must be numbers."); return
+        self.run_btn.setEnabled(False)
+        self.progress.setVisible(True)
+        self.window().statusBar().showMessage("Running batch comparison…")
+        w = Worker(engine_api.run_compare, directory, **kw)
+        w.signals.finished.connect(self.on_done)
+        w.signals.error.connect(self.on_error)
+        self.pool.start(w)
+
+    def on_done(self, res):
+        self.run_btn.setEnabled(True)
+        self.progress.setVisible(False)
+        out_dir = res["out_dir"]
+        per = os.path.join(out_dir, "per_phage.csv")
+        if os.path.exists(per):
+            self.model.set_dataframe(pd.read_csv(per))
+        qcp = os.path.join(out_dir, "qc.csv")
+        if os.path.exists(qcp):
+            q = pd.read_csv(qcp)
+            bad = []
+            if "POLARITY_OK" in q: bad += list(q.loc[q["POLARITY_OK"] == False, "PLATE"].astype(str))
+            nod = list(q.loc[~q["DISH_FOUND"], "PLATE"].astype(str)) if "DISH_FOUND" in q else []
+            note = f"{len(q)} plates analysed."
+            if nod: note += f"  ⚠ no dish: {', '.join(nod)}"
+            if bad: note += f"  ⚠ polarity fail (check imaging): {', '.join(bad)}"
+            if not (nod or bad): note += "  ✓ QC passed (dish + polarity)."
+            self.qc.setText(note)
+        while self.figs_layout.count():
+            item = self.figs_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        import glob
+        for png in sorted(glob.glob(os.path.join(out_dir, "compare_*.png"))) + \
+                   sorted(glob.glob(os.path.join(out_dir, "hist_*.png"))):
+            lbl = QLabel(); pm = QPixmap(png)
+            if not pm.isNull():
+                lbl.setPixmap(pm.scaledToWidth(520, Qt.SmoothTransformation))
+            self.figs_layout.addWidget(lbl)
+        self.figs_layout.addStretch()
+        self.window().statusBar().showMessage(f"Done → {out_dir}")
+
+    def on_error(self, msg):
+        self.run_btn.setEnabled(True)
+        self.progress.setVisible(False)
+        self.window().statusBar().showMessage("Batch failed.")
+        QMessageBox.critical(self, "Batch failed", msg[:1000])
+
+
+# --------------------------------------------------------------------------- #
+class AboutTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        outer = QVBoxLayout(self); outer.setContentsMargins(24, 22, 24, 22)
+        card = QFrame(); card.setObjectName("Card")
+        _shadow(card)
+        card.setMaximumWidth(760)
+        lay = QVBoxLayout(card); lay.setContentsMargins(28, 24, 28, 24); lay.setSpacing(8)
+
+        head = QHBoxLayout()
+        ic = QLabel()
+        icon_path = engine_api.resource_path("icon.png")
+        if os.path.exists(icon_path):
+            pm = QPixmap(icon_path)
+            if not pm.isNull():
+                ic.setPixmap(pm.scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        title_box = QVBoxLayout(); title_box.setSpacing(0)
+        t = QLabel("Plaque Toolkit"); t.setStyleSheet("font-size:22px; font-weight:700;")
+        v = QLabel(f"version {__version__}"); v.setObjectName("ModeHelp")
+        title_box.addWidget(t); title_box.addWidget(v)
+        head.addWidget(ic); head.addSpacing(12); head.addLayout(title_box); head.addStretch()
+        lay.addLayout(head)
+
+        body = QLabel(
+            "<p>A unified front-end over the validated <b>Plaque Size Tool</b> for measuring "
+            "bacteriophage plaque size and turbidity, with batch cross-phage optical-density "
+            "comparison, count/PFU and figures.</p>"
+            "<p><b>Measure</b> — open an image, auto-detect, edit by hand (left-drag to add, "
+            "Trace-click to auto-trace, right-click to remove), then save size + turbidity.<br>"
+            "<b>Compare turbidity</b> — point at a folder of phages (with optional blank / "
+            "flat-field references) to get OD, clarity, titer, per-phage stats and figures.</p>"
+            "<p><b>Citation.</b> The validated detection algorithm is from "
+            "Trofimova&nbsp;&amp;&nbsp;Jaschke, <i>Virology</i> (2021). Please cite that paper "
+            "and use <b>Published (validated)</b> mode for published measurements.</p>"
+            "<p style='color:#b45309'><b>Honest note.</b> The <b>Sensitive</b> and "
+            "<b>Precise</b> modes are in-house extensions. They are <i>not</i> independently "
+            "validated and may add false positives — always verify their detections by eye "
+            "before reporting.</p>"
+            "<p style='color:#6b7484'>Full docs: <code>USER_GUIDE.md</code> / "
+            "<code>guide.html</code>.</p>")
+        body.setObjectName("AboutBody"); body.setWordWrap(True); body.setOpenExternalLinks(True)
+        body.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lay.addWidget(body)
+
+        outer.addWidget(card, 0, Qt.AlignHCenter | Qt.AlignTop)
+        outer.addStretch()
+
+
+# --------------------------------------------------------------------------- #
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"Plaque Toolkit {__version__}")
+        _icon_path = engine_api.resource_path("icon.png")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
+        self.resize(1240, 800)
+        self.pool = QThreadPool(); self.pool.setMaxThreadCount(1)  # engine flags are global
+
+        root = QWidget(); root.setObjectName("AppRoot")
+        rlay = QVBoxLayout(root); rlay.setContentsMargins(0, 0, 0, 0); rlay.setSpacing(0)
+        rlay.addWidget(self._build_header())
+
+        self.tabs = QTabWidget()
+        self.measure_tab = MeasureTab(self.pool)
+        self.tabs.addTab(self.measure_tab, "  Measure  ")
+        self.tabs.addTab(CompareTab(self.pool), "  Compare turbidity  ")
+        self.tabs.addTab(AboutTab(), "  About  ")
+        rlay.addWidget(self.tabs, 1)
+        self.setCentralWidget(root)
+
+        self.statusBar().showMessage(
+            f"Ready  ·  numpy {engine_api.numpy_version()}  ·  engine: validated Plaque Size Tool")
+
+        # keyboard shortcuts
+        QShortcut(QKeySequence.Open, self, activated=self._shortcut_open)
+        QShortcut(QKeySequence.Save, self, activated=self._shortcut_save)
+
+    def _build_header(self):
+        bar = QFrame(); bar.setObjectName("HeaderBar"); bar.setFixedHeight(64)
+        hl = QHBoxLayout(bar); hl.setContentsMargins(18, 8, 18, 8)
+        ic = QLabel()
+        icon_path = engine_api.resource_path("icon.png")
+        if os.path.exists(icon_path):
+            pm = QPixmap(icon_path)
+            if not pm.isNull():
+                ic.setPixmap(pm.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        tbox = QVBoxLayout(); tbox.setSpacing(0)
+        title = QLabel("Plaque Toolkit"); title.setObjectName("HeaderTitle")
+        sub = QLabel("Measure plaque size & turbidity · compare phages")
+        sub.setObjectName("HeaderSubtitle")
+        tbox.addWidget(title); tbox.addWidget(sub)
+        hl.addWidget(ic); hl.addSpacing(12); hl.addLayout(tbox); hl.addStretch()
+        return bar
+
+    def _shortcut_open(self):
+        if self.tabs.currentIndex() == 0:
+            self.measure_tab.open_image()
+
+    def _shortcut_save(self):
+        if self.tabs.currentIndex() == 0:
+            self.measure_tab.save()
+
+
+def launch():
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("Plaque Toolkit")
+    app.setStyleSheet(style.get_stylesheet("light"))
+    icon_path = engine_api.resource_path("icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+    splash = None
+    splash_path = engine_api.resource_path("splash.png")
+    if os.path.exists(splash_path):
+        pm = QPixmap(splash_path)
+        if not pm.isNull():
+            splash = QSplashScreen(pm)
+            splash.show()
+            app.processEvents()
+    win = MainWindow()
+    if splash is not None:
+        splash.finish(win)
+    win.show()
+    return app.exec()
+
+
+def uitest():
+    """Headless construct-the-GUI + detect self-test (exit code 0 = OK). Works windowed
+    via QT_QPA_PLATFORM=offscreen, so it validates the FROZEN app without a display."""
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyleSheet(style.get_stylesheet("light"))
+    win = MainWindow()
+    measure = win.measure_tab
+    sample = engine_api.resource_path("sample.tif")
+    det = engine_api.detect_single(sample, plate_mm=100)
+    measure.image_path = sample
+    measure.on_detected(det)
+    ok = det["n_plaques"] > 0 and measure.model.rowCount() == det["n_plaques"]
+    # exercise the precise availability path (must not crash, returns a (bool, reason))
+    avail = engine_api.precise_available()
+    ok = ok and isinstance(avail, tuple) and isinstance(avail[0], bool)
+    print("UITEST", "OK" if ok else "FAIL", "| rows", measure.model.rowCount(),
+          "| precise_available", avail[0])
+    return 0 if ok else 1

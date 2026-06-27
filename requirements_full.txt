@@ -1,0 +1,29 @@
+# Unified 'plaqueapp' env — the SINGLE environment that runs EVERYTHING (PST + PlaqSeg +
+# learned classifier) in ONE process, and the one packaged into the self-contained
+# installer (build/plaque_app_full.spec).
+#
+# The key insight: numpy 1.26 satisfies BOTH PST's `numpy<2` pin (it used np.warnings,
+# removed in numpy 2.0) AND PyTorch/ultralytics — so Precise no longer needs two conda
+# envs. numpy MUST be pinned LAST (opencv-python/ultralytics pull numpy>=2 metadata, but
+# cv2 4.13 runs fine on numpy 1.26 at runtime — only a harmless pip metadata warning).
+#
+# Recipe (Windows, verified):
+#   conda create -n plaqueapp python=3.10 -y
+#   conda run -n plaqueapp python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   conda run -n plaqueapp python -m pip install PySide6 opencv-python pandas matplotlib pillow-heif imutils scikit-image ultralytics pyinstaller
+#   conda run -n plaqueapp python -m pip install "numpy==1.26.4"   # <-- pin LAST
+#
+# Pinned versions actually used for the shipped build:
+numpy==1.26.4
+torch==2.12.1+cpu
+torchvision==0.27.1+cpu
+ultralytics==8.4.79
+opencv-python==4.13.0.92
+PySide6==6.11.1
+pandas==2.3.3
+matplotlib==3.10.9
+pillow-heif==1.4.0
+imutils==0.5.4
+scikit-image==0.25.2
+scipy==1.15.3
+pillow==12.2.0

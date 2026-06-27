@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaque Toolkit — Interactive Guide</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171d26; --panel2:#1e2630; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3540; --accent:#3ddc97; --accent2:#4aa3ff; --warn:#ffb454; --bad:#ff6b6b;
+    --code:#0b0f14; --radius:12px; font-synthesis:none;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  code,kbd{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:13px}
+  .wrap{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
+  nav{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;
+    background:var(--panel);border-right:1px solid var(--line);padding:20px 14px}
+  nav h1{font-size:16px;margin:4px 8px 2px;letter-spacing:.2px}
+  nav .sub{color:var(--muted);font-size:12px;margin:0 8px 14px}
+  nav a{display:block;color:var(--muted);padding:7px 10px;border-radius:8px;font-size:14px}
+  nav a:hover{background:var(--panel2);color:var(--ink);text-decoration:none}
+  nav a.active{background:rgba(61,220,151,.12);color:var(--accent)}
+  main{padding:32px 40px 96px;max-width:920px}
+  section{margin:0 0 40px;scroll-margin-top:18px}
+  h2{font-size:24px;margin:8px 0 6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  h3{font-size:17px;margin:22px 0 6px;color:#cfe}
+  .badge{display:inline-block;background:rgba(61,220,151,.15);color:var(--accent);
+    border:1px solid rgba(61,220,151,.3);border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600}
+  .lead{color:var(--muted);font-size:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin:14px 0}
+  .grid{display:grid;gap:14px} .grid.two{grid-template-columns:1fr 1fr}
+  @media(max-width:780px){.wrap{grid-template-columns:1fr}nav{position:static;height:auto}.grid.two{grid-template-columns:1fr}}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 14px;overflow:auto;position:relative;margin:10px 0}
+  pre code{color:#d6e2ee}
+  .copy{position:absolute;top:8px;right:8px;background:var(--panel2);border:1px solid var(--line);
+    color:var(--muted);border-radius:7px;padding:3px 9px;font-size:11px;cursor:pointer}
+  .copy:hover{color:var(--accent);border-color:var(--accent)}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#cfe;font-weight:600}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0}
+  .tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);
+    padding:8px 14px;border-radius:9px 9px 0 0;cursor:pointer;font-size:14px;font-weight:600}
+  .tab.active{background:var(--panel2);color:var(--accent);border-bottom-color:var(--panel2)}
+  .tabbody{display:none;background:var(--panel2);border:1px solid var(--line);border-radius:0 10px 10px 10px;padding:18px}
+  .tabbody.active{display:block}
+  details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 16px;margin:10px 0}
+  summary{cursor:pointer;font-weight:600;padding:10px 0;color:#cfe}
+  .note{border-left:3px solid var(--accent2);background:rgba(74,163,255,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .warn{border-left:3px solid var(--warn);background:rgba(255,180,84,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  /* decision tree */
+  .dt{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;text-align:center}
+  .dt .q{font-size:18px;font-weight:600;margin-bottom:16px}
+  .dt .opts{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:10px;
+    padding:12px 20px;cursor:pointer;font-size:15px;font-weight:600}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.primary{background:rgba(61,220,151,.14);border-color:rgba(61,220,151,.4);color:var(--accent)}
+  .result{margin-top:18px;text-align:left;display:none}
+  .result.show{display:block;animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+  .restart{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;margin-top:10px;text-decoration:underline}
+  .kbd{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px}
+  .foot{color:var(--muted);font-size:13px;margin-top:30px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav id="nav">
+    <h1>🧫 Plaque Toolkit</h1>
+    <div class="sub">Interactive guide · <span class="badge">finalized</span></div>
+    <a href="#start">Quick start</a>
+    <a href="#picker">Which tool? (picker)</a>
+    <a href="#tools">The tools</a>
+    <a href="#commands">Commands</a>
+    <a href="#data">Outputs &amp; data</a>
+    <a href="#turbidity">Turbidity explained</a>
+    <a href="#imaging">Imaging protocol</a>
+    <a href="#modes">Watershed &amp; published</a>
+    <a href="#paper">Using it in a paper</a>
+    <a href="#trouble">Troubleshooting</a>
+  </nav>
+
+  <main>
+    <section id="start">
+      <h2>Quick start</h2>
+      <p class="lead">Measure bacteriophage plaques — size, turbidity, count, titer — from Petri‑dish
+      photos. iPhone <b>HEIC works directly</b>. Built on the validated Plaque Size Tool.</p>
+      <div class="grid two">
+        <div class="card">
+          <h3>📸 One image → the numbers</h3>
+          <p>Drag your image onto <b>Measure Plaques.bat</b>, press <span class="kbd">N</span>,
+          type <span class="kbd">100</span> (dish mm). Read <code>out\data-green-&lt;image&gt;.csv</code>.</p>
+        </div>
+        <div class="card">
+          <h3>🧪 Compare phages (publishable)</h3>
+          <p>Name images per phage, drag the <b>folder</b> onto <b>Compare Turbidity.bat</b>.
+          Read <code>out_turbidity\per_phage.csv</code> + the figures.</p>
+        </div>
+      </div>
+      <div class="note">For real cross‑phage turbidity you want the <b>turbidity</b> tool with a
+      blank‑agar reference — see <a href="#turbidity">Turbidity explained</a>.</div>
+    </section>
+
+    <section id="picker">
+      <h2>Which tool should I use?</h2>
+      <div class="dt" id="dt">
+        <div class="q" id="dtq">What do you want to do?</div>
+        <div class="opts" id="dtopts"></div>
+        <div class="result" id="dtres"></div>
+        <button class="restart" id="dtrestart" style="display:none" onclick="dtStart()">↺ start over</button>
+      </div>
+    </section>
+
+    <section id="tools">
+      <h2>The tools</h2>
+      <div class="tabs">
+        <div class="tab active" data-t="t1">Measure (size)</div>
+        <div class="tab" data-t="t2">Edit (GUI)</div>
+        <div class="tab" data-t="t3">Compare turbidity</div>
+        <div class="tab" data-t="t4">HEIC → TIFF</div>
+      </div>
+      <div class="tabbody active" id="t1">
+        <h3>plaque_size_tool.py — automatic size + count + turbidity index</h3>
+        <p>Fast measurement of one image or a whole folder. Outputs size (px &amp; mm), count,
+        brightness, and a <i>within‑plate</i> turbidity index.</p>
+        <p><b>Launcher:</b> drag image(s) onto <b>Measure Plaques.bat</b> → choose Normal/Small → dish mm.</p>
+        <pre><button class="copy">copy</button><code>conda run -n plaque python "plaque_size_tool.py" -i "IMAGE" -p 100</code></pre>
+      </div>
+      <div class="tabbody" id="t2">
+        <h3>plaque_gui.py — interactive editor</h3>
+        <p>Review the auto‑detection and fix it by hand before saving.</p>
+        <table>
+          <tr><th>Action</th><th>How</th></tr>
+          <tr><td>Add a plaque (circle)</td><td>left‑press at centre, drag to edge, release</td></tr>
+          <tr><td>Add a plaque (auto‑trace)</td><td>Mode → Trace, then left‑click the plaque</td></tr>
+          <tr><td>Remove a plaque</td><td>right‑click it</td></tr>
+          <tr><td>Undo / Save</td><td>buttons, or <span class="kbd">u</span> / <span class="kbd">s</span></td></tr>
+        </table>
+        <p><b>Launcher:</b> drag one image onto <b>Edit Plaques (GUI).bat</b>. Saved CSV gets a
+        <code>SOURCE</code> column (auto / manual / watershed).</p>
+      </div>
+      <div class="tabbody" id="t3">
+        <h3>plaque_turbidity.py — cross‑phage turbidity (the publishable one)</h3>
+        <p>Batch optical‑density turbidity anchored to shared references, plus clarity class,
+        count + PFU/mL titer, per‑phage stats, and figures.</p>
+        <p><b>Launcher:</b> name images per phage, drag the <b>folder</b> onto <b>Compare Turbidity.bat</b>.</p>
+        <pre><button class="copy">copy</button><code>conda run -n plaque python "plaque_turbidity.py" -d "FOLDER" -p 100 --blank "blank.tif" --flat "flat.tif" --group-by-prefix</code></pre>
+      </div>
+      <div class="tabbody" id="t4">
+        <h3>heic_to_tiff.py — convert HEIC to TIFF</h3>
+        <p>Rarely needed (all tools read HEIC directly). Use it only if you want TIFF copies.</p>
+        <pre><button class="copy">copy</button><code>conda run -n plaque python "heic_to_tiff.py" -d "HEIC_FOLDER"</code></pre>
+      </div>
+    </section>
+
+    <section id="commands">
+      <h2>Command reference</h2>
+      <p>Run from the project folder. Prefix with <code>conda run -n plaque python</code>.</p>
+      <h3>Size / GUI flags</h3>
+      <table>
+        <tr><th>Flag</th><th>Meaning</th></tr>
+        <tr><td><code>-i</code> / <code>-d</code></td><td>one image / a folder</td></tr>
+        <tr><td><code>-p 100</code></td><td>dish diameter (mm) → enables mm columns</td></tr>
+        <tr><td><code>-small</code></td><td>plaques &lt; 2.5 mm / low‑res</td></tr>
+        <tr><td><code>--watershed</code></td><td>also split touching/merged plaques</td></tr>
+        <tr><td><code>--published</code></td><td>exact validated output (no corrections)</td></tr>
+      </table>
+      <h3>Turbidity batch flags</h3>
+      <table>
+        <tr><th>Flag</th><th>Meaning</th></tr>
+        <tr><td><code>--blank IMG</code></td><td>blank‑agar = clear reference I₀ → absolute OD</td></tr>
+        <tr><td><code>--flat IMG</code></td><td>flat‑field → corrects uneven light</td></tr>
+        <tr><td><code>--dark IMG</code></td><td>dark frame → removes black‑level</td></tr>
+        <tr><td><code>--core 0.6</code></td><td>measure central 60% (avoid halo)</td></tr>
+        <tr><td><code>--group-by-prefix</code></td><td><code>T4_1</code>,<code>T4_2</code> = replicates of <code>T4</code></td></tr>
+        <tr><td><code>--dilution</code> + <code>--volume-ul</code></td><td>compute PFU/mL titer</td></tr>
+      </table>
+    </section>
+
+    <section id="data">
+      <h2>Outputs &amp; data dictionary</h2>
+      <details open><summary>Size tool / GUI → <code>out\data-green-&lt;name&gt;.csv</code></summary>
+        <table>
+          <tr><th>Column</th><th>Unit</th><th>Meaning</th></tr>
+          <tr><td>AREA_PXL / AREA_MM2</td><td>px² / mm²</td><td>convex‑hull area</td></tr>
+          <tr><td>DIAMETER_PXL / DIAMETER_MM</td><td>px / mm</td><td>area‑equivalent diameter</td></tr>
+          <tr><td>MEAN_GRAY</td><td>0–255</td><td>brightness inside the plaque</td></tr>
+          <tr><td>TURBIDITY_REL</td><td>0–1</td><td><b>within‑plate</b> clarity index (not cross‑plate comparable; batch OD is the comparable one)</td></tr>
+          <tr><td>SOURCE</td><td>–</td><td>auto / manual / watershed (GUI &amp; --watershed)</td></tr>
+        </table>
+      </details>
+      <details><summary>Turbidity batch → <code>out_turbidity\</code></summary>
+        <ul>
+          <li><b>plaques_all.csv</b> — per plaque: OD, TRANSMITTANCE, TURBIDITY, CLARITY, size…</li>
+          <li><b>per_phage.csv</b> — comparison table; use the <code>*_PLATE_MEAN/_SD</code> columns for stats</li>
+          <li><b>qc.csv</b> — DISH_FOUND, ILLUM_CV, POLARITY_OK, FRAC_SATURATED, COUNT, PFU_PER_ML…</li>
+          <li><b>compare_*.png / hist_*.png</b> — box plots &amp; histograms</li>
+          <li><b>overlay_*.png</b> — QC images · <b>run_metadata.json</b> — provenance</li>
+        </ul>
+      </details>
+    </section>
+
+    <section id="turbidity">
+      <h2>Turbidity explained <span class="badge">read this</span></h2>
+      <p>There are <b>two</b> turbidity numbers — use the right one:</p>
+      <div class="grid two">
+        <div class="card"><h3>Within‑plate index</h3>
+          <p>From the <b>size tool / GUI</b>. 0 = clearest plaque on that plate, 1 = the lawn.
+          Good for ranking on <i>one</i> plate. <b class="pill" style="border-color:var(--warn);color:var(--warn)">not cross‑plate</b></p></div>
+        <div class="card"><h3>Optical density (OD)</h3>
+          <p>From the <b>turbidity batch tool</b>. <code>OD = −log₁₀(I/I₀)</code> anchored to clear
+          agar &amp; lawn. <b class="pill" style="border-color:var(--accent);color:var(--accent)">comparable across phages</b> — the publishable one.</p></div>
+      </div>
+      <div class="note">For phage comparisons, run the turbidity tool with <code>--blank</code>.
+      Without it, only a relative <code>TRANSMITTANCE</code> (qualitative) is reported.</div>
+    </section>
+
+    <section id="imaging">
+      <h2>Imaging protocol (for good turbidity)</h2>
+      <p>Transmitted light (light box). Fixed manual exposure / white balance / focus; HDR off;
+      prefer iPhone <b>ProRAW</b> over HEIC. Same dish position; lids off. In one session capture:</p>
+      <ol>
+        <li><b>Flat‑field</b> (bare light box) → <code>--flat</code></li>
+        <li><b>Blank‑agar</b> plate (no bacteria) → <code>--blank</code> (the key reference)</li>
+        <li>optional <b>dark frame</b> (lens covered) → <code>--dark</code></li>
+        <li>all <b>phage plates</b> — filename = phage (<code>T4_1</code>,<code>T4_2</code> for replicates)</li>
+        <li>re‑image one plate twice → reproducibility check</li>
+      </ol>
+      <div class="warn">Check <code>qc.csv</code> each run: <b>POLARITY_OK</b> = True, <b>FRAC_SATURATED</b> ≈ 0, low <b>ILLUM_CV</b>.</div>
+    </section>
+
+    <section id="modes">
+      <h2>Watershed &amp; published modes</h2>
+      <h3><code>--watershed</code> — split touching plaques</h3>
+      <p>Opt‑in. Splits fused plaques the detector drops, recovers real‑sized ones (cyan,
+      <code>SOURCE=watershed</code>), no over‑segmentation. Off by default; never changes the
+      validated result unless asked. (Classical equivalent of the deep‑learning PlaqSeg app.)</p>
+      <h3><code>--published</code> — exact validated output</h3>
+      <p>Reproduces the published Plaque Size Tool exactly (the default applies two tiny precision
+      corrections — 0 count change, ~0.01 mm — and the corrected value is more precise). Use
+      <code>--published</code> to cite the validated tool with no caveat.</p>
+    </section>
+
+    <section id="paper">
+      <h2>Using it in a paper</h2>
+      <ul>
+        <li>Report <b>OD</b> as the primary turbidity metric; TURBIDITY (0–1) secondary; CLARITY categorical.</li>
+        <li><b>Stats:</b> the <b>plate is the replicate, not the plaque</b> — use the
+        <code>*_PLATE_MEAN/_SD</code> columns, ≥3 plates/phage, non‑parametric tests or a mixed model.</li>
+        <li>Cite the validated tool (Trofimova &amp; Jaschke 2021); describe turbidity as transmitted‑light
+        relative OD vs a cell‑free agar reference. Keep <code>run_metadata.json</code> for provenance.</li>
+      </ul>
+    </section>
+
+    <section id="trouble">
+      <h2>Troubleshooting</h2>
+      <table>
+        <tr><th>Symptom</th><th>Fix</th></tr>
+        <tr><td>mm = 0 / "no dish detected"</td><td>get the whole dish rim in frame, or report pixels.</td></tr>
+        <tr><td>0 plaques found</td><td>try <code>-small</code>; check focus/exposure; view the annotated image.</td></tr>
+        <tr><td>turbidity looks inverted / POLARITY_OK=False</td><td>not true transmitted light (clear should be brighter than lawn).</td></tr>
+        <tr><td>OD blank in batch output</td><td>add a <code>--blank</code> reference.</td></tr>
+        <tr><td>touching plaques missed</td><td>add <code>--watershed</code>.</td></tr>
+        <tr><td>numpy error after upgrade</td><td><code>conda run -n plaque pip install "numpy&lt;2"</code></td></tr>
+      </table>
+      <p class="foot">Full written reference: <b>USER_GUIDE.md</b>. Built on the validated Plaque
+      Size Tool (Trofimova &amp; Jaschke, Virology 2021).</p>
+    </section>
+  </main>
+</div>
+
+<script>
+// copy buttons
+document.querySelectorAll('.copy').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const code=b.parentElement.querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(()=>{b.textContent='copied!';setTimeout(()=>b.textContent='copy',1200)});
+  });
+});
+// tabs
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tabbody').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');document.getElementById(t.dataset.t).classList.add('active');
+  });
+});
+// active nav on scroll
+const navlinks=[...document.querySelectorAll('nav a')];
+const secs=navlinks.map(a=>document.querySelector(a.getAttribute('href')));
+addEventListener('scroll',()=>{
+  let i=secs.length-1;
+  for(let k=0;k<secs.length;k++){if(secs[k].getBoundingClientRect().top>120){i=k-1;break;}}
+  navlinks.forEach(a=>a.classList.remove('active'));
+  if(i>=0)navlinks[i].classList.add('active');
+},{passive:true});
+// decision tree
+const TREE={
+  start:{q:'What do you want to do?',opts:[
+    {t:'Compare turbidity across phages',go:'cmp'},
+    {t:'Measure one plate (or a few)',go:'one'}]},
+  one:{q:'Do you need to hand‑correct the detection?',opts:[
+    {t:'Yes — add/remove plaques by hand',go:'gui'},
+    {t:'No — just the numbers',go:'size'}]},
+};
+const RES={
+  cmp:{tool:'Compare Turbidity.bat → plaque_turbidity.py',why:'Absolute OD turbidity, clarity class, count + PFU/mL, per‑phage stats and figures — the publishable comparison.',
+       cmd:'conda run -n plaque python "plaque_turbidity.py" -d "FOLDER" -p 100 --blank "blank.tif" --group-by-prefix'},
+  gui:{tool:'Edit Plaques (GUI).bat → plaque_gui.py',why:'Interactive editor: add missed plaques, remove false ones, then save size + turbidity.',
+       cmd:'conda run -n plaque python "plaque_gui.py" -i "IMAGE" -p 100'},
+  size:{tool:'Measure Plaques.bat → plaque_size_tool.py',why:'Automatic size + count + within‑plate turbidity index for one image or a folder.',
+       cmd:'conda run -n plaque python "plaque_size_tool.py" -i "IMAGE" -p 100'},
+};
+function dtStart(){render('start');document.getElementById('dtres').classList.remove('show');document.getElementById('dtrestart').style.display='none';}
+function render(key){
+  const n=TREE[key];document.getElementById('dtq').textContent=n.q;
+  const o=document.getElementById('dtopts');o.innerHTML='';
+  n.opts.forEach(opt=>{const b=document.createElement('button');b.className='btn';b.textContent=opt.t;
+    b.onclick=()=>{ if(TREE[opt.go]) render(opt.go); else showRes(opt.go); };o.appendChild(b);});
+}
+function showRes(k){
+  const r=RES[k];document.getElementById('dtopts').innerHTML='';document.getElementById('dtq').textContent='Use this:';
+  const res=document.getElementById('dtres');
+  res.innerHTML='<div class="card"><h3>✅ '+r.tool+'</h3><p>'+r.why+'</p><pre><button class="copy">copy</button><code>'+r.cmd+'</code></pre></div>';
+  res.classList.add('show');document.getElementById('dtrestart').style.display='inline';
+  res.querySelector('.copy').addEventListener('click',e=>{navigator.clipboard.writeText(r.cmd);e.target.textContent='copied!';setTimeout(()=>e.target.textContent='copy',1200);});
+}
+dtStart();
+</script>
+</body>
+</html>

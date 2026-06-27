@@ -1,25 +1,60 @@
 __pycache__/
 *.pyc
-# analysis outputs (regenerated; keep raw images + code under version control)
+*.egg-info/
+
+# --- analysis outputs (regenerated; keep raw images + code under version control) ---
 out/
 out_turbidity/
+out_turb_*/
+out_precise/
+out_precise_*/
+_plaqseg/out/
+_imagej/out/
+
 # temporary brightness-adjusted files written by the size CLI
 *.tmp.tif
 *.tmp.tiff
 *.tmp.jpg
 *.tmp.jpeg
 *.tmp.png
-# scratch/test artifacts
+
+# --- scratch / throwaway test artifacts ---
 _tb*/
 _h*/
 _vt*/
+_vfolder/
+_robust/
 _gen_samples.py
-# app build artifacts (the .spec / .iss are kept; built outputs are not)
+*.log
+
+# --- research scratch (the kept artifacts under _research/ are committed deliberately) ---
+_research/**/__pycache__/
+_research/**/*.log
+_research/sweep_out/
+_research/val_out/
+
+# --- secrets / keys ---
+_roboflow_key.txt
+env_paths.json
+
+# --- app build artifacts (the .spec / .iss are kept; built outputs are not) ---
 dist/
 build/_work/
 build/_pyi_work/
 build/PlaqueToolkit/
-*.log
+build/plaque_app_full/localpycs/
 Output/
-*.egg-info/
-_roboflow_key.txt
+
+# --- large data / ML scratch (regenerable; OnePetri data is CC-BY-NC, not redistributable) ---
+_research/
+!_research/clf/
+_research/clf/*
+!_research/clf/plaque_clf.pt
+!_research/clf/infer.py
+_imagej/
+# user study data + bulky per-photo outputs (kept local, not in the code repo)
+Plaques to measure/
+/IMG_*.jpeg
+
+# PyInstaller work dirs (keep build/*.spec and *.iss only)
+build/*/

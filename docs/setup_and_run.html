@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaque Toolkit — Set up & run your plates</title>
+<style>
+  :root{--bg:#0f1419;--panel:#171d26;--panel2:#1e2630;--ink:#e6edf3;--muted:#9aa7b4;
+    --line:#2a3540;--accent:#3ddc97;--accent2:#4aa3ff;--warn:#ffb454;--code:#0b0f14;--r:12px}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent2)} code,kbd{font-family:"SF Mono",Consolas,monospace;font-size:13px}
+  .wrap{max-width:860px;margin:0 auto;padding:30px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px} h2{font-size:20px;margin:30px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-size:16px;margin:18px 0 4px;color:#cfe}
+  .sub{color:var(--muted);margin:0 0 8px}
+  .badge{display:inline-block;background:rgba(61,220,151,.15);color:var(--accent);border:1px solid rgba(61,220,151,.3);
+    border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:14px 0}
+  .step{display:flex;gap:14px;margin:14px 0}
+  .num{flex:0 0 30px;height:30px;border-radius:50%;background:rgba(61,220,151,.15);color:var(--accent);
+    border:1px solid rgba(61,220,151,.35);display:flex;align-items:center;justify-content:center;font-weight:700}
+  .step .body{flex:1}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;position:relative;margin:8px 0}
+  pre code{color:#d6e2ee;white-space:pre-wrap;word-break:break-word}
+  .copy{position:absolute;top:8px;right:8px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+    border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer}
+  .copy:hover{color:var(--accent);border-color:var(--accent)}
+  .note{border-left:3px solid var(--accent2);background:rgba(74,163,255,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .warn{border-left:3px solid var(--warn);background:rgba(255,180,84,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{background:var(--panel2);color:#cfe}
+  /* builder */
+  .builder{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.builder{grid-template-columns:1fr}}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;background:var(--panel2);color:var(--muted);border:none;padding:9px;cursor:pointer;font-size:13px;font-weight:600}
+  .seg button.on{background:rgba(61,220,151,.16);color:var(--accent)}
+  input[type=text],input[type=number]{width:100%;background:var(--code);border:1px solid var(--line);color:var(--ink);
+    border-radius:9px;padding:9px 11px;font-size:14px;font-family:inherit}
+  .chk{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)}
+  .dlbtn{display:inline-block;background:rgba(61,220,151,.15);border:1px solid rgba(61,220,151,.4);color:var(--accent);
+    border-radius:9px;padding:9px 16px;cursor:pointer;font-weight:600;font-size:14px;text-decoration:none;margin-top:6px}
+  .dlbtn:hover{background:rgba(61,220,151,.25)}
+  .kbd{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px}
+  .foot{color:var(--muted);font-size:13px;margin-top:28px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧫 Set up &amp; run your plates</h1>
+  <p class="sub">A guided, local workflow: drop your plate photos in a folder, click run, get one
+  CSV per plate. <span class="badge">local · offline</span></p>
+
+  <h2>1 · One‑time setup</h2>
+  <p class="sub">You only do this once. It creates the <code>plaque</code> environment with the right packages.</p>
+  <div class="card">
+    <h3>Already set up on this PC ✅</h3>
+    <p>If you're reading this in <code>C:\Users\mbaff\Downloads\Plaque Size Tool</code>, the environment
+    already exists — skip to step 2. To recreate it elsewhere:</p>
+    <pre><button class="copy">copy</button><code>conda env create -f environment.yml</code></pre>
+    <p class="sub">(or <code>conda create -n plaque python=3.9 -y</code> then
+    <code>conda run -n plaque pip install -r requirements.txt</code>) — <b>numpy stays &lt; 2</b>.</p>
+  </div>
+
+  <h2>2 · Put your plates in</h2>
+  <div class="step"><div class="num">1</div><div class="body">
+    Open the <b><code>plates\</code></b> folder inside the project (created for you).</div></div>
+  <div class="step"><div class="num">2</div><div class="body">
+    Copy your plate photos into it. <b>Name each photo after its plate</b> — e.g.
+    <code>TG51-1.jpeg</code>, <code>TG52-1.heic</code>. The CSV will get that exact name.</div></div>
+  <div class="note"><b>iPhone HEIC and JPEG both work</b> — no conversion needed. Tip: shoot plates
+  <b>straight‑on</b> (the tool warns if the dish looks tilted) and back‑lit if you later want turbidity.</div>
+
+  <h2>3 · Build your run <span class="badge">configure it</span></h2>
+  <p class="sub">Pick your options — the command and a ready‑to‑run launcher update live below.</p>
+  <div class="card">
+    <div class="builder">
+      <div class="field"><label>Plates folder (name or full path)</label>
+        <input type="text" id="folder" value="plates"></div>
+      <div class="field"><label>Dish diameter (mm)</label>
+        <input type="number" id="dish" value="100" min="1" step="1"></div>
+      <div class="field"><label>Plaque size</label>
+        <div class="seg" id="size"><button data-v="" class="on">Normal</button><button data-v="-small">Small (&lt;2.5 mm)</button></div></div>
+      <div class="field"><label>Mode</label>
+        <div class="seg" id="mode"><button data-v="" class="on">Current (corrected)</button><button data-v="--published">Original (published)</button></div></div>
+    </div>
+    <label class="chk" style="margin-top:12px"><input type="checkbox" id="sum" checked> also build <code>summary.csv</code> (count + size per plate)</label>
+
+    <h3 style="margin-top:18px">▶ Command (paste into a terminal in the project folder)</h3>
+    <pre><button class="copy">copy</button><code id="cmd"></code></pre>
+
+    <h3>📄 …or a one‑click launcher</h3>
+    <p class="sub">Download this, drop it in the project folder, and double‑click it whenever you want to run.</p>
+    <pre><button class="copy">copy</button><code id="bat"></code></pre>
+    <a class="dlbtn" id="dl">⬇ Download Run My Plates.bat</a>
+  </div>
+
+  <h2>4 · Run it</h2>
+  <div class="step"><div class="num">A</div><div class="body"><b>Launcher way:</b> double‑click the
+    <code>Run My Plates.bat</code> you downloaded (in the project folder).</div></div>
+  <div class="step"><div class="num">B</div><div class="body"><b>Command way:</b> open a terminal, run
+    <code>cd "C:\Users\mbaff\Downloads\Plaque Size Tool"</code>, then paste the command above.</div></div>
+  <p class="sub">Either way, the <b><code>out\</code></b> folder opens with your results.</p>
+
+  <h2>5 · Your results (in <code>out\</code>)</h2>
+  <table>
+    <tr><th>File</th><th>What it is</th></tr>
+    <tr><td><code>data-green-&lt;plate&gt;.csv</code></td><td>one per plate — a row per plaque (area &amp; diameter in px and mm)</td></tr>
+    <tr><td><code>out_&lt;plate&gt;.&lt;ext&gt;</code></td><td>the plate image with every plaque circled + numbered</td></tr>
+    <tr><td><code>summary.csv</code></td><td>one row per plate: count, mean/median/min/max diameter, mean area</td></tr>
+  </table>
+  <p>Per‑plaque columns: <code>INDEX_COL, AREA_PXL, DIAMETER_PXL, AREA_MM2, DIAMETER_MM</code>
+  (+ <code>MEAN_GRAY, TURBIDITY_REL</code> — ignore these two for a pure‑original size result).</p>
+
+  <h2>6 · Good to know</h2>
+  <div class="warn"><b><code>out\</code> accumulates.</b> CSVs stay there until a same‑named plate
+  overwrites them (or you delete them). The <code>summary.csv</code> reflects whatever is in
+  <code>out\</code> — so clear out old plates before a fresh set.</div>
+  <ul>
+    <li><b>Dense / faint plates</b> (like a near‑confluent lawn) are <i>undercounted</i> — treat the
+      numbers as a size sample, not a titer. Keep plates in the 30–300 countable range.</li>
+    <li><b>Tilt warning:</b> if it says the dish looks elliptical, re‑shoot straight‑on for accurate mm.</li>
+    <li><b>Original vs current:</b> "Original (published)" reproduces the published Plaque Size Tool;
+      the small differences vs current are ≤ ~0.04 mm with the count unchanged.</li>
+  </ul>
+
+  <p class="foot">Full reference: <code>PLAQUE_SIZE_TOOL.md</code> (core size tool) ·
+  <code>USER_GUIDE.md</code> (whole toolkit) · <code>guide.html</code> (interactive overview).</p>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const PYPATH = String.raw`C:\Users\mbaff\Miniconda3\envs\plaque\python.exe`;
+const state={folder:"plates",dish:"100",size:"",mode:"",sum:true};
+
+function seg(id,key){ $(id).querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
+  $(id).querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); state[key]=b.dataset.v; render();
+}));}
+seg("size","size"); seg("mode","mode");
+$("folder").addEventListener("input",e=>{state.folder=e.target.value.trim()||"plates";render();});
+$("dish").addEventListener("input",e=>{state.dish=(e.target.value||"100");render();});
+$("sum").addEventListener("change",e=>{state.sum=e.target.checked;render();});
+
+function flags(){
+  let f=`-d "${state.folder}" -p ${state.dish}`;
+  if(state.size) f+=` ${state.size}`;
+  if(state.mode) f+=` ${state.mode}`;
+  return f;
+}
+function render(){
+  // terminal command
+  let c = `conda run -n plaque python "plaque_size_tool.py" ${flags()}`;
+  if(state.sum) c += `\nconda run -n plaque python "summarize_plates.py" -o "out"`;
+  $("cmd").textContent = c;
+  // launcher .bat
+  let b =
+`@echo off
+cd /d "%~dp0"
+set "PY=${PYPATH}"
+if not exist "%PY%" set "PY=python"
+"%PY%" "plaque_size_tool.py" ${flags()}
+`;
+  if(state.sum) b += `"%PY%" "summarize_plates.py" -o "out"\n`;
+  b += `start "" "%~dp0out"\npause\n`;
+  $("bat").textContent = b;
+  // download link
+  const blob = new Blob([b],{type:"application/octet-stream"});
+  const url = URL.createObjectURL(blob);
+  const a=$("dl"); if(a._u) URL.revokeObjectURL(a._u); a._u=url;
+  a.href=url; a.download="Run My Plates.bat";
+}
+document.querySelectorAll(".copy").forEach(b=>b.addEventListener("click",()=>{
+  navigator.clipboard.writeText(b.parentElement.querySelector("code").textContent)
+    .then(()=>{b.textContent="copied!";setTimeout(()=>b.textContent="copy",1200);});
+}));
+render();
+</script>
+</body>
+</html>
