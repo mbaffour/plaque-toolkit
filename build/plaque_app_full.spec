@@ -42,11 +42,16 @@ datas += [(os.path.join(ROOT, "_research", "clf", "plaque_clf.pt"), "_research/c
 # infer.py is loaded by precise/combine.py via importlib from an explicit file path,
 # so it must ship as a DATA file at _research/clf/infer.py (not just as a module).
 datas += [(os.path.join(ROOT, "_research", "clf", "infer.py"), "_research/clf")]
+# docs/ — the Help menu (app/ui.py _open_doc) opens these from sys._MEIPASS/docs at
+# runtime (USER_GUIDE / VALIDATION_GUIDE / HOW_IT_WAS_BUILT / ENGINES / PUBLICATION +
+# the interactive guide.html), so the whole folder must ship as data.
+datas += [(os.path.join(ROOT, "docs"), "docs")]
 
 # ---- explicit hidden imports the analyzer can miss ------------------------- #
 hiddenimports += [
     # project modules
     "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar",
+    "plate_crop",
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths",
     # the in-process Precise package

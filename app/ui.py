@@ -10,17 +10,18 @@ matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
 
 import pandas as pd
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut, QAction, QDesktopServices
+from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
     QFrame, QProgressBar, QStyle)
 
-from app import __version__, engine_api, style
+from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
 from app.widgets import PandasTableModel, NumericSortProxy
-from app.canvas_editor import EditorWidget
+from app.plaque_canvas import PlaqueCanvas
 
 IMG_FILTER = "Images (*.tif *.tiff *.jpg *.jpeg *.png *.heic *.heif)"
 IMG_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
@@ -85,7 +86,13 @@ class MeasureTab(QWidget):
         self.mode = QComboBox()
         for label, _key, _help in MODES:
             self.mode.addItem(label)
-        self.mode.setCurrentIndex(1)   # Current (corrected) by default
+        try:
+            _precise_ok = engine_api.precise_available()[0]
+        except Exception:
+            _precise_ok = False
+        # default to the most precise engine when it's available, else Current (corrected)
+        self._def_mode = 3 if _precise_ok else 1
+        self.mode.setCurrentIndex(self._def_mode)
         self.mode.setToolTip("Detection engine / mode. Hover an option or read the line below.")
         self.mode.currentIndexChanged.connect(self._mode_changed)
 
@@ -124,7 +131,7 @@ class MeasureTab(QWidget):
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
 
         # mode helper + progress strip
-        self.mode_help = QLabel(MODES[1][2]); self.mode_help.setObjectName("ModeHelp")
+        self.mode_help = QLabel(MODES[self._def_mode][2]); self.mode_help.setObjectName("ModeHelp")
         self.mode_help.setWordWrap(True)
         self.progress = QProgressBar(); self.progress.setRange(0, 0)   # indeterminate
         self.progress.setVisible(False); self.progress.setMaximumWidth(220)
@@ -316,7 +323,7 @@ class MeasureTab(QWidget):
             self.editor.setParent(None)
         else:
             self.placeholder.setParent(None)
-        self.editor = EditorWidget(self.det, self.image_path,
+        self.editor = PlaqueCanvas(self.det, self.image_path,
                                    os.path.join(os.path.dirname(self.image_path), "out"),
                                    on_change=self.refresh_table,
                                    face=style.LIGHT["surface"])
@@ -334,8 +341,8 @@ class MeasureTab(QWidget):
         self.det = det
         self._mount_editor()
         self._set_busy(False)
-        # use the precise CSV for the summary/table where present
-        self.refresh_table(precise=det)
+        # plaques are now the editable Precise detections -> normal table path
+        self.refresh_table()
         n = det["n_plaques"]
         self.window().statusBar().showMessage(f"{n} plaques (Precise · PST+PlaqSeg)")
 
@@ -363,6 +370,10 @@ class MeasureTab(QWidget):
             self._set_summary(n=n, median=median, mean=mean, cal=cal, flag=flag)
             return
 
+        summ = det.get("precise_summary") or {}
+        if summ.get("uncertainty_flag"):
+            extra = "⚠ Detectors disagree on count — verify by eye."
+            flag = (flag + "  " + extra) if flag else extra
         df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
                                       det["pxl_per_mm"], det["lawn_gray"])
         self.model.set_dataframe(df)
@@ -614,6 +625,227 @@ class AboutTab(QWidget):
         outer.addStretch()
 
 
+def _open_doc(name):
+    """Open a docs/ file with the system default viewer (works from source and frozen)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if getattr(sys, "frozen", False):
+        root = getattr(sys, "_MEIPASS", root)
+    path = os.path.join(root, "docs", name)
+    if not os.path.exists(path):
+        path = os.path.join(root, name)
+    if os.path.exists(path):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+    else:
+        QMessageBox.information(None, "Document not found",
+                                f"Could not find {name}. It ships in the docs/ folder.")
+
+
+# --------------------------------------------------------------------------- #
+class BatchTab(QWidget):
+    """Run detection over a whole folder of plates → per-plate CSV + annotated images + summary."""
+
+    def __init__(self, pool):
+        super().__init__()
+        self.pool = pool
+        self.last_out = None
+
+        self.folder = QLineEdit(); self.folder.setPlaceholderText("Folder of plate images…")
+        browse = QPushButton("Browse…"); browse.clicked.connect(self._pick)
+        self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
+        self.plate.setSuffix(" mm")
+        self.mode = QComboBox()
+        for label, _k, _h in MODES:
+            self.mode.addItem(label)
+        self.mode.setCurrentIndex(1)   # Current — fast; Precise over a whole folder is very slow
+        self.watershed = QCheckBox("Split touching plaques")
+        self.crops = QCheckBox("Also export Fiji-calibrated plate crops")
+        self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
+                              "baked in (plus a .fiji.txt). Opens in Fiji already scaled in mm, so "
+                              "cropping a plaque keeps the scale for a scale bar.")
+
+        self.run_btn = QPushButton(" Run batch"); self.run_btn.setObjectName("Primary")
+        self.run_btn.setIcon(_icon(QStyle.SP_MediaPlay)); self.run_btn.clicked.connect(self._run)
+        self.open_btn = QPushButton(" Open output folder"); self.open_btn.setEnabled(False)
+        self.open_btn.setIcon(_icon(QStyle.SP_DirOpenIcon)); self.open_btn.clicked.connect(self._open_out)
+        self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setVisible(False)
+        self.progress.setMaximumWidth(220)
+        self.status = QLabel("Pick a folder of plate photos (one plate per image). Writes a per-plate "
+                             "CSV, an all-plaques CSV and an annotated image for each.")
+        self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
+
+        self.table = QTableView(); self.model = PandasTableModel()
+        self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
+        self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
+        self.table.setAlternatingRowColors(True); self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        inputs = QGroupBox("Batch inputs")
+        gl = QGridLayout(inputs); gl.setHorizontalSpacing(10); gl.setVerticalSpacing(8)
+        gl.addWidget(QLabel("Folder"), 0, 0); gl.addWidget(self.folder, 0, 1); gl.addWidget(browse, 0, 2)
+        gl.addWidget(QLabel("Dish"), 1, 0); gl.addWidget(self.plate, 1, 1)
+        opt = QHBoxLayout(); opt.addWidget(QLabel("Engine")); opt.addWidget(self.mode)
+        opt.addWidget(self.watershed); opt.addStretch()
+        gl.addLayout(opt, 2, 1)
+        gl.addWidget(self.crops, 3, 1)
+
+        runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addWidget(self.open_btn)
+        runrow.addStretch(); runrow.addWidget(self.progress)
+
+        card = QFrame(); card.setObjectName("Card"); cl = QVBoxLayout(card); cl.setContentsMargins(12, 10, 12, 12)
+        cap = QLabel("Per-plate summary"); cap.setObjectName("SummaryHeading")
+        cl.addWidget(cap); cl.addWidget(self.table)
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(card, 1)
+
+    def _pick(self):
+        p = QFileDialog.getExistingDirectory(self, "Folder of plate images")
+        if p:
+            self.folder.setText(p)
+
+    def _run(self):
+        folder = self.folder.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Pick a folder", "Choose a folder of plate images."); return
+        key = MODES[self.mode.currentIndex()][1]
+        if key == "precise" and not engine_api.precise_available()[0]:
+            QMessageBox.information(self, "Precise unavailable",
+                                    "Precise isn't available here; pick another engine."); return
+        if key == "precise":
+            QMessageBox.information(self, "Heads-up",
+                                    "Precise runs the deep model on every image (~1 min each). "
+                                    "For a large folder, Current is far faster.")
+        self._set_busy(True); self.window().statusBar().showMessage("Batch running…")
+        w = Worker(batch_measure.batch_measure, folder, plate_mm=self.plate.value(), mode=key,
+                   watershed=self.watershed.isChecked(), crops=self.crops.isChecked())
+        w.kwargs["progress"] = w.signals.progress.emit
+        w.signals.progress.connect(self.status.setText)
+        w.signals.finished.connect(self._done); w.signals.error.connect(self._err)
+        self.pool.start(w)
+
+    def _set_busy(self, on):
+        self.progress.setVisible(on)
+        for x in (self.run_btn, self.mode, self.plate, self.watershed, self.crops):
+            x.setEnabled(not on)
+
+    def _done(self, res):
+        self._set_busy(False)
+        self.model.set_dataframe(res["summary_df"])
+        self.last_out = res["out_dir"]; self.open_btn.setEnabled(True)
+        msg = f"{res['n_images']} images → {res['out_dir']}"
+        if res.get("errors"):
+            msg += f"   ⚠ {len(res['errors'])} failed"
+        self.status.setText(msg); self.window().statusBar().showMessage(msg)
+
+    def _err(self, m):
+        self._set_busy(False)
+        QMessageBox.critical(self, "Batch failed", m[:1200])
+        self.window().statusBar().showMessage("Batch failed.")
+
+    def _open_out(self):
+        if self.last_out and os.path.isdir(self.last_out):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_out))
+
+
+# --------------------------------------------------------------------------- #
+class ValidateTab(QWidget):
+    """Score the engines against your hand-corrected ground-truth labels (precision/recall/F1)."""
+
+    def __init__(self, pool):
+        super().__init__()
+        self.pool = pool
+
+        self.labels = QLineEdit()
+        self.labels.setPlaceholderText("Folder with labels_*.json (from Measure → Export → Ground-truth labels)…")
+        browse = QPushButton("Browse…"); browse.clicked.connect(self._pick)
+
+        self.mode_checks = {}
+        modes_box = QHBoxLayout()
+        for key, default in (("published", False), ("current", True), ("sensitive", False), ("precise", True)):
+            label = next(l for l, k, _ in MODES if k == key)
+            cb = QCheckBox(label); cb.setChecked(default); self.mode_checks[key] = cb; modes_box.addWidget(cb)
+        modes_box.addStretch()
+
+        self.run_btn = QPushButton(" Run validation"); self.run_btn.setObjectName("Primary")
+        self.run_btn.setIcon(_icon(QStyle.SP_DialogApplyButton)); self.run_btn.clicked.connect(self._run)
+        guide = QPushButton(" Validation guide"); guide.setIcon(_icon(QStyle.SP_FileDialogInfoView))
+        guide.clicked.connect(lambda: _open_doc("VALIDATION_GUIDE.md"))
+        self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setVisible(False)
+        self.progress.setMaximumWidth(220)
+        self.status = QLabel("First build ground truth: in Measure, correct a few plates by hand, then "
+                             "Export → Ground-truth labels. Point here at that folder and score the engines.")
+        self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
+
+        self.mode_table = QTableView(); self.mode_model = PandasTableModel()
+        self.mode_table.setModel(self.mode_model); self.mode_table.setAlternatingRowColors(True)
+        self.mode_table.verticalHeader().setVisible(False); self.mode_table.horizontalHeader().setStretchLastSection(True)
+        self.plate_table = QTableView(); self.plate_model = PandasTableModel()
+        self.pproxy = NumericSortProxy(); self.pproxy.setSourceModel(self.plate_model)
+        self.plate_table.setModel(self.pproxy); self.plate_table.setSortingEnabled(True)
+        self.plate_table.setAlternatingRowColors(True); self.plate_table.verticalHeader().setVisible(False)
+        self.plate_table.horizontalHeader().setStretchLastSection(True)
+
+        inputs = QGroupBox("Validation inputs")
+        gl = QGridLayout(inputs); gl.setHorizontalSpacing(10); gl.setVerticalSpacing(8)
+        gl.addWidget(QLabel("Labels folder"), 0, 0); gl.addWidget(self.labels, 0, 1); gl.addWidget(browse, 0, 2)
+        gl.addWidget(QLabel("Engines"), 1, 0); gl.addLayout(modes_box, 1, 1)
+
+        runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addWidget(guide)
+        runrow.addStretch(); runrow.addWidget(self.progress)
+
+        def cap(t):
+            l = QLabel(t); l.setObjectName("SummaryHeading"); return l
+        mcard = QFrame(); mcard.setObjectName("Card"); ml = QVBoxLayout(mcard); ml.setContentsMargins(12, 10, 12, 12)
+        ml.addWidget(cap("Per-engine score — precision / recall / F1 vs your gold standard")); ml.addWidget(self.mode_table)
+        pcard = QFrame(); pcard.setObjectName("Card"); pl = QVBoxLayout(pcard); pl.setContentsMargins(12, 10, 12, 12)
+        pl.addWidget(cap("Per-plate detail")); pl.addWidget(self.plate_table)
+        split = QSplitter(Qt.Vertical); split.addWidget(mcard); split.addWidget(pcard); split.setSizes([200, 360])
+        split.setChildrenCollapsible(False)
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(split, 1)
+
+    def _pick(self):
+        p = QFileDialog.getExistingDirectory(self, "Folder of ground-truth labels")
+        if p:
+            self.labels.setText(p)
+
+    def _run(self):
+        d = self.labels.text().strip()
+        if not d or not os.path.exists(d):
+            QMessageBox.warning(self, "Pick labels", "Choose the folder with your labels_*.json files."); return
+        modes = tuple(k for k, cb in self.mode_checks.items() if cb.isChecked())
+        if not modes:
+            QMessageBox.warning(self, "Pick engines", "Tick at least one engine to score."); return
+        if "precise" in modes and not engine_api.precise_available()[0]:
+            QMessageBox.information(self, "Precise unavailable", "Precise isn't available here; untick it."); return
+        self._set_busy(True); self.window().statusBar().showMessage("Validating…")
+        w = Worker(validate.validate, d, modes=modes)
+        w.kwargs["progress"] = w.signals.progress.emit
+        w.signals.progress.connect(self.status.setText)
+        w.signals.finished.connect(self._done); w.signals.error.connect(self._err)
+        self.pool.start(w)
+
+    def _set_busy(self, on):
+        self.progress.setVisible(on)
+        for x in (self.run_btn,) + tuple(self.mode_checks.values()):
+            x.setEnabled(not on)
+
+    def _done(self, res):
+        self._set_busy(False)
+        self.mode_model.set_dataframe(res["per_mode_df"])
+        self.plate_model.set_dataframe(res["per_plate_df"])
+        n = len(res["per_plate_df"])
+        self.status.setText(f"Scored {n} (plate × engine) results. Higher F1 = closer to your gold "
+                            "standard. See the Validation guide (Help menu) for how to report this.")
+        self.window().statusBar().showMessage("Validation done.")
+
+    def _err(self, m):
+        self._set_busy(False)
+        QMessageBox.critical(self, "Validation failed", m[:1500])
+        self.window().statusBar().showMessage("Validation failed.")
+
+
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -632,10 +864,14 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.measure_tab = MeasureTab(self.pool)
         self.tabs.addTab(self.measure_tab, "  Measure  ")
+        self.tabs.addTab(BatchTab(self.pool), "  Batch  ")
         self.tabs.addTab(CompareTab(self.pool), "  Compare turbidity  ")
-        self.tabs.addTab(AboutTab(), "  About  ")
+        self.tabs.addTab(ValidateTab(self.pool), "  Validate  ")
+        self.about_tab = AboutTab()
+        self.tabs.addTab(self.about_tab, "  About  ")
         rlay.addWidget(self.tabs, 1)
         self.setCentralWidget(root)
+        self._build_menu()
 
         self.statusBar().showMessage(
             f"Ready  ·  numpy {engine_api.numpy_version()}  ·  engine: validated Plaque Size Tool")
@@ -643,6 +879,21 @@ class MainWindow(QMainWindow):
         # keyboard shortcuts
         QShortcut(QKeySequence.Open, self, activated=self._shortcut_open)
         QShortcut(QKeySequence.Save, self, activated=self._shortcut_save)
+
+    def _build_menu(self):
+        m = self.menuBar().addMenu("&Help")
+        for label, doc in (("User guide", "USER_GUIDE.md"),
+                           ("How to validate this program", "VALIDATION_GUIDE.md"),
+                           ("How it was built", "HOW_IT_WAS_BUILT.md"),
+                           ("Engine reference", "ENGINES.md"),
+                           ("Publication notes", "PUBLICATION.md")):
+            a = QAction(label, self)
+            a.triggered.connect(lambda _=False, d=doc: _open_doc(d))
+            m.addAction(a)
+        m.addSeparator()
+        about = QAction("About Plaque Toolkit", self)
+        about.triggered.connect(lambda: self.tabs.setCurrentWidget(self.about_tab))
+        m.addAction(about)
 
     def _build_header(self):
         bar = QFrame(); bar.setObjectName("HeaderBar"); bar.setFixedHeight(64)

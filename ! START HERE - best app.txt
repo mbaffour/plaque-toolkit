@@ -1,0 +1,52 @@
+==================================================================
+  PLAQUE TOOLKIT  -  WHICH ONE TO RUN   (start here)
+==================================================================
+
+THE APP TO USE   ->   "Plaque Toolkit (full)"
+
+  - Open it from the Windows Start menu  (search: Plaque Toolkit),
+    OR just double-click in this folder:
+            ! Open Plaque Toolkit (BEST).bat
+
+  - This is the all-in-one build. Everything is built in
+    (the PST + PlaqSeg "Precise" engine). No setup, no conda,
+    nothing else to install.
+
+
+PICK THE ENGINE FOR YOUR GOAL   (dropdown at the top of the Measure tab)
+
+  * Best detection on hard / dense plates ....  Precise (PST + PlaqSeg)
+  * Numbers for a PAPER  (citable, validated)   Published (validated)
+  * Routine day-to-day measuring  (default) ..  Current (corrected)
+  * Lots of tiny (<2.5 mm) plaques ...........  Sensitive
+
+
+HOW TO MEASURE  (about 30 seconds)
+
+  1. Set the dish size in mm   (default 100 mm).
+  2. Click "Open image..." and choose your plate photo
+     (TIFF / JPEG / PNG / iPhone HEIC all work).
+  3. Read PLAQUES / MEDIAN / MEAN diameter + the per-plaque table.
+  4. Click "Save results" to write the annotated image + CSV.
+
+
+GOOD TO KNOW
+
+  - Precise takes about a minute on its first run (it loads the
+    detection model); after that it is quick.
+  - "Precise" and "Sensitive" are in-house extensions and are NOT
+    independently validated yet -- use "Published (validated)" for
+    any measurement you will report in a paper.
+  - An older duplicate app (plain "Plaque Toolkit", which did not
+    have Precise built in) was removed to avoid confusion.
+    The one to keep and use is  "Plaque Toolkit (full)".
+
+
+EVERYTHING ELSE IN THIS FOLDER IS OPTIONAL
+
+  - "Plaque Toolkit (all versions)\"  -> run the individual tools
+        from source (advanced / when you don't want the installed app).
+  - "Precise Detect (best engine).bat" -> Precise without the GUI
+        (advanced; needs the conda envs set up).
+  - "docs\USER_GUIDE.md" and "docs\ENGINES.md" -> full documentation.
+==================================================================

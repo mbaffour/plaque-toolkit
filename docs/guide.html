@@ -1,336 +1,1190 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plaque Toolkit — Interactive Guide</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plaque Toolkit — Interactive User Guide</title>
 <style>
+  /* ── Base ───────────────────────────────────────────────────── */
+  *{box-sizing:border-box;margin:0;padding:0}
   :root{
-    --bg:#0f1419; --panel:#171d26; --panel2:#1e2630; --ink:#e6edf3; --muted:#9aa7b4;
-    --line:#2a3540; --accent:#3ddc97; --accent2:#4aa3ff; --warn:#ffb454; --bad:#ff6b6b;
-    --code:#0b0f14; --radius:12px; font-synthesis:none;
+    --bg:#f8f9fb;--surface:#fff;--surface2:#f1f3f7;
+    --border:#e2e6ed;--accent:#2563eb;--accent2:#1d4ed8;
+    --green:#16a34a;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;
+    --text:#1e293b;--muted:#64748b;--subtle:#94a3b8;
+    --radius:10px;--shadow:0 2px 12px rgba(0,0,0,.08);
+    --font:'Inter',system-ui,sans-serif;
+    --mono:'Fira Mono','Cascadia Code',monospace;
   }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
-  code,kbd{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:13px}
-  .wrap{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
-  nav{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;
-    background:var(--panel);border-right:1px solid var(--line);padding:20px 14px}
-  nav h1{font-size:16px;margin:4px 8px 2px;letter-spacing:.2px}
-  nav .sub{color:var(--muted);font-size:12px;margin:0 8px 14px}
-  nav a{display:block;color:var(--muted);padding:7px 10px;border-radius:8px;font-size:14px}
-  nav a:hover{background:var(--panel2);color:var(--ink);text-decoration:none}
-  nav a.active{background:rgba(61,220,151,.12);color:var(--accent)}
-  main{padding:32px 40px 96px;max-width:920px}
-  section{margin:0 0 40px;scroll-margin-top:18px}
-  h2{font-size:24px;margin:8px 0 6px;border-bottom:1px solid var(--line);padding-bottom:8px}
-  h3{font-size:17px;margin:22px 0 6px;color:#cfe}
-  .badge{display:inline-block;background:rgba(61,220,151,.15);color:var(--accent);
-    border:1px solid rgba(61,220,151,.3);border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600}
-  .lead{color:var(--muted);font-size:16px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin:14px 0}
-  .grid{display:grid;gap:14px} .grid.two{grid-template-columns:1fr 1fr}
-  @media(max-width:780px){.wrap{grid-template-columns:1fr}nav{position:static;height:auto}.grid.two{grid-template-columns:1fr}}
-  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 14px;overflow:auto;position:relative;margin:10px 0}
-  pre code{color:#d6e2ee}
-  .copy{position:absolute;top:8px;right:8px;background:var(--panel2);border:1px solid var(--line);
-    color:var(--muted);border-radius:7px;padding:3px 9px;font-size:11px;cursor:pointer}
-  .copy:hover{color:var(--accent);border-color:var(--accent)}
-  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
-  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
-  th{background:var(--panel2);color:#cfe;font-weight:600}
-  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
-  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0}
-  .tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);
-    padding:8px 14px;border-radius:9px 9px 0 0;cursor:pointer;font-size:14px;font-weight:600}
-  .tab.active{background:var(--panel2);color:var(--accent);border-bottom-color:var(--panel2)}
-  .tabbody{display:none;background:var(--panel2);border:1px solid var(--line);border-radius:0 10px 10px 10px;padding:18px}
-  .tabbody.active{display:block}
-  details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 16px;margin:10px 0}
-  summary{cursor:pointer;font-weight:600;padding:10px 0;color:#cfe}
-  .note{border-left:3px solid var(--accent2);background:rgba(74,163,255,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
-  .warn{border-left:3px solid var(--warn);background:rgba(255,180,84,.08);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
-  /* decision tree */
-  .dt{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;text-align:center}
-  .dt .q{font-size:18px;font-weight:600;margin-bottom:16px}
-  .dt .opts{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:10px;
-    padding:12px 20px;cursor:pointer;font-size:15px;font-weight:600}
-  .btn:hover{border-color:var(--accent);color:var(--accent)}
-  .btn.primary{background:rgba(61,220,151,.14);border-color:rgba(61,220,151,.4);color:var(--accent)}
-  .result{margin-top:18px;text-align:left;display:none}
-  .result.show{display:block;animation:fade .25s ease}
-  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
-  .restart{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;margin-top:10px;text-decoration:underline}
-  .kbd{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px}
-  .foot{color:var(--muted);font-size:13px;margin-top:30px;border-top:1px solid var(--line);padding-top:16px}
+  html{scroll-behavior:smooth;font-size:15px}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);display:flex;min-height:100vh}
+
+  /* ── Sidebar ────────────────────────────────────────────────── */
+  #sidebar{
+    width:250px;min-width:250px;background:var(--surface);border-right:1px solid var(--border);
+    position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:100;display:flex;flex-direction:column;
+  }
+  .sidebar-logo{padding:20px 18px 12px;border-bottom:1px solid var(--border)}
+  .sidebar-logo h1{font-size:1rem;font-weight:700;color:var(--accent);line-height:1.3}
+  .sidebar-logo p{font-size:.75rem;color:var(--muted);margin-top:2px}
+  #sidebar nav{flex:1;padding:10px 0}
+  .nav-group{margin-bottom:4px}
+  .nav-group-label{
+    font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--subtle);padding:8px 18px 4px;
+  }
+  .nav-link{
+    display:block;padding:6px 18px;font-size:.82rem;color:var(--muted);
+    text-decoration:none;border-left:3px solid transparent;transition:all .15s;line-height:1.4;
+  }
+  .nav-link:hover{color:var(--accent);background:var(--surface2);border-left-color:var(--border)}
+  .nav-link.active{color:var(--accent);background:#eff6ff;border-left-color:var(--accent);font-weight:600}
+  .sidebar-footer{padding:12px 18px;border-top:1px solid var(--border);font-size:.72rem;color:var(--subtle)}
+
+  /* ── Main ───────────────────────────────────────────────────── */
+  #main{margin-left:250px;flex:1;padding:0;max-width:calc(100vw - 250px)}
+  .hero{
+    background:linear-gradient(135deg,#1e40af 0%,#2563eb 60%,#3b82f6 100%);
+    color:#fff;padding:52px 56px 44px;
+  }
+  .hero h1{font-size:2rem;font-weight:800;margin-bottom:8px}
+  .hero p{font-size:1.05rem;opacity:.88;max-width:640px;line-height:1.6}
+  .hero-badges{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+  .badge{
+    display:inline-flex;align-items:center;gap:5px;padding:4px 10px;
+    border-radius:99px;font-size:.75rem;font-weight:600;
+  }
+  .badge-blue{background:rgba(255,255,255,.18);color:#fff}
+
+  /* ── Content sections ───────────────────────────────────────── */
+  section{padding:44px 56px;border-bottom:1px solid var(--border)}
+  section:last-child{border-bottom:none}
+  .section-title{
+    font-size:1.35rem;font-weight:700;color:var(--text);margin-bottom:6px;
+    display:flex;align-items:center;gap:10px;
+  }
+  .section-title .icon{font-size:1.2rem}
+  .section-sub{font-size:.9rem;color:var(--muted);margin-bottom:24px;line-height:1.6}
+  h3{font-size:1rem;font-weight:700;margin:24px 0 8px;color:var(--text)}
+  p{line-height:1.7;margin-bottom:10px;font-size:.9rem}
+
+  /* ── Cards ──────────────────────────────────────────────────── */
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:24px}
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px;box-shadow:var(--shadow);
+  }
+  .card-title{font-size:.9rem;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:7px}
+  .card-body{font-size:.82rem;color:var(--muted);line-height:1.6}
+  .card-accent-blue{border-top:3px solid var(--accent)}
+  .card-accent-green{border-top:3px solid var(--green)}
+  .card-accent-amber{border-top:3px solid var(--amber)}
+  .card-accent-red{border-top:3px solid var(--red)}
+  .card-accent-purple{border-top:3px solid var(--purple)}
+
+  /* ── Steps ──────────────────────────────────────────────────── */
+  .steps{list-style:none;padding:0;display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:16px;position:relative;padding-bottom:24px}
+  .step:last-child{padding-bottom:0}
+  .step:not(:last-child)::before{
+    content:'';position:absolute;left:17px;top:36px;bottom:0;
+    width:2px;background:var(--border);
+  }
+  .step-num{
+    width:34px;height:34px;min-width:34px;border-radius:50%;
+    background:var(--accent);color:#fff;font-weight:700;font-size:.85rem;
+    display:flex;align-items:center;justify-content:center;z-index:1;
+  }
+  .step-body{flex:1;padding-top:5px}
+  .step-body strong{font-size:.9rem;font-weight:700;display:block;margin-bottom:4px}
+  .step-body p{font-size:.84rem;color:var(--muted);margin:0;line-height:1.6}
+  .step-body .tip{margin-top:6px}
+
+  /* ── Tips / Callouts ────────────────────────────────────────── */
+  .tip,.warn,.info,.success{
+    display:flex;gap:10px;padding:12px 14px;border-radius:8px;font-size:.84rem;
+    line-height:1.6;margin:12px 0;
+  }
+  .tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
+  .warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+  .info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  .success{background:#f0fdf4;border:1px solid #86efac;color:#166534}
+
+  /* ── Code / Keyboard ────────────────────────────────────────── */
+  code{
+    background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+    padding:1px 6px;font-family:var(--mono);font-size:.82rem;color:var(--accent);
+  }
+  .kbd{
+    display:inline-block;background:var(--surface);border:1px solid var(--border);
+    border-bottom:3px solid var(--border);border-radius:5px;padding:1px 7px;
+    font-family:var(--mono);font-size:.78rem;color:var(--text);margin:0 1px;
+  }
+  pre{
+    background:#1e293b;color:#e2e8f0;border-radius:8px;padding:16px 20px;
+    font-family:var(--mono);font-size:.8rem;overflow-x:auto;margin:12px 0;line-height:1.6;
+  }
+
+  /* ── Tables ─────────────────────────────────────────────────── */
+  .tbl-wrap{overflow-x:auto;margin:14px 0;border-radius:8px;border:1px solid var(--border)}
+  table{width:100%;border-collapse:collapse;background:var(--surface);font-size:.83rem}
+  thead{background:var(--surface2)}
+  th{padding:9px 14px;text-align:left;font-weight:700;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--border)}
+  td{padding:9px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:top;line-height:1.5}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:var(--surface2)}
+
+  /* ── Engine pills ───────────────────────────────────────────── */
+  .engine-pill{
+    display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
+    border-radius:99px;font-size:.78rem;font-weight:700;
+  }
+  .ep-pub{background:#dbeafe;color:#1d4ed8}
+  .ep-cur{background:#d1fae5;color:#065f46}
+  .ep-sen{background:#fef3c7;color:#92400e}
+  .ep-pre{background:#ede9fe;color:#5b21b6}
+
+  /* ── Accordion ──────────────────────────────────────────────── */
+  .accordion{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:14px 0}
+  .acc-item{border-bottom:1px solid var(--border)}
+  .acc-item:last-child{border-bottom:none}
+  .acc-trigger{
+    width:100%;background:none;border:none;padding:14px 18px;
+    display:flex;justify-content:space-between;align-items:center;
+    cursor:pointer;font-size:.88rem;font-weight:600;color:var(--text);text-align:left;
+    transition:background .12s;
+  }
+  .acc-trigger:hover{background:var(--surface2)}
+  .acc-trigger .arr{transition:transform .2s;font-size:.9rem}
+  .acc-trigger.open .arr{transform:rotate(180deg)}
+  .acc-body{display:none;padding:0 18px 16px;font-size:.84rem;color:var(--muted);line-height:1.7}
+  .acc-body.visible{display:block}
+
+  /* ── Tabs ───────────────────────────────────────────────────── */
+  .tabs{margin:18px 0}
+  .tab-list{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:0}
+  .tab-btn{
+    padding:9px 18px;font-size:.84rem;font-weight:600;color:var(--muted);
+    background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;
+    margin-bottom:-2px;transition:all .15s;
+  }
+  .tab-btn:hover{color:var(--accent)}
+  .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .tab-panel{display:none;padding:20px 0 4px}
+  .tab-panel.active{display:block}
+
+  /* ── Keyboard shortcut grid ─────────────────────────────────── */
+  .shortcut-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+  .shortcut-row{
+    display:flex;align-items:center;justify-content:space-between;
+    background:var(--surface);border:1px solid var(--border);border-radius:7px;
+    padding:9px 13px;font-size:.82rem;
+  }
+  .shortcut-desc{color:var(--muted)}
+  .shortcut-keys{display:flex;gap:3px;flex-shrink:0;margin-left:10px}
+
+  /* ── Workflow diagram ───────────────────────────────────────── */
+  .flow{display:flex;align-items:flex-start;gap:0;flex-wrap:wrap;margin:18px 0}
+  .flow-step{
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+    background:var(--surface);border:1px solid var(--border);border-radius:8px;
+    padding:14px 16px;font-size:.8rem;text-align:center;max-width:130px;
+  }
+  .flow-step .flow-icon{font-size:1.5rem}
+  .flow-step .flow-label{font-weight:600;color:var(--text)}
+  .flow-step .flow-sub{color:var(--muted);font-size:.74rem}
+  .flow-arrow{display:flex;align-items:center;padding:0 4px;color:var(--subtle);font-size:1.2rem;margin-top:32px}
+
+  /* ── Mobile ─────────────────────────────────────────────────── */
+  @media(max-width:900px){
+    #sidebar{width:200px;min-width:200px}
+    #main{margin-left:200px;max-width:calc(100vw - 200px)}
+    section{padding:32px 24px}
+    .hero{padding:36px 24px}
+    .shortcut-grid{grid-template-columns:1fr}
+    .card-grid{grid-template-columns:1fr 1fr}
+  }
+  @media(max-width:640px){
+    #sidebar{display:none}
+    #main{margin-left:0;max-width:100vw}
+    section{padding:24px 16px}
+    .hero{padding:28px 16px}
+    .card-grid{grid-template-columns:1fr}
+    .flow{gap:6px}
+    .flow-arrow{padding:0 2px}
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <nav id="nav">
+
+<!-- SIDEBAR -->
+<nav id="sidebar">
+  <div class="sidebar-logo">
     <h1>🧫 Plaque Toolkit</h1>
-    <div class="sub">Interactive guide · <span class="badge">finalized</span></div>
-    <a href="#start">Quick start</a>
-    <a href="#picker">Which tool? (picker)</a>
-    <a href="#tools">The tools</a>
-    <a href="#commands">Commands</a>
-    <a href="#data">Outputs &amp; data</a>
-    <a href="#turbidity">Turbidity explained</a>
-    <a href="#imaging">Imaging protocol</a>
-    <a href="#modes">Watershed &amp; published</a>
-    <a href="#paper">Using it in a paper</a>
-    <a href="#trouble">Troubleshooting</a>
+    <p>Interactive User Guide</p>
+  </div>
+  <nav>
+    <div class="nav-group">
+      <div class="nav-group-label">Getting Started</div>
+      <a href="#start" class="nav-link active">Quick start</a>
+      <a href="#install" class="nav-link">Opening the app</a>
+      <a href="#workflow" class="nav-link">Which tool to use</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Main App</div>
+      <a href="#measure" class="nav-link">Measure tab</a>
+      <a href="#editor" class="nav-link">Editor (canvas)</a>
+      <a href="#batch" class="nav-link">Batch tab</a>
+      <a href="#compare" class="nav-link">Compare turbidity</a>
+      <a href="#validate" class="nav-link">Validate tab</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Engines</div>
+      <a href="#engines" class="nav-link">Choosing an engine</a>
+      <a href="#precise" class="nav-link">Precise (best)</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Export &amp; Output</div>
+      <a href="#exports" class="nav-link">Export menu</a>
+      <a href="#fiji" class="nav-link">Fiji plate crops</a>
+      <a href="#outputs" class="nav-link">Output files</a>
+      <a href="#scalebar" class="nav-link">Scale bar</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Science</div>
+      <a href="#calibration" class="nav-link">Calibration</a>
+      <a href="#turbidity" class="nav-link">Turbidity</a>
+      <a href="#publication" class="nav-link">Publishing results</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Reference</div>
+      <a href="#shortcuts" class="nav-link">Keyboard shortcuts</a>
+      <a href="#troubleshoot" class="nav-link">Troubleshooting</a>
+    </div>
   </nav>
+  <div class="sidebar-footer">Plaque Toolkit v1 &middot; Built on Trofimova &amp; Jaschke 2021</div>
+</nav>
 
-  <main>
-    <section id="start">
-      <h2>Quick start</h2>
-      <p class="lead">Measure bacteriophage plaques — size, turbidity, count, titer — from Petri‑dish
-      photos. iPhone <b>HEIC works directly</b>. Built on the validated Plaque Size Tool.</p>
-      <div class="grid two">
-        <div class="card">
-          <h3>📸 One image → the numbers</h3>
-          <p>Drag your image onto <b>Measure Plaques.bat</b>, press <span class="kbd">N</span>,
-          type <span class="kbd">100</span> (dish mm). Read <code>out\data-green-&lt;image&gt;.csv</code>.</p>
-        </div>
-        <div class="card">
-          <h3>🧪 Compare phages (publishable)</h3>
-          <p>Name images per phage, drag the <b>folder</b> onto <b>Compare Turbidity.bat</b>.
-          Read <code>out_turbidity\per_phage.csv</code> + the figures.</p>
-        </div>
-      </div>
-      <div class="note">For real cross‑phage turbidity you want the <b>turbidity</b> tool with a
-      blank‑agar reference — see <a href="#turbidity">Turbidity explained</a>.</div>
-    </section>
+<!-- MAIN -->
+<main id="main">
 
-    <section id="picker">
-      <h2>Which tool should I use?</h2>
-      <div class="dt" id="dt">
-        <div class="q" id="dtq">What do you want to do?</div>
-        <div class="opts" id="dtopts"></div>
-        <div class="result" id="dtres"></div>
-        <button class="restart" id="dtrestart" style="display:none" onclick="dtStart()">↺ start over</button>
-      </div>
-    </section>
-
-    <section id="tools">
-      <h2>The tools</h2>
-      <div class="tabs">
-        <div class="tab active" data-t="t1">Measure (size)</div>
-        <div class="tab" data-t="t2">Edit (GUI)</div>
-        <div class="tab" data-t="t3">Compare turbidity</div>
-        <div class="tab" data-t="t4">HEIC → TIFF</div>
-      </div>
-      <div class="tabbody active" id="t1">
-        <h3>plaque_size_tool.py — automatic size + count + turbidity index</h3>
-        <p>Fast measurement of one image or a whole folder. Outputs size (px &amp; mm), count,
-        brightness, and a <i>within‑plate</i> turbidity index.</p>
-        <p><b>Launcher:</b> drag image(s) onto <b>Measure Plaques.bat</b> → choose Normal/Small → dish mm.</p>
-        <pre><button class="copy">copy</button><code>conda run -n plaque python "plaque_size_tool.py" -i "IMAGE" -p 100</code></pre>
-      </div>
-      <div class="tabbody" id="t2">
-        <h3>plaque_gui.py — interactive editor</h3>
-        <p>Review the auto‑detection and fix it by hand before saving.</p>
-        <table>
-          <tr><th>Action</th><th>How</th></tr>
-          <tr><td>Add a plaque (circle)</td><td>left‑press at centre, drag to edge, release</td></tr>
-          <tr><td>Add a plaque (auto‑trace)</td><td>Mode → Trace, then left‑click the plaque</td></tr>
-          <tr><td>Remove a plaque</td><td>right‑click it</td></tr>
-          <tr><td>Undo / Save</td><td>buttons, or <span class="kbd">u</span> / <span class="kbd">s</span></td></tr>
-        </table>
-        <p><b>Launcher:</b> drag one image onto <b>Edit Plaques (GUI).bat</b>. Saved CSV gets a
-        <code>SOURCE</code> column (auto / manual / watershed).</p>
-      </div>
-      <div class="tabbody" id="t3">
-        <h3>plaque_turbidity.py — cross‑phage turbidity (the publishable one)</h3>
-        <p>Batch optical‑density turbidity anchored to shared references, plus clarity class,
-        count + PFU/mL titer, per‑phage stats, and figures.</p>
-        <p><b>Launcher:</b> name images per phage, drag the <b>folder</b> onto <b>Compare Turbidity.bat</b>.</p>
-        <pre><button class="copy">copy</button><code>conda run -n plaque python "plaque_turbidity.py" -d "FOLDER" -p 100 --blank "blank.tif" --flat "flat.tif" --group-by-prefix</code></pre>
-      </div>
-      <div class="tabbody" id="t4">
-        <h3>heic_to_tiff.py — convert HEIC to TIFF</h3>
-        <p>Rarely needed (all tools read HEIC directly). Use it only if you want TIFF copies.</p>
-        <pre><button class="copy">copy</button><code>conda run -n plaque python "heic_to_tiff.py" -d "HEIC_FOLDER"</code></pre>
-      </div>
-    </section>
-
-    <section id="commands">
-      <h2>Command reference</h2>
-      <p>Run from the project folder. Prefix with <code>conda run -n plaque python</code>.</p>
-      <h3>Size / GUI flags</h3>
-      <table>
-        <tr><th>Flag</th><th>Meaning</th></tr>
-        <tr><td><code>-i</code> / <code>-d</code></td><td>one image / a folder</td></tr>
-        <tr><td><code>-p 100</code></td><td>dish diameter (mm) → enables mm columns</td></tr>
-        <tr><td><code>-small</code></td><td>plaques &lt; 2.5 mm / low‑res</td></tr>
-        <tr><td><code>--watershed</code></td><td>also split touching/merged plaques</td></tr>
-        <tr><td><code>--published</code></td><td>exact validated output (no corrections)</td></tr>
-      </table>
-      <h3>Turbidity batch flags</h3>
-      <table>
-        <tr><th>Flag</th><th>Meaning</th></tr>
-        <tr><td><code>--blank IMG</code></td><td>blank‑agar = clear reference I₀ → absolute OD</td></tr>
-        <tr><td><code>--flat IMG</code></td><td>flat‑field → corrects uneven light</td></tr>
-        <tr><td><code>--dark IMG</code></td><td>dark frame → removes black‑level</td></tr>
-        <tr><td><code>--core 0.6</code></td><td>measure central 60% (avoid halo)</td></tr>
-        <tr><td><code>--group-by-prefix</code></td><td><code>T4_1</code>,<code>T4_2</code> = replicates of <code>T4</code></td></tr>
-        <tr><td><code>--dilution</code> + <code>--volume-ul</code></td><td>compute PFU/mL titer</td></tr>
-      </table>
-    </section>
-
-    <section id="data">
-      <h2>Outputs &amp; data dictionary</h2>
-      <details open><summary>Size tool / GUI → <code>out\data-green-&lt;name&gt;.csv</code></summary>
-        <table>
-          <tr><th>Column</th><th>Unit</th><th>Meaning</th></tr>
-          <tr><td>AREA_PXL / AREA_MM2</td><td>px² / mm²</td><td>convex‑hull area</td></tr>
-          <tr><td>DIAMETER_PXL / DIAMETER_MM</td><td>px / mm</td><td>area‑equivalent diameter</td></tr>
-          <tr><td>MEAN_GRAY</td><td>0–255</td><td>brightness inside the plaque</td></tr>
-          <tr><td>TURBIDITY_REL</td><td>0–1</td><td><b>within‑plate</b> clarity index (not cross‑plate comparable; batch OD is the comparable one)</td></tr>
-          <tr><td>SOURCE</td><td>–</td><td>auto / manual / watershed (GUI &amp; --watershed)</td></tr>
-        </table>
-      </details>
-      <details><summary>Turbidity batch → <code>out_turbidity\</code></summary>
-        <ul>
-          <li><b>plaques_all.csv</b> — per plaque: OD, TRANSMITTANCE, TURBIDITY, CLARITY, size…</li>
-          <li><b>per_phage.csv</b> — comparison table; use the <code>*_PLATE_MEAN/_SD</code> columns for stats</li>
-          <li><b>qc.csv</b> — DISH_FOUND, ILLUM_CV, POLARITY_OK, FRAC_SATURATED, COUNT, PFU_PER_ML…</li>
-          <li><b>compare_*.png / hist_*.png</b> — box plots &amp; histograms</li>
-          <li><b>overlay_*.png</b> — QC images · <b>run_metadata.json</b> — provenance</li>
-        </ul>
-      </details>
-    </section>
-
-    <section id="turbidity">
-      <h2>Turbidity explained <span class="badge">read this</span></h2>
-      <p>There are <b>two</b> turbidity numbers — use the right one:</p>
-      <div class="grid two">
-        <div class="card"><h3>Within‑plate index</h3>
-          <p>From the <b>size tool / GUI</b>. 0 = clearest plaque on that plate, 1 = the lawn.
-          Good for ranking on <i>one</i> plate. <b class="pill" style="border-color:var(--warn);color:var(--warn)">not cross‑plate</b></p></div>
-        <div class="card"><h3>Optical density (OD)</h3>
-          <p>From the <b>turbidity batch tool</b>. <code>OD = −log₁₀(I/I₀)</code> anchored to clear
-          agar &amp; lawn. <b class="pill" style="border-color:var(--accent);color:var(--accent)">comparable across phages</b> — the publishable one.</p></div>
-      </div>
-      <div class="note">For phage comparisons, run the turbidity tool with <code>--blank</code>.
-      Without it, only a relative <code>TRANSMITTANCE</code> (qualitative) is reported.</div>
-    </section>
-
-    <section id="imaging">
-      <h2>Imaging protocol (for good turbidity)</h2>
-      <p>Transmitted light (light box). Fixed manual exposure / white balance / focus; HDR off;
-      prefer iPhone <b>ProRAW</b> over HEIC. Same dish position; lids off. In one session capture:</p>
-      <ol>
-        <li><b>Flat‑field</b> (bare light box) → <code>--flat</code></li>
-        <li><b>Blank‑agar</b> plate (no bacteria) → <code>--blank</code> (the key reference)</li>
-        <li>optional <b>dark frame</b> (lens covered) → <code>--dark</code></li>
-        <li>all <b>phage plates</b> — filename = phage (<code>T4_1</code>,<code>T4_2</code> for replicates)</li>
-        <li>re‑image one plate twice → reproducibility check</li>
-      </ol>
-      <div class="warn">Check <code>qc.csv</code> each run: <b>POLARITY_OK</b> = True, <b>FRAC_SATURATED</b> ≈ 0, low <b>ILLUM_CV</b>.</div>
-    </section>
-
-    <section id="modes">
-      <h2>Watershed &amp; published modes</h2>
-      <h3><code>--watershed</code> — split touching plaques</h3>
-      <p>Opt‑in. Splits fused plaques the detector drops, recovers real‑sized ones (cyan,
-      <code>SOURCE=watershed</code>), no over‑segmentation. Off by default; never changes the
-      validated result unless asked. (Classical equivalent of the deep‑learning PlaqSeg app.)</p>
-      <h3><code>--published</code> — exact validated output</h3>
-      <p>Reproduces the published Plaque Size Tool exactly (the default applies two tiny precision
-      corrections — 0 count change, ~0.01 mm — and the corrected value is more precise). Use
-      <code>--published</code> to cite the validated tool with no caveat.</p>
-    </section>
-
-    <section id="paper">
-      <h2>Using it in a paper</h2>
-      <ul>
-        <li>Report <b>OD</b> as the primary turbidity metric; TURBIDITY (0–1) secondary; CLARITY categorical.</li>
-        <li><b>Stats:</b> the <b>plate is the replicate, not the plaque</b> — use the
-        <code>*_PLATE_MEAN/_SD</code> columns, ≥3 plates/phage, non‑parametric tests or a mixed model.</li>
-        <li>Cite the validated tool (Trofimova &amp; Jaschke 2021); describe turbidity as transmitted‑light
-        relative OD vs a cell‑free agar reference. Keep <code>run_metadata.json</code> for provenance.</li>
-      </ul>
-    </section>
-
-    <section id="trouble">
-      <h2>Troubleshooting</h2>
-      <table>
-        <tr><th>Symptom</th><th>Fix</th></tr>
-        <tr><td>mm = 0 / "no dish detected"</td><td>get the whole dish rim in frame, or report pixels.</td></tr>
-        <tr><td>0 plaques found</td><td>try <code>-small</code>; check focus/exposure; view the annotated image.</td></tr>
-        <tr><td>turbidity looks inverted / POLARITY_OK=False</td><td>not true transmitted light (clear should be brighter than lawn).</td></tr>
-        <tr><td>OD blank in batch output</td><td>add a <code>--blank</code> reference.</td></tr>
-        <tr><td>touching plaques missed</td><td>add <code>--watershed</code>.</td></tr>
-        <tr><td>numpy error after upgrade</td><td><code>conda run -n plaque pip install "numpy&lt;2"</code></td></tr>
-      </table>
-      <p class="foot">Full written reference: <b>USER_GUIDE.md</b>. Built on the validated Plaque
-      Size Tool (Trofimova &amp; Jaschke, Virology 2021).</p>
-    </section>
-  </main>
+<!-- HERO -->
+<div class="hero">
+  <h1>🧫 Plaque Toolkit &mdash; User Guide</h1>
+  <p>Measure bacteriophage plaque size, count, and turbidity from Petri-dish photos. Interactive editor, batch processing, and publication-ready exports &mdash; all in one desktop app.</p>
+  <div class="hero-badges">
+    <span class="badge badge-blue">iPhone HEIC &#10003;</span>
+    <span class="badge badge-blue">Batch folders &#10003;</span>
+    <span class="badge badge-blue">Drag &amp; drop &#10003;</span>
+    <span class="badge badge-blue">No coding needed &#10003;</span>
+  </div>
 </div>
 
+<!-- QUICK START -->
+<section id="start">
+  <div class="section-title"><span class="icon">🚀</span> Quick Start &mdash; 60 seconds</div>
+  <div class="section-sub">The fastest path from photo to measurement.</div>
+
+  <ol class="steps">
+    <li class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Launch the app</strong>
+        <p>Double-click <code>! Open Plaque Toolkit (BEST).bat</code> in the root folder, or open the installed "Plaque Toolkit (full)" from the Start menu. The app opens with a clean window.</p>
+        <div class="tip">&#128161; The all-in-one installer at <code>Output\PlaqueToolkitFullSetup.exe</code> includes the Precise engine with no conda needed.</div>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Open your plate image</strong>
+        <p>On the <strong>Measure</strong> tab, click <strong>Open image&hellip;</strong> or drag-and-drop a TIFF, JPEG, PNG, or iPhone HEIC file onto the window. The dish diameter defaults to <code>100 mm</code> &mdash; adjust if your dish is different.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Pick an engine &amp; detect</strong>
+        <p>The engine dropdown defaults to <span class="engine-pill ep-pre">Precise</span> if available, otherwise <span class="engine-pill ep-cur">Current</span>. Hit <strong>Detect</strong> &mdash; plaques appear as colored circles.</p>
+        <div class="info">&#8505;&#65039; Detection takes 5&ndash;30 s depending on image size and engine. The window stays responsive.</div>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Review &amp; correct in the editor</strong>
+        <p>The canvas editor opens. Click <strong>Erase</strong> to remove false positives, <strong>Add</strong> to mark missed plaques, or rubber-band with <strong>Detect area</strong> to re-scan a region. Zoom with the scroll wheel.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <strong>Export your data</strong>
+        <p>Click the bright green <strong>&#11015; Export &#9660;</strong> button to download a CSV, annotated figure, or side-by-side comparison. Results are saved to an <code>out\</code> folder next to your image.</p>
+        <div class="success">&#9989; Done! The CSV contains per-plaque area, diameter (mm &amp; px), brightness, and source.</div>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<!-- OPENING THE APP -->
+<section id="install">
+  <div class="section-title"><span class="icon">💻</span> Opening the App</div>
+  <div class="section-sub">Three ways to launch the Plaque Toolkit on your Windows machine.</div>
+
+  <div class="card-grid">
+    <div class="card card-accent-green">
+      <div class="card-title">&#127942; Best &mdash; Installed app</div>
+      <div class="card-body">
+        Run <strong>Plaque Toolkit (full)</strong> from the Start menu, or double-click<br>
+        <code>! Open Plaque Toolkit (BEST).bat</code><br><br>
+        This is the all-in-one 302 MB install. Precise engine is fully built in &mdash; no conda, no setup.
+      </div>
+    </div>
+    <div class="card card-accent-blue">
+      <div class="card-title">&#128230; Install from scratch</div>
+      <div class="card-body">
+        Run <code>Output\PlaqueToolkitFullSetup.exe</code> on any Windows machine.<br><br>
+        After install, the Start menu shortcut and <code>! Open Plaque Toolkit (BEST).bat</code> both work.
+      </div>
+    </div>
+    <div class="card card-accent-amber">
+      <div class="card-title">&#128013; Run from source</div>
+      <div class="card-body">
+        Requires the <code>plaqueapp</code> or <code>plaque</code> conda env.<br><br>
+        <code>conda run -n plaqueapp python plaque_app.py</code><br><br>
+        Or double-click <code>Plaque Toolkit.bat</code> from the root folder.
+      </div>
+    </div>
+    <div class="card card-accent-purple">
+      <div class="card-title">&#128203; Which version to use?</div>
+      <div class="card-body">
+        Read <code>! START HERE - best app.txt</code> in the root folder for a one-line answer. <strong>TL;DR:</strong> use <em>Plaque Toolkit (full)</em> &mdash; the installed all-in-one app.
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">&#9888;&#65039; If you see "Precise not available" in the engine dropdown, you are running the light installer (no PyTorch). Use the <strong>Full</strong> installer instead.</div>
+</section>
+
+<!-- WHICH TOOL -->
+<section id="workflow">
+  <div class="section-title"><span class="icon">🗺️</span> Which Tool Should I Use?</div>
+  <div class="section-sub">All workflows live inside the single app window &mdash; use the tabs at the top.</div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Tab / Tool</th><th>Use it when&hellip;</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Measure tab</strong></td><td>Measuring one plate at a time, with optional hand-correction</td><td>CSV + annotated image + turbidity</td></tr>
+        <tr><td><strong>Batch tab</strong></td><td>Processing a whole folder of plate images automatically</td><td><code>per_plate.csv</code> + <code>all_plaques.csv</code> + annotated images</td></tr>
+        <tr><td><strong>Compare turbidity tab</strong></td><td>Comparing turbidity across multiple phage strains / plates</td><td><code>per_phage.csv</code> + OD + box/histogram figures</td></tr>
+        <tr><td><strong>Validate tab</strong></td><td>Scoring engine performance against your own corrected ground truth</td><td>Precision / Recall / F1 + size agreement per engine</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <span class="flow-icon">📷</span>
+      <span class="flow-label">Your plate photo</span>
+      <span class="flow-sub">HEIC, JPEG, TIFF, PNG</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">🔍</span>
+      <span class="flow-label">Auto-detect</span>
+      <span class="flow-sub">Measure tab or Batch</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">✏️</span>
+      <span class="flow-label">Hand-correct</span>
+      <span class="flow-sub">Editor canvas</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">💾</span>
+      <span class="flow-label">Export</span>
+      <span class="flow-sub">CSV, figure, labels</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">📊</span>
+      <span class="flow-label">Validate / Compare</span>
+      <span class="flow-sub">Optional deep tabs</span>
+    </div>
+  </div>
+</section>
+
+<!-- MEASURE TAB -->
+<section id="measure">
+  <div class="section-title"><span class="icon">📐</span> Measure Tab</div>
+  <div class="section-sub">The main detection + measurement workflow for single plate images.</div>
+
+  <h3>Controls at the top</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Control</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Dish diameter (mm)</strong></td><td>Physical diameter of your Petri dish. Default 100 mm. Set to 0 for pixel-only output. Used to calculate mm/px from the detected dish rim.</td></tr>
+        <tr><td><strong>Engine dropdown</strong></td><td>Which detection algorithm to use (see <a href="#engines">Engines section</a>). Defaults to Precise if available.</td></tr>
+        <tr><td><strong>Split touching plaques</strong></td><td>Watershed segmentation to separate overlapping/touching plaques. Useful on dense plates. Ignored in Published mode.</td></tr>
+        <tr><td><strong>Open image&hellip;</strong></td><td>Pick an image file. Or drag-and-drop any image directly onto the tab.</td></tr>
+        <tr><td><strong>Re-detect</strong></td><td>Run detection again (with current settings) on the same image.</td></tr>
+        <tr><td><strong>Save results</strong></td><td>Write the CSV and annotated image to <code>out\</code> next to the source image.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>After detection</h3>
+  <p>The window splits into two panels: the <strong>image editor</strong> (canvas) on the left and a <strong>results table</strong> on the right showing one row per detected plaque. A summary card at the top shows plaque count, median diameter, calibration details, and any warnings.</p>
+
+  <div class="tip">&#128161; If the dish is tilted (axis-ratio &gt; 1.03), a yellow warning appears. Reshoot the plate straight-on to fix the mm calibration.</div>
+  <div class="info">&#8505;&#65039; The table is sortable &mdash; click any column header to sort by that field.</div>
+</section>
+
+<!-- EDITOR -->
+<section id="editor">
+  <div class="section-title"><span class="icon">✏️</span> Editor Canvas</div>
+  <div class="section-sub">Native Qt editor for reviewing and hand-correcting detections. Reliable mouse handling, smooth zoom, full keyboard shortcuts.</div>
+
+  <div class="tabs">
+    <div class="tab-list">
+      <button class="tab-btn active" onclick="switchTab(this,'t-tools')">Tools</button>
+      <button class="tab-btn" onclick="switchTab(this,'t-select')">Select &amp; deselect</button>
+      <button class="tab-btn" onclick="switchTab(this,'t-nav')">Zoom &amp; pan</button>
+    </div>
+
+    <div id="t-tools" class="tab-panel active">
+      <div class="card-grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+        <div class="card card-accent-blue">
+          <div class="card-title">🖱️ Select (default)</div>
+          <div class="card-body">Click a plaque to toggle selection (blue highlight). Drag pans the view. The active tool button turns <strong>blue</strong> to show it is selected.</div>
+        </div>
+        <div class="card card-accent-green">
+          <div class="card-title">➕ Add</div>
+          <div class="card-body"><strong>Click</strong> a missed plaque to auto-trace it. <strong>Drag</strong> to draw a manual circle. The program auto-registers the plaque center and radius.</div>
+        </div>
+        <div class="card card-accent-purple">
+          <div class="card-title">🔎 Detect area</div>
+          <div class="card-body">Rubber-band a box over a region. The engine re-scans just that area and adds only genuinely new plaques &mdash; useful for dense corners the main pass missed.</div>
+        </div>
+        <div class="card card-accent-red">
+          <div class="card-title">🧹 Erase</div>
+          <div class="card-body"><strong>Click</strong> a detection to remove it. You can also <strong>right-click</strong> to erase in any tool mode.</div>
+        </div>
+      </div>
+      <div class="warn">&#9888;&#65039; The active tool button glows <strong>blue</strong>. If a click is not doing what you expect, check which tool is selected.</div>
+    </div>
+
+    <div id="t-select" class="tab-panel">
+      <h3>Selecting plaques for bulk operations</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Action</th><th>How</th></tr></thead>
+        <tbody>
+          <tr><td>Select one plaque</td><td>Click it in <strong>Select</strong> mode</td></tr>
+          <tr><td>Box-select a region</td><td><kbd class="kbd">Shift</kbd> + drag a rectangle</td></tr>
+          <tr><td>Box-deselect a region</td><td><kbd class="kbd">Ctrl</kbd> + drag a rectangle</td></tr>
+          <tr><td>Select all</td><td>Click <strong>Select all</strong> button or <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">A</kbd></td></tr>
+          <tr><td>Deselect all</td><td>Click <strong>Deselect all</strong> button</td></tr>
+          <tr><td>Delete selected</td><td>Click <strong>Remove selected</strong> button or <kbd class="kbd">Delete</kbd></td></tr>
+          <tr><td>Undo last action</td><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Z</kbd> or <strong>Undo</strong> button</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tip">&#128161; Use <strong>Select all &rarr; Remove selected</strong> to clear everything and start fresh if the automatic detection was way off.</div>
+    </div>
+
+    <div id="t-nav" class="tab-panel">
+      <h3>Navigating a high-res plate image</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Action</th><th>How</th></tr></thead>
+        <tbody>
+          <tr><td>Zoom in / out</td><td>Scroll wheel, or <kbd class="kbd">+</kbd> / <kbd class="kbd">-</kbd> keys</td></tr>
+          <tr><td>Pan (move around)</td><td>Middle-click drag, or drag in <strong>Select</strong> mode with no plaque under cursor</td></tr>
+          <tr><td>Fit to window</td><td><kbd class="kbd">F</kbd> key or the <strong>Fit</strong> button</td></tr>
+          <tr><td>Zoom limit</td><td>Clamped at 0.8&times; to 40&times; the fit-scale so you cannot zoom completely lost</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <h3>Plaque colors in the editor</h3>
+  <div class="card-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-top:8px">
+    <div class="card" style="border-left:4px solid #22c55e">
+      <div class="card-title" style="color:#15803d">Green</div>
+      <div class="card-body">Detected by PlaqSeg (auto, high confidence)</div>
+    </div>
+    <div class="card" style="border-left:4px solid #f97316">
+      <div class="card-title" style="color:#c2410c">Orange</div>
+      <div class="card-body">Detected by PST / blob recovery (region-based)</div>
+    </div>
+    <div class="card" style="border-left:4px solid #06b6d4">
+      <div class="card-title" style="color:#0891b2">Cyan</div>
+      <div class="card-body">Recovered by watershed (touching/merged plaques)</div>
+    </div>
+    <div class="card" style="border-left:4px solid #f43f5e">
+      <div class="card-title" style="color:#be123c">Red outline</div>
+      <div class="card-body">Selected plaque (ready to delete or inspect)</div>
+    </div>
+  </div>
+</section>
+
+<!-- BATCH -->
+<section id="batch">
+  <div class="section-title"><span class="icon">📦</span> Batch Tab</div>
+  <div class="section-sub">Process an entire folder of plate images in one click. No editing &mdash; fully automatic, with per-plate and pooled output.</div>
+
+  <ol class="steps">
+    <li class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Click the Batch tab</strong>
+        <p>It is the second tab in the main window.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Choose your folder</strong>
+        <p>Click <strong>Browse&hellip;</strong> and select the folder containing your plate images. Supported formats: TIFF, JPEG, PNG, HEIC.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Set options</strong>
+        <p>Set the dish diameter (default 100 mm), engine, and whether to use small-plaque mode. A progress bar shows image-by-image status during the run.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Click Run Batch</strong>
+        <p>The app processes every image in the folder. If one image fails, it logs the error and continues with the rest.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <strong>Review outputs</strong>
+        <p>A summary table appears. Click <strong>Open output folder</strong> to find <code>per_plate.csv</code>, <code>all_plaques.csv</code>, and annotated images for each plate.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h3>Batch output files</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>File</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>per_plate.csv</code></td><td>One row per plate: plaque count, median diameter, mean diameter, calibration (mm/px), tilt flag, errors.</td></tr>
+      <tr><td><code>all_plaques.csv</code></td><td>Every individual plaque from every plate. Same columns as the single-image CSV, plus a <code>PLATE</code> column.</td></tr>
+      <tr><td><code>out_<em>image</em>.jpeg</code></td><td>Annotated overlay for each input image.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="tip">&#128161; Batch does not open the editor. If you need to hand-correct, use the Measure tab for individual plates. Batch is for automated pipelines where you trust the engine.</div>
+</section>
+
+<!-- COMPARE -->
+<section id="compare">
+  <div class="section-title"><span class="icon">📊</span> Compare Turbidity Tab</div>
+  <div class="section-sub">Cross-phage turbidity comparison using transmitted-light optical density. This is the publishable turbidity measurement.</div>
+
+  <div class="info">&#8505;&#65039; <strong>Turbidity vs size:</strong> The Measure tab gives a relative turbidity index per plate (not cross-plate comparable). This tab gives absolute OD values anchored to a shared clear reference &mdash; the cross-phage measurement you can actually compare and publish.</div>
+
+  <h3>Setup your image folder</h3>
+  <p>Name each plate image after its phage: <code>T4.heic</code>, <code>T7.tif</code>, etc. For replicates: <code>T4_1.heic</code>, <code>T4_2.heic</code> &mdash; then tick <strong>"Group by prefix"</strong> in the app.</p>
+
+  <h3>Optional reference images (recommended)</h3>
+  <div class="card-grid">
+    <div class="card card-accent-blue">
+      <div class="card-title">Blank agar (I&#8320;)</div>
+      <div class="card-body">A plate with clear agar and no bacteria &mdash; the "100% transmittance" reference. <strong>Required for absolute OD.</strong> Without it, you get relative transmittance only.</div>
+    </div>
+    <div class="card card-accent-amber">
+      <div class="card-title">Flat field</div>
+      <div class="card-body">Bare light box with no plate &mdash; corrects uneven illumination. Reduces artifacts from gradient lighting (iPhone photos especially benefit).</div>
+    </div>
+    <div class="card card-accent-red">
+      <div class="card-title">Dark frame</div>
+      <div class="card-body">Lens covered, same exposure &mdash; removes the camera black-level offset. Optional but helps absolute OD accuracy.</div>
+    </div>
+  </div>
+
+  <h3>Output files</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>File</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>per_phage.csv</code></td><td>The comparison table &mdash; per phage: N plates, N plaques, mean/SD of OD, turbidity, diameter. <strong>Use PLATE_MEAN columns for statistics.</strong></td></tr>
+      <tr><td><code>plaques_all.csv</code></td><td>Every plaque with PHAGE, TRANSMITTANCE, OD, TURBIDITY, CLARITY columns.</td></tr>
+      <tr><td><code>qc.csv</code></td><td>Per-plate QC: illumination CV, POLARITY_OK, fraction saturated pixels. Check this first.</td></tr>
+      <tr><td><code>compare_*.png</code></td><td>Box plots of diameter and turbidity per phage (publication figures).</td></tr>
+      <tr><td><code>run_metadata.json</code></td><td>Provenance: tool version, all settings, image hashes &mdash; keep this for Methods.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="warn">&#9888;&#65039; Check <code>qc.csv</code> &mdash; if <code>POLARITY_OK=False</code>, your imaging is not transmitted-light (clear plaques should be <em>brighter</em> than the lawn). If <code>ILLUM_CV</code> is high, add a flat-field image.</div>
+</section>
+
+<!-- VALIDATE -->
+<section id="validate">
+  <div class="section-title"><span class="icon">✅</span> Validate Tab</div>
+  <div class="section-sub">Score engine performance against your own hand-corrected ground truth. This is how you generate your own validation data before publishing.</div>
+
+  <h3>The validation workflow</h3>
+  <ol class="steps">
+    <li class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Correct some plates by hand</strong>
+        <p>Use the Measure tab editor to review detections. Remove false positives, add missed plaques, then export: <strong>Export &#9660; &rarr; Ground-truth labels</strong>. This saves a <code>labels_<em>name</em>.json</code> file with your verified plaque set.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Open the Validate tab</strong>
+        <p>Browse to the folder containing your <code>labels_*.json</code> files. Tick which engines to compare (Current, Precise, etc.).</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Click Run validation</strong>
+        <p>Each engine is re-run on the original images and scored against your ground truth labels.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Read the results</strong>
+        <p>Two tables appear: <strong>per-mode</strong> (pooled scores across all plates) and <strong>per-plate</strong> (individual plate breakdown).</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Metric</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Precision</td><td>Fraction of detections that are real plaques (1.0 = no false positives)</td></tr>
+            <tr><td>Recall</td><td>Fraction of real plaques that were detected (1.0 = none missed)</td></tr>
+            <tr><td>F1</td><td>Harmonic mean of precision and recall &mdash; the overall score to optimize</td></tr>
+            <tr><td>Size MAE (mm)</td><td>Mean absolute error of diameter vs your labels</td></tr>
+            <tr><td>Size bias (mm)</td><td>Systematic over- or under-sizing</td></tr>
+            <tr><td>Size Pearson r</td><td>Correlation between engine diameters and your labels (1.0 = perfect)</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </li>
+  </ol>
+
+  <div class="tip">&#128161; The more plates you hand-label, the more reliable the validation. Aim for at least 3&ndash;5 plates per phage, covering sparse and dense plates.</div>
+  <div class="info">&#8505;&#65039; Click <strong>"Validation guide"</strong> on the Validate tab to open the full publication-grade protocol (docs/VALIDATION_GUIDE.md).</div>
+</section>
+
+<!-- ENGINES -->
+<section id="engines">
+  <div class="section-title"><span class="icon">⚙️</span> Choosing an Engine</div>
+  <div class="section-sub">Four detection modes &mdash; same measurement math, different detectors and validation status.</div>
+
+  <div class="card-grid">
+    <div class="card card-accent-blue">
+      <div class="card-title"><span class="engine-pill ep-pub">Published</span> &nbsp;Peer-reviewed</div>
+      <div class="card-body">
+        The exact Trofimova &amp; Jaschke (2021) algorithm, unchanged. <strong>The only citable mode for publications.</strong> Automatically disables watershed and sensitive settings. Reproduces the literature within ~0.04 mm.<br><br>
+        <strong>Use for:</strong> any numbers that go into a paper.
+      </div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title"><span class="engine-pill ep-cur">Current</span> &nbsp;Default</div>
+      <div class="card-body">
+        Same algorithm with bug-fixes: non-truncated numeric values and a corrected dish calibration (uses the roundest large contour, not just the biggest, to prevent the dark surround from hijacking the mm scale).<br><br>
+        <strong>Use for:</strong> routine day-to-day measurement.
+      </div>
+    </div>
+    <div class="card card-accent-amber">
+      <div class="card-title"><span class="engine-pill ep-sen">Sensitive</span> &nbsp;More recall</div>
+      <div class="card-body">
+        Lowers the size gates to catch sub-0.4 mm plaques. Finds more plaques &mdash; but also more false positives (bubbles, glare, lawn texture). Not independently validated.<br><br>
+        <strong>Use for:</strong> exploratory counts, tiny-plaque phenotypes. Always verify by eye.
+      </div>
+    </div>
+    <div class="card card-accent-purple">
+      <div class="card-title"><span class="engine-pill ep-pre">Precise</span> &nbsp;Best detector</div>
+      <div class="card-body">
+        Fuses PST + PlaqSeg YOLO segmentation. Best accuracy on dense plates where plaques touch or the lawn is textured. Slower (~15&ndash;60 s). Not independently validated.<br><br>
+        <strong>Use for:</strong> dense, difficult plates. Also the app default when PyTorch is available.
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">&#9888;&#65039; <strong>Only <span class="engine-pill ep-pub">Published</span> is citable in a paper.</strong> Current, Sensitive, and Precise are in-house extensions that must be validated on your own plates before publishing (use the Validate tab).</div>
+
+  <h3>Mode interactions</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Setting</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Published mode</td><td>Forces watershed OFF and sensitive OFF. A citable run can never be altered by extensions.</td></tr>
+      <tr><td>Split touching plaques (watershed)</td><td>Works with Current and Sensitive. Splits merged plaques using distance-transform watershed. Apply uniformly across all compared groups.</td></tr>
+      <tr><td>Precise classifier gate</td><td>ResNet-18 plaque-vs-texture gate, ON by default in the app. Improves precision on textured plates. Not human-validated &mdash; treat as a quality filter, not a citable step.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- PRECISE -->
+<section id="precise">
+  <div class="section-title"><span class="icon">🎯</span> Precise Engine &mdash; How It Works</div>
+  <div class="section-sub">The most powerful detector in the toolkit. A 9-stage pipeline fusing the validated PST detector with a trained YOLO segmentation model.</div>
+
+  <ol class="steps">
+    <li class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>PST front &mdash; dish geometry</strong>
+        <p>Runs the validated PST detector on the original image to find the dish boundary, compute mm/px calibration, and get PST-sensitive plaque centers as recall candidates.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Artifact masks</strong>
+        <p>Three masks are built from the dish geometry: (1) lawn ROI = inner 80% of dish radius, (2) blue label mask (colored sticker), (3) hard dish boundary. Any detection on the rim, label, or outside the dish is dropped.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>PlaqSeg YOLO primary detection</strong>
+        <p>A YOLO segmentation model (tiled at 1280 px) detects plaques on the original image. This is the <em>primary</em> detector. Green circles = PlaqSeg detections.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Density switch</strong>
+        <p>If PlaqSeg found a dense plate (PlaqSeg count &ge; 1.5&times; PST-sensitive count), accept PlaqSeg as final and skip the recall passes &mdash; they only add noise on dense plates.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <strong>Gated PST recall (sparse plates)</strong>
+        <p>For sparse plates, PST-sensitive centers are accepted if: inside lawn ROI, not already near a PlaqSeg hit, and center-vs-ring contrast &gt; 0.030. Orange circles = PST recall additions.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">6&ndash;7</div>
+      <div class="step-body">
+        <strong>Optional blob recovery + classifier gate</strong>
+        <p>Blob recovery (off by default) catches any remaining faint spots. The ResNet-18 classifier (on by default in the app) re-scores every candidate and drops texture false positives.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-num">8</div>
+      <div class="step-body">
+        <strong>Union + dedup + output</strong>
+        <p>All accepted detections are merged, deduplicated, sized, and written to CSV + colored overlay + JSON summary. If the two primary detectors disagree by &gt;50%, an "Uncertainty" flag appears in the app.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="info">&#8505;&#65039; Precise runs entirely in-process in the Full installer (no conda needed). In the source/light versions it calls a second <code>plaqseg</code> conda env.</div>
+</section>
+
+<!-- EXPORTS -->
+<section id="exports">
+  <div class="section-title"><span class="icon">⬇️</span> Export Menu</div>
+  <div class="section-sub">The bright green <strong>&#11015; Export &#9660;</strong> button in the editor opens a menu with six options.</div>
+
+  <div class="card-grid">
+    <div class="card card-accent-green">
+      <div class="card-title">Data table (CSV)</div>
+      <div class="card-body">Per-plaque measurements: INDEX, AREA_PXL, AREA_MM2, DIAMETER_PXL, DIAMETER_MM, MEAN_GRAY, TURBIDITY_REL, SOURCE. One row per plaque.</div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title">Annotated figure</div>
+      <div class="card-body">The plate image with outlines, numbers, and the scale bar exactly as shown in the editor. PNG format.</div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title">Input vs annotated</div>
+      <div class="card-body">Side-by-side comparison image: original on the left, annotated on the right, with a dark banner labeling each. Great for QC and presentations.</div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title">Original input</div>
+      <div class="card-body">The decoded source image. HEIC files are exported as PNG. Useful for archiving the exact image used.</div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title">Cropped plate for Fiji</div>
+      <div class="card-body">The dish region as a <strong>TIFF with the mm scale baked in</strong>, so Fiji/ImageJ opens it already calibrated. See the <a href="#fiji">Fiji plate crops</a> section. Plus a <code>.fiji.txt</code> sidecar.</div>
+    </div>
+    <div class="card card-accent-green">
+      <div class="card-title">Ground-truth labels</div>
+      <div class="card-body">JSON + CSV of your corrected plaque set with per-plaque x, y, radius, area, diameter, source, and image metadata. Use these to score engines in the Validate tab or retrain the classifier.</div>
+    </div>
+  </div>
+
+  <div class="tip">&#128161; Ground-truth labels are the key to improving the tool on your specific plates. Export them after curating each plate, then run the Validate tab to get precision/recall scores for each engine.</div>
+</section>
+
+<!-- FIJI -->
+<section id="fiji">
+  <div class="section-title"><span class="icon">🔬</span> Cropped Plates for Fiji / ImageJ (scale bars)</div>
+  <div class="section-sub">Export a cropped plate that carries its mm scale, so you can crop individual plaques in Fiji and add consistent scale bars &mdash; without setting the scale by hand each time.</div>
+
+  <div class="info">&#8505;&#65039; <strong>The idea:</strong> show the whole plate, then in Fiji crop a plaque and zoom in with a correct mm scale bar next to it. Because the exported TIFF is pre-calibrated, every plaque you crop from it inherits the right scale automatically.</div>
+
+  <h3>How it works</h3>
+  <p>From the editor's <strong>&#11015; Export &#9660; &rarr; Cropped plate for Fiji (calibrated TIFF)</strong>, the app crops the dish region and saves a TIFF that embeds the spatial calibration in <strong>millimetres</strong>, in the exact tag layout ImageJ/Fiji reads automatically (an <code>ImageJ&hellip;unit=mm</code> description plus <code>XResolution</code> = pixels-per-mm). A sidecar <code>&lt;name&gt;.fiji.txt</code> records the exact numbers and the Fiji steps.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <span class="flow-icon">📐</span>
+      <span class="flow-label">Detect plate here</span>
+      <span class="flow-sub">gets mm/px from the dish</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">&#11015;</span>
+      <span class="flow-label">Export plate TIFF</span>
+      <span class="flow-sub">mm scale baked in</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">✂️</span>
+      <span class="flow-label">Crop a plaque in Fiji</span>
+      <span class="flow-sub">scale is preserved</span>
+    </div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-step">
+      <span class="flow-icon">📏</span>
+      <span class="flow-label">Add scale bar</span>
+      <span class="flow-sub">Analyze &rsaquo; Tools</span>
+    </div>
+  </div>
+
+  <h3>In Fiji / ImageJ</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Step</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr><td>Open the TIFF</td><td>File &rarr; Open. <strong>Image &rarr; Properties&hellip;</strong> already shows Pixel width = your mm/px (e.g. 0.0363 mm). No Set Scale needed.</td></tr>
+      <tr><td>Crop a plaque</td><td>Draw a rectangle/oval around a plaque &rarr; <strong>Image &rarr; Crop</strong> (or Image &rarr; Duplicate). The mm calibration is carried over to the crop.</td></tr>
+      <tr><td>Add a scale bar</td><td><strong>Analyze &rarr; Tools &rarr; Scale Bar&hellip;</strong> &rarr; set the length in mm. It draws a correct bar because the image is calibrated.</td></tr>
+      <tr><td>If scale is not auto-read</td><td><strong>Analyze &rarr; Set Scale&hellip;</strong> &rarr; Distance in pixels = the px/mm from the sidecar, Known distance = 1, Unit = mm.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Doing it for many photos</h3>
+  <p>On the <strong>Batch tab</strong>, tick <strong>"Also export Fiji-calibrated plate crops"</strong>. Every image in the folder then gets its own calibrated <code>&lt;name&gt;_plate.tif</code> + <code>.fiji.txt</code> in its output sub-folder &mdash; the same workflow applied consistently across the whole set.</p>
+
+  <div class="warn">&#9888;&#65039; <strong>One scale per photo.</strong> Each plate's mm/px depends on how big the dish appeared in that specific photo, so the calibration is image-specific. In Fiji's Set Scale, only tick <strong>"Global"</strong> for crops of the <em>same</em> plate &mdash; never reuse one scale across different photos. (Each pre-calibrated TIFF already carries its own correct value, so you normally do not need Set Scale at all.)</div>
+  <div class="tip">&#128161; Keep the crops clean: this TIFF has <em>no</em> overlays burned in &mdash; just the raw, calibrated pixels &mdash; so your Fiji figures look exactly how you arrange them. For a labelled whole-plate panel with the app's own scale bar, use <strong>Export &rarr; Annotated figure</strong> instead.</div>
+</section>
+
+<!-- OUTPUTS -->
+<section id="outputs">
+  <div class="section-title"><span class="icon">📂</span> Output Files &mdash; Data Dictionary</div>
+  <div class="section-sub">What every column in every output file means.</div>
+
+  <h3>Per-plaque CSV (<code>data-green-*.csv</code>)</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Column</th><th>Unit</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>INDEX_COL</td><td>&mdash;</td><td>Plaque ID (integer, numbered in the annotated image)</td></tr>
+      <tr><td>AREA_PXL</td><td>px&sup2;</td><td>Convex-hull area in pixels</td></tr>
+      <tr><td>DIAMETER_PXL</td><td>px</td><td>Area-equivalent diameter: 2&sdot;&radic;(area/&pi;)</td></tr>
+      <tr><td>AREA_MM2</td><td>mm&sup2;</td><td>Area in mm&sup2; (0 if no dish diameter was set)</td></tr>
+      <tr><td>DIAMETER_MM</td><td>mm</td><td>Area-equivalent diameter in mm</td></tr>
+      <tr><td>MEAN_GRAY</td><td>0&ndash;255</td><td>Mean brightness inside the plaque (0=black, 255=white)</td></tr>
+      <tr><td>TURBIDITY_REL</td><td>0&ndash;1</td><td>Within-plate clarity index. 0 = clearest plaque on this plate, 1 = lawn. <strong>Not comparable across plates.</strong></td></tr>
+      <tr><td>SOURCE</td><td>&mdash;</td><td><code>auto</code> (engine), <code>manual</code> (hand-drawn), <code>watershed</code> (split-touching)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Per-phage turbidity CSV (<code>per_phage.csv</code>)</h3>
+  <p>For the Compare turbidity tab. Key columns for statistics:</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Column pattern</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>*_PLATE_MEAN</code> / <code>*_PLATE_SD</code></td><td><strong>Use these for statistics.</strong> The plate is the biological replicate, not the individual plaque.</td></tr>
+      <tr><td><code>OD</code></td><td>Apparent optical density: &minus;log&#8321;&#8320;(I/I&#8320;). Comparable across plates when you used a blank-agar reference.</td></tr>
+      <tr><td><code>TURBIDITY</code></td><td>0&ndash;1 scale: OD/OD_lawn. Interpretable secondary metric.</td></tr>
+      <tr><td><code>CLARITY</code></td><td>Categorical: clear / intermediate / turbid</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- SCALE BAR -->
+<section id="scalebar">
+  <div class="section-title"><span class="icon">📏</span> Scale Bar</div>
+  <div class="section-sub">A physical scale bar placed inside the dish on all exports. Fully customizable.</div>
+
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Control</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Scale bar length</strong></td><td>Dropdown in the toolbar: Auto (picks a nice round value), 0.5, 1, 2, 5, 10, 20, 50, 100 mm, or Custom (type any number)</td></tr>
+      <tr><td><strong>Move the scale bar</strong></td><td>Grab it with the mouse and drag anywhere on the image. Position is remembered in all exports.</td></tr>
+      <tr><td><strong>Change color</strong></td><td>Click the <strong>Colour</strong> button &rarr; pick any color in the color picker. White is the default.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="tip">&#128161; The scale bar is placed inside the dish automatically (at 80% of the dish radius vertically). Drag it to a clearer area if it overlaps with plaques or the label.</div>
+  <div class="info">&#8505;&#65039; The orange dashed circle on the canvas shows the detected dish boundary. The label on that circle shows: dish diameter in px, axis ratio (tilt check), and mm/px calibration.</div>
+</section>
+
+<!-- CALIBRATION -->
+<section id="calibration">
+  <div class="section-title"><span class="icon">🔬</span> Calibration</div>
+  <div class="section-sub">How pixel measurements are converted to millimetres &mdash; and what can go wrong.</div>
+
+  <h3>The formula</h3>
+  <p>The mm scale comes entirely from the detected dish:</p>
+  <pre>mm_per_px = dish_diameter_mm / dish_diameter_px
+DIAMETER_MM = 2 * sqrt(AREA_PXL * mm_per_px^2 / pi)</pre>
+
+  <p>The dish is detected as the <strong>roundest large contour</strong> in the image (Current/Precise modes). This prevents the dark surround common in top-lit iPhone photos from hijacking the mm scale &mdash; a real failure mode of the original algorithm on non-backlit images.</p>
+
+  <h3>Tilt warning</h3>
+  <p>If the dish looks elliptical in the photo (tilted camera), every mm value is biased. The app measures the dish axis ratio (major/minor) and warns when it exceeds <strong>1.03</strong>. Image plates <em>straight-on</em> to avoid this.</p>
+
+  <h3>What the dish label shows</h3>
+  <p>The orange circle on the canvas is labeled, e.g.:</p>
+  <pre>dish &Oslash;=2754 px &middot; axis 1.00 &middot; 0.0363 mm/px</pre>
+  <ul style="margin:6px 0 0 18px;font-size:.85rem;line-height:2">
+    <li><code>&#216;=2754 px</code> &mdash; detected dish diameter in pixels</li>
+    <li><code>axis 1.00</code> &mdash; tilt ratio (1.00 = perfectly circular; warn at &gt;1.03)</li>
+    <li><code>0.0363 mm/px</code> &mdash; the mm-per-pixel scale used for all measurements on this plate</li>
+  </ul>
+
+  <div class="warn">&#9888;&#65039; If no dish is detected (whole-dish not in frame, or the background color is similar to the dish rim), the app falls back to pixel-only output and warns. Make sure the entire dish rim is visible.</div>
+</section>
+
+<!-- TURBIDITY -->
+<section id="turbidity">
+  <div class="section-title"><span class="icon">🌊</span> Understanding Turbidity</div>
+  <div class="section-sub">Two different turbidity numbers exist in the toolkit. Use the right one for your question.</div>
+
+  <div class="tabs">
+    <div class="tab-list">
+      <button class="tab-btn active" onclick="switchTab(this,'tb-rel')">Relative (within-plate)</button>
+      <button class="tab-btn" onclick="switchTab(this,'tb-abs')">Absolute OD (cross-plate)</button>
+    </div>
+    <div id="tb-rel" class="tab-panel active">
+      <h3>TURBIDITY_REL &mdash; within-plate only</h3>
+      <p>This appears in every size CSV. It is a <strong>within-plate relative index</strong>: 0 = the clearest plaque on <em>this plate</em>, 1 = the bacterial lawn.</p>
+      <div class="warn">&#9888;&#65039; <strong>Do NOT compare TURBIDITY_REL across different plates or phages.</strong> Each plate is scaled to its own plaques, so a 0.3 on plate A is not the same as a 0.3 on plate B.</div>
+      <p>Good for: ranking clear-vs-turbid within one plate, QC checks, preliminary screening.</p>
+    </div>
+    <div id="tb-abs" class="tab-panel">
+      <h3>OD / TURBIDITY &mdash; cross-plate comparable</h3>
+      <p>This comes from the <strong>Compare turbidity tab</strong>. Optical density OD = &minus;log&#8321;&#8320;(I/I&#8320;), anchored to a shared clear-agar reference (I&#8320;). This is comparable across plates and phages &mdash; the publishable measure.</p>
+      <div class="tip">&#128161; Provide a <strong>blank agar</strong> image to get absolute OD. Without it you get only relative transmittance.</div>
+      <div class="info">&#8505;&#65039; <strong>For true absorbance</strong> (publishable OD), use RAW or linear TIFF input with dark and flat corrections. iPhone HEIC/JPEG is tone-mapped, so OD is an <em>apparent</em> OD &mdash; a within-session relative measure. State this in your methods.</div>
+      <p>Good for: cross-phage turbidity comparison, titer calculation, the real publishable number.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PUBLICATION -->
+<section id="publication">
+  <div class="section-title"><span class="icon">📰</span> Publishing Results</div>
+  <div class="section-sub">What to cite, what to report, and what caveats to state in your methods.</div>
+
+  <h3>Citation</h3>
+  <div class="card" style="background:#f8fafc;border-left:4px solid var(--accent);margin-bottom:16px">
+    <div class="card-body" style="font-size:.87rem;line-height:1.8">
+      Trofimova E, Jaschke PR. <em>Plaque Size Tool: An automated plaque analysis tool for simplifying and standardising bacteriophage plaque morphology measurements.</em> Virology. 2021;561:1&ndash;5. doi:10.1016/j.virol.2021.05.011
+    </div>
+  </div>
+  <div class="tip">&#128161; Only the <span class="engine-pill ep-pub">Published</span> engine mode reproduces this paper byte-for-byte. If you used Current with minor corrections, add "with minor numerical-precision corrections" to your methods.</div>
+
+  <h3>Statistics &mdash; avoid pseudoreplication</h3>
+  <div class="warn">&#9888;&#65039; The <strong>plate is the biological replicate</strong>, not the individual plaque. Use <code>*_PLATE_MEAN</code> / <code>*_PLATE_SD</code> columns in <code>per_phage.csv</code>, with &ge;3 plates per phage. Compare phages with Mann&ndash;Whitney or Kruskal&ndash;Wallis on the per-plate means, or a mixed model with plate as a random effect.</div>
+
+  <h3>Required caveats in Methods</h3>
+  <div class="accordion">
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">What is the diameter actually measuring? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Plaque size is reported as the <strong>convex-hull area-equivalent diameter</strong> (2&sdot;&radic;(area/&pi;)). This is a slight upper bound that includes any halo &mdash; a known property of the published method. State this in your methods.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">What if the plate was not shot straight-on? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">A tilted phone shot makes the dish elliptical and biases every mm value. Image plates <strong>straight-on (orthographic)</strong>. The tool warns when axis-ratio &gt; 1.03. Report any tilt warnings in supplementary QC.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">How should I report watershed mode? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Apply watershed <strong>uniformly</strong> across all compared phages, or not at all. State in methods: "Touching plaques were separated using distance-transform watershed segmentation."</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Can I publish Sensitive or Precise counts? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Only if you validate them on your own plates. Use the <strong>Validate tab</strong> to generate precision/recall/F1 scores against your hand-corrected ground truth, and report those numbers. Do not rely on the published Trofimova &amp; Jaschke validation for these in-house modes.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">How should I report turbidity? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Report <code>OD</code> as the primary turbidity metric. Call it "relative optical density" (not "absorbance") for iPhone/HEIC images; "absorbance" is only accurate for RAW/linear TIFF with dark+flat correction. Always report the reference images you used and whether you had a blank-agar reference.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">What PFU count range is reliable? <span class="arr">&#9660;</span></button>
+      <div class="acc-body">PFU counts are <strong>detected (accepted) plaques only</strong>. Validate that they fall in the 30&ndash;300 countable range for reliable titer calculations.</div>
+    </div>
+  </div>
+</section>
+
+<!-- SHORTCUTS -->
+<section id="shortcuts">
+  <div class="section-title"><span class="icon">⌨️</span> Keyboard Shortcuts</div>
+  <div class="section-sub">All shortcuts work inside the editor canvas.</div>
+
+  <div class="shortcut-grid">
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Undo last action</span>
+      <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">Z</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Select all plaques</span>
+      <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">A</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Delete selected</span>
+      <span class="shortcut-keys"><kbd class="kbd">Delete</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Fit image to window</span>
+      <span class="shortcut-keys"><kbd class="kbd">F</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Zoom in</span>
+      <span class="shortcut-keys"><kbd class="kbd">+</kbd> or scroll &uarr;</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Zoom out</span>
+      <span class="shortcut-keys"><kbd class="kbd">-</kbd> or scroll &darr;</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Box-select region</span>
+      <span class="shortcut-keys"><kbd class="kbd">Shift</kbd>+drag</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Box-deselect region</span>
+      <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd>+drag</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Pan (move around)</span>
+      <span class="shortcut-keys">Middle-click drag</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Erase (any mode)</span>
+      <span class="shortcut-keys">Right-click</span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Open image</span>
+      <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">O</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span class="shortcut-desc">Save results</span>
+      <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">S</kbd></span>
+    </div>
+  </div>
+</section>
+
+<!-- TROUBLESHOOT -->
+<section id="troubleshoot">
+  <div class="section-title"><span class="icon">🔧</span> Troubleshooting</div>
+  <div class="section-sub">Common issues and how to fix them.</div>
+
+  <div class="accordion">
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">0 plaques found <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Try the <strong>Sensitive</strong> engine. Check the image is not blurry or overexposed. Open the annotated image to see what the tool detected. Make sure the whole dish is in frame so calibration works.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">mm columns are 0 / "no dish detected" warning <span class="arr">&#9660;</span></button>
+      <div class="acc-body">The dish rim was not detected. Ensure the entire dish is visible in the photo, with a contrast rim against the background. If shooting on a light box, use a slightly darker surround. You still get pixel values &mdash; mm output only works when the dish is reliably detected.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Scale bar is outside the dish <span class="arr">&#9660;</span></button>
+      <div class="acc-body">This happens if the dish detection failed. Once the dish is found correctly, the bar auto-places at 80% of dish radius. You can always drag it to any position.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Tilt warning appears / mm values look wrong <span class="arr">&#9660;</span></button>
+      <div class="acc-body">The dish looks elliptical &mdash; you shot at an angle. Reshoot the plate straight-on (camera directly above, orthographic). Axis-ratio &gt; 1.03 triggers the warning.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">"Precise not available" in the dropdown <span class="arr">&#9660;</span></button>
+      <div class="acc-body">You are using the light installer (no PyTorch). Install <strong>PlaqueToolkitFullSetup.exe</strong> instead. Or, from source, create the <code>plaqseg</code> conda env (environment-precise.yml) and the app will find it automatically.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Turbidity values look inverted / POLARITY_OK = False <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Clear plaques are <em>darker</em> than the lawn &mdash; which is inverted from transmitted-light expectations. This happens with reflected/top-lit setups. Use a light box with transmitted light for defensible turbidity measurements.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">HEIC image will not open <span class="arr">&#9660;</span></button>
+      <div class="acc-body">HEIC is supported directly. If it fails, run <code>heic_to_tiff.py -d FOLDER</code> to convert to TIFF first. Make sure <code>pillow-heif</code> is installed in the env.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Touching plaques missed / merged into one <span class="arr">&#9660;</span></button>
+      <div class="acc-body">Tick <strong>"Split touching plaques"</strong> (watershed) in the Measure tab. Or use the Precise engine which handles dense plates better. You can also use <strong>Detect area</strong> in the editor to re-scan just the crowded region.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Detectors disagree / uncertainty flag <span class="arr">&#9660;</span></button>
+      <div class="acc-body">The Precise engine shows this when PlaqSeg and PST disagree on count by &gt;50%. Open the editor, zoom in, and manually verify which detections are real plaques.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">numpy errors after a pip upgrade <span class="arr">&#9660;</span></button>
+      <div class="acc-body">The validated engine requires numpy &lt; 2. Reinstall: <code>conda run -n plaque pip install "numpy&lt;2"</code>. Do not upgrade numpy in the plaque env.</div>
+    </div>
+    <div class="acc-item">
+      <button class="acc-trigger" onclick="toggleAcc(this)">Help menu items do not open / docs not found <span class="arr">&#9660;</span></button>
+      <div class="acc-body">The Help menu links to files in the <code>docs/</code> folder. If running the installed app, the docs need to be bundled in the installer. From source, the docs are always available.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:28px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
+    <h3 style="margin-top:0">More documentation</h3>
+    <p style="font-size:.85rem;color:var(--muted)">Open the <strong>Help</strong> menu in the app (top menu bar) to access:</p>
+    <ul style="font-size:.85rem;color:var(--muted);margin-left:20px;line-height:2">
+      <li><strong>User guide</strong> &mdash; full markdown reference</li>
+      <li><strong>How to validate this program</strong> &mdash; publication-grade protocol</li>
+      <li><strong>How it was built</strong> &mdash; architecture, engines, ML, packaging</li>
+      <li><strong>Engine reference</strong> &mdash; deep engine comparison</li>
+      <li><strong>Publication notes</strong> &mdash; what you may and may not cite</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
 <script>
-// copy buttons
-document.querySelectorAll('.copy').forEach(b=>{
-  b.addEventListener('click',()=>{
-    const code=b.parentElement.querySelector('code').innerText;
-    navigator.clipboard.writeText(code).then(()=>{b.textContent='copied!';setTimeout(()=>b.textContent='copy',1200)});
-  });
-});
-// tabs
-document.querySelectorAll('.tab').forEach(t=>{
-  t.addEventListener('click',()=>{
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.tabbody').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');document.getElementById(t.dataset.t).classList.add('active');
-  });
-});
-// active nav on scroll
-const navlinks=[...document.querySelectorAll('nav a')];
-const secs=navlinks.map(a=>document.querySelector(a.getAttribute('href')));
-addEventListener('scroll',()=>{
-  let i=secs.length-1;
-  for(let k=0;k<secs.length;k++){if(secs[k].getBoundingClientRect().top>120){i=k-1;break;}}
-  navlinks.forEach(a=>a.classList.remove('active'));
-  if(i>=0)navlinks[i].classList.add('active');
-},{passive:true});
-// decision tree
-const TREE={
-  start:{q:'What do you want to do?',opts:[
-    {t:'Compare turbidity across phages',go:'cmp'},
-    {t:'Measure one plate (or a few)',go:'one'}]},
-  one:{q:'Do you need to hand‑correct the detection?',opts:[
-    {t:'Yes — add/remove plaques by hand',go:'gui'},
-    {t:'No — just the numbers',go:'size'}]},
-};
-const RES={
-  cmp:{tool:'Compare Turbidity.bat → plaque_turbidity.py',why:'Absolute OD turbidity, clarity class, count + PFU/mL, per‑phage stats and figures — the publishable comparison.',
-       cmd:'conda run -n plaque python "plaque_turbidity.py" -d "FOLDER" -p 100 --blank "blank.tif" --group-by-prefix'},
-  gui:{tool:'Edit Plaques (GUI).bat → plaque_gui.py',why:'Interactive editor: add missed plaques, remove false ones, then save size + turbidity.',
-       cmd:'conda run -n plaque python "plaque_gui.py" -i "IMAGE" -p 100'},
-  size:{tool:'Measure Plaques.bat → plaque_size_tool.py',why:'Automatic size + count + within‑plate turbidity index for one image or a folder.',
-       cmd:'conda run -n plaque python "plaque_size_tool.py" -i "IMAGE" -p 100'},
-};
-function dtStart(){render('start');document.getElementById('dtres').classList.remove('show');document.getElementById('dtrestart').style.display='none';}
-function render(key){
-  const n=TREE[key];document.getElementById('dtq').textContent=n.q;
-  const o=document.getElementById('dtopts');o.innerHTML='';
-  n.opts.forEach(opt=>{const b=document.createElement('button');b.className='btn';b.textContent=opt.t;
-    b.onclick=()=>{ if(TREE[opt.go]) render(opt.go); else showRes(opt.go); };o.appendChild(b);});
+function switchTab(btn, panelId) {
+  const list = btn.closest('.tab-list');
+  list.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const tabs = btn.closest('.tabs');
+  tabs.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
 }
-function showRes(k){
-  const r=RES[k];document.getElementById('dtopts').innerHTML='';document.getElementById('dtq').textContent='Use this:';
-  const res=document.getElementById('dtres');
-  res.innerHTML='<div class="card"><h3>✅ '+r.tool+'</h3><p>'+r.why+'</p><pre><button class="copy">copy</button><code>'+r.cmd+'</code></pre></div>';
-  res.classList.add('show');document.getElementById('dtrestart').style.display='inline';
-  res.querySelector('.copy').addEventListener('click',e=>{navigator.clipboard.writeText(r.cmd);e.target.textContent='copied!';setTimeout(()=>e.target.textContent='copy',1200);});
+
+function toggleAcc(trigger) {
+  const body = trigger.nextElementSibling;
+  const isOpen = trigger.classList.contains('open');
+  trigger.closest('.accordion').querySelectorAll('.acc-trigger').forEach(t => {
+    t.classList.remove('open');
+    t.nextElementSibling.classList.remove('visible');
+  });
+  if (!isOpen) {
+    trigger.classList.add('open');
+    body.classList.add('visible');
+  }
 }
-dtStart();
+
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('.nav-link');
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(link => link.classList.remove('active'));
+      const match = document.querySelector('.nav-link[href="#' + entry.target.id + '"]');
+      if (match) match.classList.add('active');
+    }
+  });
+}, { rootMargin: '-10% 0px -80% 0px' });
+sections.forEach(s => observer.observe(s));
 </script>
 </body>
 </html>

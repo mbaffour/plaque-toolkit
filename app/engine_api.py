@@ -78,6 +78,19 @@ def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray):
     return pgui.save_results(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray)
 
 
+def detect_region(orig_bgr, roi, sensitive=True, small=True, published=False):
+    """Locked wrapper around pgui.detect_region: re-detect plaques inside an ROI of an
+    already-loaded image (the editor's 'Detect area' tool). Returns plaque dicts
+    (source='region'). Holds the engine lock so the process-global flags are set safely."""
+    with _LOCK:
+        prev_pub = pst.use_published
+        pst.use_published = bool(published)
+        try:
+            return pgui.detect_region(orig_bgr, roi, sensitive=sensitive, small=small)
+        finally:
+            pst.use_published = prev_pub
+
+
 class PreciseUnavailable(RuntimeError):
     """Raised when the Precise (PST+PlaqSeg) pipeline cannot run on this machine
     (e.g. the plaqseg conda env or the YOLO weights are missing). Carries a friendly
@@ -146,6 +159,33 @@ def precise_available():
     return True, ""
 
 
+def _precise_plaques_from_df(pdf, ppm):
+    """Convert the Precise CSV (cols X, Y, DIAMETER_MM, SOURCE, …) into editable plaque dicts
+    (circles) so the canvas shows the ACTUAL Precise detections, editable like any other.
+    PlaqSeg-confirmed -> 'auto' (green); PST/blob recall -> 'region' (orange) so the user can
+    scrutinise the recovered ones. ppm is mm/px."""
+    import math
+    out = []
+    if pdf is None or len(pdf) == 0 or not ppm:
+        return out
+    cols = {str(c).upper(): c for c in pdf.columns}
+    xk, yk, dk = cols.get("X"), cols.get("Y"), cols.get("DIAMETER_MM")
+    sk = cols.get("SOURCE")
+    if not (xk and yk and dk):
+        return out
+    for _, r in pdf.iterrows():
+        try:
+            x = float(r[xk]); y = float(r[yk]); dmm = float(r[dk])
+        except Exception:
+            continue
+        r_px = max((dmm / 2.0) / ppm, 1.0)
+        src = (str(r[sk]).lower() if sk else "plaqseg")
+        source = "auto" if src in ("plaqseg", "auto", "") else "region"
+        out.append({"source": source, "kind": "circle", "center": (x, y),
+                    "radius": r_px, "area_pxl": float(math.pi * r_px * r_px)})
+    return out
+
+
 def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None):
     """Run the Precise (PST + PlaqSeg) two-env pipeline on one image and return a results
     dict compatible with the table/summary code. Slow (CPU heavy) — call on a worker thread.
@@ -198,6 +238,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
         result["precise_overlay"] = overlay
         result["precise_csv"] = csv_path
         result["n_plaques"] = int(summ.get("n_final", len(pdf)))
+        _pl = _precise_plaques_from_df(pdf, base.get("pxl_per_mm"))
+        if _pl:                                  # show the Precise detections in the editor
+            result["plaques"] = _pl
+            result["n_plaques"] = len(_pl)
         return result
 
     # ---- TWO-ENV SUBPROCESS fallback (run-from-source with separate plaque/plaqseg envs) #
@@ -244,6 +288,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
     result["precise_overlay"] = overlay
     result["precise_csv"] = csv_path
     result["n_plaques"] = int(summ.get("n_final", len(pdf)))
+    _pl = _precise_plaques_from_df(pdf, base.get("pxl_per_mm"))
+    if _pl:                                      # show the Precise detections in the editor
+        result["plaques"] = _pl
+        result["n_plaques"] = len(_pl)
     return result
 
 

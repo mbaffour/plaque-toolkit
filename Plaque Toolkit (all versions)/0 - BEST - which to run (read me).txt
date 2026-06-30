@@ -1,0 +1,14 @@
+BEST RESULTS  ->  don't pick from the numbered list below.
+
+Use the installed app instead:
+
+  Open  "Plaque Toolkit (full)"  from the Windows Start menu
+  (or double-click  "! Open Plaque Toolkit (BEST).bat"  in the main folder),
+  then choose the engine at the top of the Measure tab:
+
+      Engine = Precise (PST + PlaqSeg)   ->  best detection
+      Engine = Published (validated)     ->  numbers for a paper
+
+The numbered .bat files in THIS folder run the individual tools from
+source. They are for advanced use, or when you do not want to use the
+installed app. The installed app does everything these do, plus Precise.

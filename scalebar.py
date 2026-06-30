@@ -41,7 +41,7 @@ def _pick_nice(values, target):
 
 
 def draw_scale_bar(img_bgr, mm_per_px, corner="br", target_frac=0.18,
-                   color=(255, 255, 255), pad=None):
+                   color=(255, 255, 255), pad=None, anchor=None, length_mm=None):
     """Stamp a physical scale bar onto ``img_bgr`` (modified in place) and return it.
 
     Parameters
@@ -84,8 +84,11 @@ def draw_scale_bar(img_bgr, mm_per_px, corner="br", target_frac=0.18,
         # ---- choose a nice bar length + build its label ----
         if mm_per_px and float(mm_per_px) > 0:
             mm_per_px = float(mm_per_px)
-            target_mm = target_px * mm_per_px
-            nice_mm = _pick_nice(NICE_MM, target_mm)
+            if length_mm and float(length_mm) > 0:        # caller chose the bar length
+                nice_mm = float(length_mm)
+            else:                                          # auto: nearest nice round length
+                target_mm = target_px * mm_per_px
+                nice_mm = _pick_nice(NICE_MM, target_mm)
             bar_len_px = nice_mm / mm_per_px
             label = ("%g mm" % nice_mm)
         else:
@@ -112,23 +115,25 @@ def draw_scale_bar(img_bgr, mm_per_px, corner="br", target_frac=0.18,
         (tw, th), base = cv2.getTextSize(label, font, font_scale, font_thick)
         gap = max(4, int(round(0.4 * th)))               # space between label and bar
 
-        # ---- corner placement ----
-        c = (corner or "br").lower()
-        right = "r" in c
-        bottom = "b" in c if ("b" in c or "t" in c) else True
-
-        if right:
-            x1 = w - pad - bar_len_px
+        # ---- placement: explicit anchor (e.g. INSIDE the dish) or an image corner ----
+        if anchor is not None:
+            # anchor = (x, y) of the bar's LEFT end; used to place the bar on the lawn
+            # instead of an image corner (which falls in the dark surround for plate photos).
+            x1 = int(round(anchor[0]))
+            x1 = max(pad, min(x1, w - pad - bar_len_px))
+            y_bar = int(round(anchor[1]))
+            y_bar = max(th + base + gap + 2, min(y_bar, h - bar_thick - pad))
+            bottom = True               # label sits ABOVE the bar
         else:
-            x1 = pad
+            c = (corner or "br").lower()
+            right = "r" in c
+            bottom = "b" in c if ("b" in c or "t" in c) else True
+            x1 = (w - pad - bar_len_px) if right else pad
+            if bottom:
+                y_bar = h - pad - bar_thick     # bar near bottom edge; label above
+            else:
+                y_bar = pad + th + base + gap   # top corner; room for label above
         x2 = x1 + bar_len_px
-
-        if bottom:
-            # bar sits near the bottom edge; label goes ABOVE the bar.
-            y_bar = h - pad - bar_thick
-        else:
-            # top corner: leave room for the label above the bar.
-            y_bar = pad + th + base + gap
         y_bar_top = y_bar
         y_bar_bot = y_bar + bar_thick
 

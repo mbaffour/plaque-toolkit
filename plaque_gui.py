@@ -173,6 +173,70 @@ def run_detection(image_path, plate_size, small, sensitive=False):
     return display_rgb, orig, high_contrast, plaques, pxl_per_mm, candidates, lawn_gray, plate
 
 
+def detect_region(orig_bgr, roi, sensitive=True, small=True):
+    """Re-run the validated plaque detector inside a rectangular ROI of an already-loaded
+    image. Returns plaque dicts (kind='contour', source='region') in FULL-image pixel
+    coordinates. Calibration/dish are NOT recomputed — the caller keeps the plate-level
+    mm/px. Used by the editor's 'Detect area' tool to recover plaques the global pass
+    missed (it runs sensitive on the crop, so faint blobs inside the box surface).
+
+    roi = (x, y, w, h) in image pixels. Sets the same process-global flags run_detection
+    uses and restores them; the engine_api wrapper holds the lock + restores use_published."""
+    x0, y0, w, h = (int(round(v)) for v in roi)
+    H, W = orig_bgr.shape[:2]
+    x0 = max(0, x0); y0 = max(0, y0)
+    x1 = min(W, x0 + max(w, 0)); y1 = min(H, y0 + max(h, 0))
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return []
+    crop = orig_bgr[y0:y1, x0:x1]
+
+    # mirror run_detection's in-memory dimming so the thresholds behave the same
+    image = crop
+    if float(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY).mean()) > 70:
+        image = np.clip(crop.astype(np.float32) * 0.5, 0, 255).astype(np.uint8)
+
+    prev = (pst.small_plaques, pst.sensitive, pst.watershed_enabled)
+    pst.small_plaques = bool(small)
+    pst.sensitive = bool(sensitive) and not pst.use_published
+    pst.watershed_enabled = False
+    pst.debug_mode = False
+    try:
+        binary_image, _high, clr_high_contrast = pst.process_image(image, 2.5)
+        contours = pst.get_contours(binary_image)
+        green_df, _red, _other, _plate = pst.filter_contours(contours, binary_image.shape)
+    finally:
+        pst.small_plaques, pst.sensitive, pst.watershed_enabled = prev
+
+    if green_df is None or green_df.empty:
+        return []
+    # mean-colour gate like run_detection (drop near-lawn-grey blobs)
+    try:
+        mc = green_df.apply(
+            lambda r: pst.get_mean_grey_colour(clr_high_contrast, r["CONTOURS"]), axis=1)
+        green_df = green_df[mc.abs() >= 40]
+    except Exception:
+        pass
+
+    region_area = float((x1 - x0) * (y1 - y0))
+    off = np.array([x0, y0], dtype=np.int32)
+    out = []
+    for _, row in green_df.iterrows():
+        area = float(row["AREA_PXL"])
+        if area <= 0 or area >= 0.5 * region_area:     # skip junk / the whole-box blob
+            continue
+        hull = np.asarray(row["HULL"], dtype=np.int32).reshape(-1, 2) + off
+        m = cv2.moments(hull)
+        if m["m00"] != 0:
+            cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
+        else:
+            ec = row.get("ENCL_CENTER", (0, 0))
+            cx, cy = float(ec[0]) + x0, float(ec[1]) + y0
+        out.append({"source": "region", "kind": "contour",
+                    "contour": hull.astype(np.int32), "area_pxl": area,
+                    "center": (float(cx), float(cy))})
+    return out
+
+
 # --------------------------------------------------------------------------- #
 #  Measurement + manual segmentation helpers
 # --------------------------------------------------------------------------- #
@@ -260,7 +324,106 @@ def _plaque_mask(shape, p):
     return mask
 
 
-def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=None):
+def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=True, plate=None,
+                     scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
+    """Draw plaque outlines (auto = green, manual/region = blue) + per-plaque #/diameter
+    labels + a physical scale bar onto a copy of the image, and return it (BGR). Shared by
+    save_results and save_figure so the saved CSV image and a downloaded figure match.
+    ``scalebar_mm`` forces the bar length (mm); ``scalebar_anchor`` (x,y in image px) forces
+    its position. When neither is given and ``plate`` is known, the bar is auto-sized and
+    placed INSIDE the dish/lawn (an image corner would fall in the dark surround)."""
+    annotated = orig_bgr.copy()
+    for i, p in enumerate(plaques, start=1):
+        dia_pxl, _area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm)
+        color = (0, 255, 0) if p.get("source") == "auto" else (255, 0, 0)   # BGR
+        if p["kind"] == "circle":
+            cv2.circle(annotated, (int(round(p["center"][0])), int(round(p["center"][1]))),
+                       max(int(round(p["radius"])), 1), color, 2)
+        else:
+            cv2.drawContours(annotated, [np.asarray(p["contour"], dtype=np.int32)], -1, color, 2)
+        if draw_numbers:
+            cx, cy = int(round(p["center"][0])), int(round(p["center"][1]))
+            label = f"#{i}:{dia_mm:.2f}" if pxl_per_mm else f"#{i}:{dia_pxl:.0f}px"
+            cv2.putText(annotated, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (25, 51, 0), 1)
+    # Physical scale bar (e.g. "5 mm"). pxl_per_mm is actually mm/px, so pass it straight.
+    if scalebar and draw_scalebar and draw_scale_bar is not None:
+        try:
+            anchor = scalebar_anchor
+            if anchor is None and plate and plate.get("center") is not None and plate.get("radius"):
+                cx, cy = plate["center"]; r = float(plate["radius"])
+                anchor = (cx - 0.5 * r, cy + 0.80 * r)   # on the lawn, lower-centre of the dish
+            draw_scale_bar(annotated, pxl_per_mm, anchor=anchor, length_mm=scalebar_mm,
+                           color=scalebar_color)
+        except Exception:
+            pass          # never let the overlay break a save
+    return annotated
+
+
+def save_figure(plaques, orig_bgr, out_path, pxl_per_mm, draw_numbers=True, scalebar=True,
+                plate=None, scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
+    """Render the annotated overlay (outlines + numbers + scale bar) and write it to out_path
+    as a stand-alone publication figure. Returns the path actually written (HEIC -> PNG)."""
+    annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm,
+                                 draw_numbers=draw_numbers, scalebar=scalebar, plate=plate,
+                                 scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
+                                 scalebar_color=scalebar_color)
+    ext = os.path.splitext(out_path)[1].lower()
+    if ext in ("", ".heic", ".heif"):     # OpenCV cannot write HEIC / needs an extension
+        out_path = os.path.splitext(out_path)[0] + ".png"
+    d = os.path.dirname(os.path.abspath(out_path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    cv2.imwrite(out_path, annotated)
+    return out_path
+
+
+def save_comparison(plaques, orig_bgr, out_path, pxl_per_mm, plate=None, scalebar_mm=None,
+                    scalebar_anchor=None, labels=("Input", "Detected"), scalebar_color=(255, 255, 255)):
+    """Write a side-by-side 'input vs annotated output' figure: the original plate on the left,
+    the annotated detection (outlines + numbers + scale bar) on the right, under a labelled
+    banner. Returns the path actually written (HEIC -> PNG)."""
+    left = orig_bgr.copy()
+    right = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,
+                             scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
+                             scalebar_color=scalebar_color)
+    h, w = left.shape[:2]
+    gap = max(8, int(round(0.01 * w)))
+    sep = np.full((h, gap, 3), 255, np.uint8)               # white divider
+    combo = np.hstack([left, sep, right])
+    cw = combo.shape[1]
+    banner_h = max(34, int(round(0.05 * h)))
+    banner = np.full((banner_h, cw, 3), 28, np.uint8)       # dark title strip
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    fs = max(0.7, w / 1500.0); ft = max(1, int(round(fs * 2)))
+    for text, cx in ((labels[0], w // 2), (labels[1], w + gap + w // 2)):
+        (tw, th), _ = cv2.getTextSize(text, font, fs, ft)
+        cv2.putText(banner, text, (int(cx - tw / 2), int((banner_h + th) / 2)),
+                    font, fs, (255, 255, 255), ft, cv2.LINE_AA)
+    final = np.vstack([banner, combo])
+    ext = os.path.splitext(out_path)[1].lower()
+    if ext in ("", ".heic", ".heif"):
+        out_path = os.path.splitext(out_path)[0] + ".png"
+    d = os.path.dirname(os.path.abspath(out_path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    cv2.imwrite(out_path, final)
+    return out_path
+
+
+def save_image(img_bgr, out_path):
+    """Write a BGR image to out_path, converting an unwritable/HEIC extension to PNG."""
+    ext = os.path.splitext(out_path)[1].lower()
+    if ext in ("", ".heic", ".heif"):
+        out_path = os.path.splitext(out_path)[0] + ".png"
+    d = os.path.dirname(os.path.abspath(out_path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    cv2.imwrite(out_path, img_bgr)
+    return out_path
+
+
+def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=None, plate=None,
+                 scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -271,7 +434,6 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     turb = pst.turbidity_indices(means, lawn_gray)
 
     rows = []
-    annotated = orig_bgr.copy()
     for i, (p, mg, tb) in enumerate(zip(plaques, means, turb), start=1):
         dia_pxl, area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm)
         rows.append({
@@ -284,15 +446,9 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
             "TURBIDITY_REL": round(tb, 3),
             "SOURCE": p["source"],
         })
-        color = (0, 255, 0) if p["source"] == "auto" else (255, 0, 0)  # BGR
-        if p["kind"] == "circle":
-            cv2.circle(annotated, (int(round(p["center"][0])), int(round(p["center"][1]))),
-                       int(round(p["radius"])), color, 2)
-        else:
-            cv2.drawContours(annotated, [np.asarray(p["contour"], dtype=np.int32)], -1, color, 2)
-        cx, cy = int(round(p["center"][0])), int(round(p["center"][1]))
-        label = f"#{i}:{dia_mm:.2f}" if pxl_per_mm else f"#{i}:{dia_pxl:.0f}px"
-        cv2.putText(annotated, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (25, 51, 0), 1)
+    annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,    # outlines + numbers + scale bar
+                                 scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
+                                 scalebar_color=scalebar_color)
 
     name = os.path.splitext(os.path.split(image_path)[1])[0]
     ext = os.path.splitext(os.path.split(image_path)[1])[1]
@@ -302,12 +458,6 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     img_path = os.path.join(out_dir, f"out_{name}{ext}")
     pd.DataFrame(rows, columns=["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
                                 "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
-    # Physical scale bar (e.g. "5 mm"). pxl_per_mm is actually mm/px, so pass it straight.
-    if draw_scalebar and draw_scale_bar is not None:
-        try:
-            draw_scale_bar(annotated, pxl_per_mm)
-        except Exception:
-            pass          # never let the overlay break a save
     cv2.imwrite(img_path, annotated)
     return csv_path, img_path, len(rows)
 

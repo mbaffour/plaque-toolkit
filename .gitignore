@@ -44,6 +44,8 @@ build/_pyi_work/
 build/PlaqueToolkit/
 build/plaque_app_full/localpycs/
 Output/
+# assembled shareable package (large bundled installer; regenerate from Output/)
+Plaque Toolkit (share)/
 
 # --- large data / ML scratch (regenerable; OnePetri data is CC-BY-NC, not redistributable) ---
 _research/
