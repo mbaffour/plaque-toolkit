@@ -68,6 +68,47 @@ QMainWindow, QDialog {{
     background: {c['bg']};
 }}
 
+/* Pop-up menus (Export ▾ dropdown, Help menu, context menus). Explicitly themed so the
+   popup never falls back to the OS dark-mode background (which left dark text unreadable
+   on a dark menu). */
+QMenu {{
+    background: {c['surface']};
+    color: {c['text']};
+    border: 1px solid {c['border_strong']};
+    border-radius: 8px;
+    padding: 4px;
+}}
+QMenu::item {{
+    background: transparent;
+    color: {c['text']};
+    padding: 6px 22px 6px 16px;
+    border-radius: 5px;
+}}
+QMenu::item:selected {{
+    background: {c['accent']};
+    color: {c['text_inverse']};
+}}
+QMenu::item:disabled {{
+    color: {c['text_muted']};
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {c['border']};
+    margin: 4px 8px;
+}}
+QMenuBar {{
+    background: {c['surface']};
+    color: {c['text']};
+}}
+QMenuBar::item {{
+    background: transparent;
+    padding: 4px 10px;
+}}
+QMenuBar::item:selected {{
+    background: {c['accent_soft']};
+    color: {c['text']};
+}}
+
 QWidget#AppRoot {{
     background: {c['bg']};
 }}
