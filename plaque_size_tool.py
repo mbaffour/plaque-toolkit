@@ -14,15 +14,32 @@ except Exception:
     pass
 
 
+def _ensure_bgr(img):
+    """Guarantee a 3-channel 8-bit BGR image. A no-op for an already-BGR uint8 image
+    (so the validated pipeline is byte-identical for normal colour plates); it only
+    rescues grayscale (1-ch) or BGRA (4-ch) inputs that would otherwise crash the
+    downstream BGR->GRAY conversions with an OpenCV 'bad number of channels' error."""
+    if img is None:
+        return None
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.ndim == 3 and img.shape[2] == 1:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.ndim == 3 and img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    return img
+
+
 def read_image_bgr(path):
-    """Read any supported image (incl. iPhone HEIC), honouring EXIF orientation."""
+    """Read any supported image (incl. iPhone HEIC), honouring EXIF orientation.
+    Always returns a 3-channel 8-bit BGR array (see _ensure_bgr)."""
     ext = os.path.splitext(path)[1].lower()
     if ext in ('.heic', '.heif', '.jpg', '.jpeg'):
         im = ImageOps.exif_transpose(Image.open(path).convert('RGB'))
         return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
     img = cv2.imread(path)
     if img is not None:
-        return img
+        return _ensure_bgr(img)
     im = ImageOps.exif_transpose(Image.open(path).convert('RGB'))
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
 
