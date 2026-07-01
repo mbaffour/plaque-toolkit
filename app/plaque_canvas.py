@@ -99,6 +99,21 @@ TOOL_SELECT = "select"
 TOOL_ADD = "add"
 TOOL_REGION = "region"
 TOOL_ERASE = "erase"
+TOOL_DISH = "dish"
+
+
+def _circle_from_3(p1, p2, p3):
+    """Circle (cx, cy, r) through 3 points, or None if they are collinear."""
+    (x1, y1), (x2, y2), (x3, y3) = p1, p2, p3
+    d = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+    if abs(d) < 1e-6:
+        return None
+    s1 = x1 * x1 + y1 * y1
+    s2 = x2 * x2 + y2 * y2
+    s3 = x3 * x3 + y3 * y3
+    ux = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d
+    uy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d
+    return ux, uy, math.hypot(x1 - ux, y1 - uy)
 
 _COL = {"auto": QColor(40, 220, 70), "manual": QColor(30, 170, 255),
         "region": QColor(255, 170, 0), "watershed": QColor(180, 120, 255)}
@@ -201,6 +216,8 @@ class _View(QGraphicsView):
             self._temp = QGraphicsRectItem(); self._temp.setPen(self._dash())
             self.scene().addItem(self._temp)
             self._temp.setRect(QRectF(self._press_scene, self._press_scene)); return
+        if tool == TOOL_DISH:
+            self.owner._dish_click(self._press_scene); return
 
     def mouseMoveEvent(self, e):
         pos = _pt(e)
@@ -300,6 +317,13 @@ class PlaqueCanvas(QWidget):
         self.candidates = det.get("candidates") or []
         self.lawn_gray = det.get("lawn_gray")
         self.plate = det.get("plate")
+        # dish diameter in mm (invariant of which dish was detected: ppm = plate_mm / dish_px,
+        # so ppm*dish_px recovers the value the user entered). Enables manual re-calibration.
+        self.plate_mm = ((self.ppm * self.plate["diam_px"])
+                         if (self.ppm and self.plate and self.plate.get("diam_px")) else 100.0)
+        self._dish_pts = []          # rim points collected by the "Set dish" tool
+        self._dish_markers = []      # their on-screen dots
+        self._plate_items = []       # the drawn dish circle + label (so we can redraw)
         self._uid = 0
         self._plaques = []
         for p in det.get("plaques", []):
@@ -381,6 +405,9 @@ class PlaqueCanvas(QWidget):
                 "Drag a tight box; the detector re-scans inside it and adds plaques it finds.")
         toolbtn(TOOL_ERASE, "Erase",
                 "Click a detection to remove it (or right-click anything, in any tool).")
+        toolbtn(TOOL_DISH, "Set dish",
+                "Fix the plate outline when auto-detection grabs the wrong thing: click 3 points "
+                "around the dish rim and the mm scale re-calibrates to your circle.")
 
         def actbtn(text, slot, tip):
             b = QPushButton(text); b.setToolTip(tip); b.clicked.connect(slot)
@@ -427,9 +454,21 @@ class PlaqueCanvas(QWidget):
 
     def _set_tool(self, key):
         self.tool = key
+        # leaving the dish tool: discard any half-collected rim points
+        if key != TOOL_DISH and getattr(self, "_dish_pts", None):
+            for mk in self._dish_markers:
+                try:
+                    self.scene.removeItem(mk)
+                except Exception:
+                    pass
+            self._dish_pts = []; self._dish_markers = []
         if key in self._btns:
             self._btns[key].setChecked(True)
-        self._update_hint()
+        if key == TOOL_DISH:
+            self._update_hint("Set dish: click 3 points around the dish rim; the mm scale "
+                              "re-calibrates to your circle.")
+        else:
+            self._update_hint()
 
     def _scale_changed(self, _idx):
         val = self.scale_combo.currentData()
@@ -460,13 +499,20 @@ class PlaqueCanvas(QWidget):
 
     # ---- overlays ---------------------------------------------------------- #
     def _draw_plate(self):
+        # remove any previously drawn dish circle/label so a re-calibration redraws cleanly
+        for it in getattr(self, "_plate_items", []):
+            try:
+                self.scene.removeItem(it)
+            except Exception:
+                pass
+        self._plate_items = []
         if not self.plate:
             return
         cx, cy = self.plate["center"]; r = self.plate["radius"]
         pen = QPen(QColor(255, 165, 0), 1.4, Qt.DashLine); pen.setCosmetic(True)
         item = QGraphicsEllipseItem(cx - r, cy - r, 2 * r, 2 * r)
         item.setPen(pen); item.setZValue(5)
-        self.scene.addItem(item)
+        self.scene.addItem(item); self._plate_items.append(item)
         diam = self.plate.get("diam_px") or (2 * r)
         tag = "dish Ø=%.0f px" % diam
         ar = self.plate.get("axis_ratio")
@@ -477,7 +523,48 @@ class PlaqueCanvas(QWidget):
         t = QGraphicsSimpleTextItem(tag); t.setBrush(QColor(255, 170, 0))
         f = QFont(); f.setPointSize(8); f.setBold(True); t.setFont(f)
         t.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-        t.setPos(cx - r, cy - r); t.setZValue(6); self.scene.addItem(t)
+        t.setPos(cx - r, cy - r); t.setZValue(6); self.scene.addItem(t); self._plate_items.append(t)
+
+    # ---- manual dish / re-calibration -------------------------------------- #
+    def _dish_click(self, scene_pt):
+        """Collect a rim point; after the 3rd, fit a circle and re-calibrate."""
+        self._dish_pts.append((scene_pt.x(), scene_pt.y()))
+        m = QGraphicsEllipseItem(scene_pt.x() - 7, scene_pt.y() - 7, 14, 14)
+        mp = QPen(QColor(0, 200, 255)); mp.setCosmetic(True); mp.setWidth(2)
+        m.setPen(mp); m.setZValue(9); self.scene.addItem(m); self._dish_markers.append(m)
+        need = 3 - len(self._dish_pts)
+        if need > 0:
+            self._update_hint("Set dish: click %d more point(s) on the dish rim." % need)
+            return
+        res = _circle_from_3(*self._dish_pts[:3])
+        for mk in self._dish_markers:
+            try:
+                self.scene.removeItem(mk)
+            except Exception:
+                pass
+        self._dish_markers = []; self._dish_pts = []
+        if res is None:
+            self._update_hint("Those 3 points line up — click 3 spread-out rim points instead.")
+            return
+        self._apply_dish(*res)
+
+    def _apply_dish(self, cx, cy, r):
+        """Set the dish to a manual circle and recompute the mm/px calibration."""
+        diam = 2.0 * r
+        self.plate = {"center": (cx, cy), "radius": r, "diam_px": diam, "axis_ratio": 1.0}
+        if self.plate_mm and diam > 0:
+            self.ppm = float(self.plate_mm) / diam
+        # propagate to the shared detection dict so the table + summary card recompute
+        try:
+            self.det["plate"] = self.plate
+            self.det["pxl_per_mm"] = self.ppm
+        except Exception:
+            pass
+        self._draw_plate(); self._draw_scalebar()
+        self._update_hint("dish set manually: Ø=%.0f px · %.4f mm/px (calibration updated)"
+                          % (diam, self.ppm or 0.0))
+        if self._on_change:
+            self._on_change()
 
     def _scalebar_mm_used(self):
         """The mm length the bar will draw at (resolves 'Auto' to the nice value)."""
