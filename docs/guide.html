@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Plaque Toolkit — Interactive User Guide</title>
+<title>Plaque Toolkit (“Frankenstein’s Plaque Lab”) — Interactive User Guide</title>
 <style>
   /* ── Base ───────────────────────────────────────────────────── */
   *{box-sizing:border-box;margin:0;padding:0}
@@ -221,7 +221,7 @@
 <nav id="sidebar">
   <div class="sidebar-logo">
     <h1>🧫 Plaque Toolkit</h1>
-    <p>Interactive User Guide</p>
+    <p><em>“Frankenstein’s Plaque Lab”</em><br>Interactive User Guide</p>
   </div>
   <nav>
     <div class="nav-group">
@@ -262,7 +262,7 @@
       <a href="#troubleshoot" class="nav-link">Troubleshooting</a>
     </div>
   </nav>
-  <div class="sidebar-footer">Plaque Toolkit v1 &middot; Built on Trofimova &amp; Jaschke 2021</div>
+  <div class="sidebar-footer">Plaque Toolkit &middot; &ldquo;Frankenstein&rsquo;s Plaque Lab&rdquo; &middot; Built on Trofimova &amp; Jaschke 2021</div>
 </nav>
 
 <!-- MAIN -->
@@ -271,7 +271,7 @@
 <!-- HERO -->
 <div class="hero">
   <h1>🧫 Plaque Toolkit &mdash; User Guide</h1>
-  <p>Measure bacteriophage plaque size, count, and turbidity from Petri-dish photos. Interactive editor, batch processing, and publication-ready exports &mdash; all in one desktop app.</p>
+  <p><strong>Nicknamed &ldquo;Frankenstein&rsquo;s Plaque Lab&rdquo;</strong> because it stitches several tools into one. Measure bacteriophage plaque size, count, and turbidity from Petri-dish photos. Interactive editor, batch processing, and publication-ready exports &mdash; all in one desktop app for Windows &amp; macOS.</p>
   <div class="hero-badges">
     <span class="badge badge-blue">iPhone HEIC &#10003;</span>
     <span class="badge badge-blue">Batch folders &#10003;</span>
@@ -319,9 +319,9 @@
     <li class="step">
       <div class="step-num">5</div>
       <div class="step-body">
-        <strong>Export your data</strong>
-        <p>Click the bright green <strong>&#11015; Export &#9660;</strong> button to download a CSV, annotated figure, or side-by-side comparison. Results are saved to an <code>out\</code> folder next to your image.</p>
-        <div class="success">&#9989; Done! The CSV contains per-plaque area, diameter (mm &amp; px), brightness, and source.</div>
+        <strong>Export your data &mdash; one click</strong>
+        <p>Click the bright green <strong>&#11015; Export all</strong> button: it writes the CSV table <em>and</em> the annotated figure to an <code>out\</code> folder next to your image, then opens that folder for you. The <strong>More &#9660;</strong> button beside it has the individual options (CSV only, side-by-side, Fiji crop, ground-truth labels).</p>
+        <div class="success">&#9989; Done! Plaques are numbered <strong>1&hellip;N from the top</strong> (row 1 = the topmost plaque), and the CSV has per-plaque area, diameter (mm &amp; px), brightness, and source.</div>
       </div>
     </li>
   </ol>
@@ -790,17 +790,17 @@
 
 <!-- EXPORTS -->
 <section id="exports">
-  <div class="section-title"><span class="icon">⬇️</span> Export Menu</div>
-  <div class="section-sub">The bright green <strong>&#11015; Export &#9660;</strong> button in the editor opens a menu with six options.</div>
+  <div class="section-title"><span class="icon">⬇️</span> Export</div>
+  <div class="section-sub">The bright green <strong>&#11015; Export all</strong> button writes the CSV <em>and</em> the annotated figure at once (to <code>out\</code>, then opens the folder). The <strong>More &#9660;</strong> button beside it opens the individual options below.</div>
 
   <div class="card-grid">
     <div class="card card-accent-green">
       <div class="card-title">Data table (CSV)</div>
-      <div class="card-body">Per-plaque measurements: INDEX, AREA_PXL, AREA_MM2, DIAMETER_PXL, DIAMETER_MM, MEAN_GRAY, TURBIDITY_REL, SOURCE. One row per plaque.</div>
+      <div class="card-body">Per-plaque measurements: INDEX (1&nbsp;=&nbsp;topmost plaque), AREA_PXL, AREA_MM2, DIAMETER_PXL, DIAMETER_MM, MEAN_GRAY, TURBIDITY_REL, SOURCE. One row per plaque, numbered top&#8209;to&#8209;bottom.</div>
     </div>
     <div class="card card-accent-green">
       <div class="card-title">Annotated figure</div>
-      <div class="card-body">The plate image with outlines, numbers, and the scale bar exactly as shown in the editor. PNG format.</div>
+      <div class="card-body">The plate image with outlines, numbers (1&hellip;N from the top), and the scale bar exactly as shown in the editor. PNG format.</div>
     </div>
     <div class="card card-accent-green">
       <div class="card-title">Input vs annotated</div>

@@ -1,9 +1,11 @@
 # Plaque Toolkit
 
+*Nicknamed **"Frankenstein's Plaque Lab"** — it stitches several tools into one.*
+
 A desktop + command-line toolkit for measuring bacteriophage **plaques** on Petri-dish
 photos: **size** (area and diameter in mm), **turbidity** (clarity / optical density),
 **count**, and **titer (PFU/mL)** — with an interactive editor, batch cross-phage
-comparison, and publication-ready figures.
+comparison, and publication-ready figures. Runs on **Windows** and **macOS (Apple Silicon)**.
 
 It is built on the **published, peer-reviewed Plaque Size Tool**
 (Trofimova & Jaschke, *Virology* 2021, [doi:10.1016/j.virol.2021.05.011](https://doi.org/10.1016/j.virol.2021.05.011)).
@@ -34,7 +36,9 @@ been independently validated. The distinction matters for publication — see
   **`Plaque Toolkit.sh`** (Linux).
 
 The app has a **Measure** tab (engine dropdown, drag-and-drop, summary card, editable canvas,
-scale bar), a **Compare turbidity** tab, and an **About** tab.
+scale bar), a **Compare turbidity** tab, and an **About** tab. Plaques are numbered **1…N from
+the top** (row 1 = the topmost plaque), and the green **Export all** button writes the CSV +
+annotated figure in one click.
 
 ### Option B — drag-and-drop launchers (no app, no commands)
 
