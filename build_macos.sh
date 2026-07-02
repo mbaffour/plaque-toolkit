@@ -3,8 +3,9 @@
 #  build_macos.sh - build the macOS "Plaque Toolkit.app" bundle.
 #
 #  MUST be run ON a Mac: PyInstaller cannot cross-compile, so a Windows or
-#  Linux machine cannot produce a .app. Run this on macOS with the 'plaque'
-#  conda env created (see environment.yml / setup.command).
+#  Linux machine cannot produce a .app. Run this on macOS with a conda env that
+#  has torch (CPU) + ultralytics + scikit-image (the Mac equivalent of the Windows
+#  'plaqueapp' env). Override the env name with  PLAQUE_ENV=<name>  if yours differs.
 #
 #  What it does:
 #    1. (re)generates app/resources/icon.icns from icon.png using macOS sips+iconutil
@@ -12,9 +13,9 @@
 #    3. smoke-tests the frozen app headlessly
 #    4. optionally builds a .dmg (create-dmg if installed, else hdiutil)
 #
-#  Like the Windows build, this does NOT bundle torch/ultralytics; the optional
-#  "Precise" engine runs via a local 'plaqseg' conda env on the user's Mac
-#  (environment-precise.yml). Tell users to create that env if they need Precise.
+#  Like the Windows Full build, this BUNDLES torch/ultralytics + the model weights,
+#  so the frozen .app runs the "Precise" engine in-process — no conda env needed at
+#  run time on the user's Mac.
 #
 #  Usage:
 #    ./build_macos.sh              # build the .app (+ .dmg if a dmg tool exists)
@@ -32,21 +33,23 @@ fi
 MAKE_DMG=1
 [[ "${1:-}" == "--no-dmg" ]] && MAKE_DMG=0
 
-# Pick the runner for the 'plaque' env: prefer conda/mamba run, else PLAQUE_PY.
+# Pick the runner: prefer conda/mamba run on the torch-equipped build env, else PLAQUE_PY.
+# The build env must have torch (CPU) + ultralytics + scikit-image; override with PLAQUE_ENV.
+ENV="${PLAQUE_ENV:-plaqueapp}"
 RUN=()
 if [[ -n "${PLAQUE_PY:-}" && -x "${PLAQUE_PY}" ]]; then
   RUN=("$PLAQUE_PY" -m)
 else
   for c in conda mamba micromamba; do
-    if command -v "$c" >/dev/null 2>&1; then RUN=("$c" run -n plaque); break; fi
+    if command -v "$c" >/dev/null 2>&1; then RUN=("$c" run -n "$ENV"); break; fi
   done
 fi
 if [[ ${#RUN[@]} -eq 0 ]]; then
-  echo "ERROR: no conda/mamba found and PLAQUE_PY not set. Create the env first:" >&2
-  echo "  conda env create -f environment.yml" >&2
+  echo "ERROR: no conda/mamba found and PLAQUE_PY not set. Create the build env first" >&2
+  echo "  (needs torch + ultralytics + scikit-image), e.g. conda env create -f environment.yml" >&2
   exit 1
 fi
-echo "Using runner: ${RUN[*]}"
+echo "Using runner: ${RUN[*]}  (env: ${ENV})"
 
 # --- 1. icon.icns from icon.png (best-effort; spec falls back to no icon) ---
 PNG="app/resources/icon.png"
@@ -75,11 +78,30 @@ fi
 echo "Built: $APP"
 
 # --- 3. smoke-test the frozen app (headless) --------------------------------
+# Hard acceptance gate. --smoke exercises the Fast engine (cv2/numpy). --precise-smoke loads
+# torch + torchvision + ultralytics + the YOLO/classifier weights IN-PROCESS and runs the full
+# Precise pipeline on the bundled sample. Because THIS build bundles Precise, a failing
+# --precise-smoke means the ML stack was mis-collected (dylib/op/lib), so FAIL the build rather
+# than ship a .dmg whose headline Precise engine is broken. (Mirrors the Windows Full gate.)
 BIN="$APP/Contents/MacOS/Plaque Toolkit"
-if [[ -x "$BIN" ]]; then
-  echo "Smoke-testing the frozen app ..."
-  if "$BIN" --smoke; then echo "SMOKE OK"; else echo "WARNING: frozen smoke test failed" >&2; fi
+if [[ ! -x "$BIN" ]]; then
+  echo "ERROR: frozen binary not found or not executable: $BIN" >&2
+  exit 1
 fi
+echo "Smoke-testing the frozen app (Fast engine) ..."
+if ! QT_QPA_PLATFORM=offscreen "$BIN" --smoke; then
+  echo "ERROR: frozen --smoke failed." >&2
+  exit 1
+fi
+echo "SMOKE OK"
+echo "Smoke-testing the BUNDLED Precise engine (torch + PlaqSeg, in-process) ..."
+if ! QT_QPA_PLATFORM=offscreen "$BIN" --precise-smoke; then
+  echo "ERROR: frozen --precise-smoke failed — the bundled Precise engine is broken." >&2
+  echo "       Check the torch/torchvision/ultralytics/skimage collect_all + model datas in" >&2
+  echo "       build/plaque_app_macos.spec." >&2
+  exit 1
+fi
+echo "PRECISE SMOKE OK"
 
 # --- 4. .dmg (optional) -----------------------------------------------------
 if [[ "$MAKE_DMG" -eq 1 ]]; then
@@ -100,5 +122,4 @@ fi
 
 echo
 echo "Done. Drag '$APP' to /Applications (or share the .dmg)."
-echo "Note: for the Precise engine, the user must create a 'plaqseg' conda env on their Mac:"
-echo "      conda env create -f environment-precise.yml"
+echo "Note: the Precise engine is bundled in the .app — no extra conda env needed to run it."

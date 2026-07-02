@@ -3,10 +3,11 @@
 ==================================================================
 
 WHAT THIS IS
-  A desktop app to measure bacteriophage plaques from Petri-dish
-  photos: size (mm), count, and turbidity. Detects plaques
-  automatically, lets you correct them by hand, and exports CSV +
-  annotated figures. iPhone HEIC photos work directly.
+  Plaque Toolkit (nicknamed "Frankenstein's Plaque Lab" - it stitches
+  several tools into one) is a desktop app to measure bacteriophage
+  plaques from Petri-dish photos: size (mm), count, and turbidity. It
+  detects plaques automatically, lets you correct them by hand, and
+  exports CSV + annotated figures. iPhone HEIC photos work directly.
 
   Windows 10 / 11, 64-bit. No Python, no setup, nothing else needed
   - the detection engine (incl. the "Precise" AI model) is built in.
@@ -33,10 +34,13 @@ HOW TO MEASURE  (about 30 seconds)
   2. Click "Open image..." (or drag a photo onto the window).
   3. Pick an engine in the dropdown - "Precise" is best for hard
      or dense plates; "Published (validated)" for paper numbers.
-  4. The plaques are detected and outlined. Review them in the
-     editor: click to add/erase, drag to draw, zoom with the wheel.
-  5. Click the green  Export  button (or "Save results") to write
-     the CSV + annotated image.
+  4. The plaques are detected and outlined, numbered 1..N from the
+     top. Review them in the editor: click to add/erase, drag to
+     draw, zoom with the wheel.
+  5. Click the green  "Export all"  button - one click writes the
+     CSV table + the annotated figure to an "out" folder next to
+     your image, and opens that folder. ("More" has individual
+     options: CSV only, side-by-side, Fiji crop, labels.)
 
   More tabs:
     * Batch    - measure a whole folder of plates at once
@@ -44,6 +48,35 @@ HOW TO MEASURE  (about 30 seconds)
     * Validate - score the engines against your own corrections
     * Help menu (top bar) - full guides, incl. the interactive
                             guide.html
+
+
+CALIBRATE FOR YOUR OWN SETUP  (important - do this once)
+
+  The tool works with ANY camera, phone, height, or zoom. You do NOT
+  enter camera settings - the mm scale is measured from each photo
+  using a real object of known size in the frame. So different setups
+  are fine; each just needs its own calibration.
+
+  Do this:
+   * Use the "Set plate" tool: click 3 points on the real agar rim
+     (where the plaques are), then type that circle's DIAMETER in mm.
+   * IMPORTANT: the "90 mm / 100 mm" printed on the dish box is the
+     LID diameter. Your plaques sit on the smaller AGAR base (often
+     ~85 mm). Measure and enter the AGAR diameter, not the lid - using
+     the lid size makes every measurement wrong by the same factor.
+   * No ruler needed, but a ruler laid in the plane of the agar is an
+     even more direct way to set the scale, and a good one-time check.
+
+  Why setup doesn't matter: moving the camera closer/farther or
+  zooming only changes how many PIXELS the dish spans; because you
+  tell the tool the dish's real mm, it computes the correct mm/pixel
+  automatically for that photo. Just shoot straight-on (a tilted,
+  elliptical dish biases the scale - the app warns you when it does).
+
+  VALIDATE ON YOUR OWN PLATES: any accuracy numbers in the docs were
+  measured on one specific setup. For your own paper, validate on a
+  few of your plates (Validate tab + your hand-corrected labels)
+  before reporting counts or sizes.
 
 
 GOOD TO KNOW

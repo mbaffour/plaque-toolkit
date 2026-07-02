@@ -85,6 +85,21 @@ sharp clear zone.
 > **(b)** the sharp, fully clear zone only. Do not leave it ambiguous — the two differ, and the
 > convex-hull measure is the former.
 
+**Software provenance and modifications (state this).** Measurements were made with *Plaque Toolkit*
+(nicknamed *"Frankenstein's Plaque Lab"* because it assembles several components into one interface),
+built on the open-source, peer-reviewed **Plaque Size Tool** (PST; Trofimova & Jaschke, 2021;
+doi:10.1016/j.virol.2021.05.011). PST's adaptive-local thresholding detector is used **unchanged** in
+the **Published** mode. We combined and extended it as follows: **(i)** a maintained **Current** mode
+with bug-fixes to dish detection and the pixel→millimetre calibration; **(ii)** a **Precise** mode
+that **fuses** PST detections with a **PlaqSeg** YOLO-segmentation model (from the OnePetri lineage)
+and an optional **ResNet-18** classifier gate that suppresses non-plaque artefacts; **(iii)** an
+interactive **review/correction editor** (add, erase, re-trace, and split touching plaques by
+watershed) so every reported plaque is verified or corrected **by eye**; and **(iv)** spatial
+calibration through a **Set-plate** tool (three points on the agar rim plus its measured diameter) or
+an in-frame ruler. Reported plaques are numbered 1..N from the top of the image. `[STATE the exact
+version/commit and which detection mode you used, and apply the same mode to every compared group.]`
+See [CREDITS_AND_LINEAGE.md](CREDITS_AND_LINEAGE.md) for the full component lineage and licences.
+
 ---
 
 ## 4. Validation performed on our setup

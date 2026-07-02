@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
 
 import pandas as pd
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut, QAction, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
@@ -30,16 +30,30 @@ IMG_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 MODES = [
     ("Published (validated)", "published",
      "The peer-reviewed Trofimova & Jaschke (2021) algorithm, unchanged. "
-     "Cite this mode for published results."),
+     "Cite this mode for published results.  (~a few seconds)"),
     ("Current (corrected)", "current",
      "The maintained engine with bug-fixes and improved dish/calibration handling. "
-     "Recommended default for routine measuring."),
+     "Recommended default for routine measuring.  (~a few seconds)"),
     ("Sensitive (tiny plaques)", "sensitive",
      "Lowers the size gates to catch sub-0.4 mm plaques. Detects many more, but adds "
-     "false positives — verify by eye. In-house, not independently validated."),
+     "false positives — verify by eye. In-house, not independently validated.  (~a few seconds)"),
     ("Precise (PST + PlaqSeg)", "precise",
      "Best accuracy: fuses the classic detector with a PlaqSeg deep-learning model. "
-     "Beta, slower (runs a second environment). In-house, not independently validated."),
+     "In-house, not independently validated.  (~1 min on first run, then faster)"),
+]
+
+# Playful, on-brand progress messages ("Frankenstein's Plaque Lab") cycled while detecting.
+_BUSY_PRECISE = [
+    "⚡ Waking the monster… (first run ~1 min)",
+    "🧵 Stitching PST + PlaqSeg together…",
+    "🔬 Hunting every clearing…",
+    "📏 Measuring the plaques…",
+    "🧟 Almost alive…",
+]
+_BUSY_STD = [
+    "🔬 Scanning the plate…",
+    "🕳️ Finding clearings…",
+    "📏 Measuring the plaques…",
 ]
 
 
@@ -76,12 +90,23 @@ class MeasureTab(QWidget):
         self.editor = None
         self.busy = False
         self.setAcceptDrops(True)
+        # rotating, on-brand progress messages while a detection runs
+        self._busy_timer = QTimer(self); self._busy_timer.setInterval(2200)
+        self._busy_timer.timeout.connect(self._tick_busy)
+        self._busy_msgs = []; self._busy_i = 0
 
         # ---- parameters row ------------------------------------------------ #
         self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
         self.plate.setSuffix(" mm"); self.plate.setDecimals(1)
         self.plate.setToolTip("Diameter of the Petri dish, in millimetres. Used to convert "
-                              "pixels to mm via the detected dish. Set to 0 to report pixels only.")
+                              "pixels to mm via the detected dish. Set to 0 to report pixels only.\n"
+                              "Tip: measure the AGAR base (often ~85 mm), not the printed lid size.")
+        self.plate_85 = QPushButton("85 mm")
+        self.plate_85.setToolTip("Quick-set 85 mm — a common agar-base diameter.")
+        self.plate_85.clicked.connect(lambda: self.plate.setValue(85))
+        self.plate_100 = QPushButton("100 mm")
+        self.plate_100.setToolTip("Quick-set 100 mm — the nominal lid diameter.")
+        self.plate_100.clicked.connect(lambda: self.plate.setValue(100))
 
         self.mode = QComboBox()
         for label, _key, _help in MODES:
@@ -93,6 +118,8 @@ class MeasureTab(QWidget):
         # default to the most precise engine when it's available, else Current (corrected)
         self._def_mode = 3 if _precise_ok else 1
         self.mode.setCurrentIndex(self._def_mode)
+        # flag the recommended engine right in the dropdown (label stays clean for status text)
+        self.mode.setItemText(self._def_mode, MODES[self._def_mode][0] + "   ★ recommended")
         self.mode.setToolTip("Detection engine / mode. Hover an option or read the line below.")
         self.mode.currentIndexChanged.connect(self._mode_changed)
 
@@ -123,6 +150,7 @@ class MeasureTab(QWidget):
         params_box = QGroupBox("Parameters")
         pl = QHBoxLayout(params_box); pl.setSpacing(10)
         pl.addWidget(QLabel("Dish")); pl.addWidget(self.plate)
+        pl.addWidget(self.plate_85); pl.addWidget(self.plate_100)
         sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setStyleSheet("color:#d6dbe5")
         pl.addSpacing(4); pl.addWidget(sep); pl.addSpacing(4)
         pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
@@ -145,11 +173,17 @@ class MeasureTab(QWidget):
         self.canvas_layout = QVBoxLayout(self.canvas_holder)
         self.canvas_layout.setContentsMargins(6, 6, 6, 6)
         self.placeholder = QLabel(
-            "Drop a plaque image here, or click  Open image…\n\n"
-            "TIFF · JPEG · PNG · iPhone HEIC supported")
+            "🧫\n\n"
+            "Drag a plaque photo here\n"
+            "— or click  “Open image…”  above —\n\n"
+            "TIFF · JPEG · PNG · iPhone HEIC\n\n"
+            "Then set your dish size and pick an engine. Numbering runs 1→N from the top.")
         self.placeholder.setObjectName("Placeholder")
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setMinimumHeight(360)
+        self.placeholder.setStyleSheet(
+            "border:2px dashed #c2c9d6; border-radius:14px; color:#6b7484; "
+            "font-size:15px; background:#fbfcfe;")
         self.canvas_layout.addWidget(self.placeholder)
 
         # ---- right panel: summary card + table ----------------------------- #
@@ -160,6 +194,7 @@ class MeasureTab(QWidget):
         self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
+        self.table.sortByColumn(0, Qt.AscendingOrder)   # INDEX ascending -> #1 (topmost) at the top
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableView.SelectRows)
@@ -215,7 +250,17 @@ class MeasureTab(QWidget):
         self._metrics["count"].setText("—" if n is None else str(n))
         self._metrics["median"].setText("—" if median is None else f"{median:.2f}")
         self._metrics["mean"].setText("—" if mean is None else f"{mean:.2f}")
-        self._metrics["cal"].setText("—" if not cal else (f"{cal:.4f} mm/px"))
+        cal_lbl = self._metrics["cal"]
+        if cal:
+            cal_lbl.setText(f"{cal:.4f} mm/px  ✓")
+            cal_lbl.setStyleSheet(f"font-size:17px; font-weight:700; color:{style.LIGHT['ok']};")
+            cal_lbl.setToolTip("Scale is set — sizes below are in millimetres.")
+        else:
+            cal_lbl.setText("Not set")
+            cal_lbl.setStyleSheet(f"font-size:17px; font-weight:700; color:{style.LIGHT['warn']};")
+            cal_lbl.setToolTip("No mm scale yet — sizes are in pixels only. In the editor use "
+                               "“Set plate” (click 3 points on the agar rim, then type its diameter), "
+                               "or set the Dish size before detecting.")
         if flag:
             self.flag_label.setText(flag)
             self.flag_label.setStyleSheet(
@@ -270,13 +315,37 @@ class MeasureTab(QWidget):
         self.busy = on
         self.progress.setVisible(on)
         self.busy_label.setText(message if on else "")
+        if not on:
+            self._busy_timer.stop()
         for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,
-                  self.watershed):
+                  self.watershed, self.plate_85, self.plate_100):
             w.setEnabled(not on)
         if not on:
             self.save_btn.setEnabled(self.editor is not None)
             self.redetect_btn.setEnabled(self.image_path is not None)
             self._mode_changed(self.mode.currentIndex())
+
+    def _start_busy(self, msgs):
+        """Enter the busy state and cycle on-brand progress messages."""
+        self._busy_msgs = list(msgs); self._busy_i = 0
+        self._set_busy(True, self._busy_msgs[0])
+        try:
+            self.placeholder.setText(self._busy_msgs[0])
+        except (RuntimeError, AttributeError):
+            pass
+        self._busy_timer.start()
+
+    def _tick_busy(self):
+        if not self.busy or not self._busy_msgs:
+            return
+        self._busy_i = (self._busy_i + 1) % len(self._busy_msgs)
+        msg = self._busy_msgs[self._busy_i]
+        self.busy_label.setText(msg)
+        try:
+            if self.placeholder is not None and self.placeholder.parent() is not None:
+                self.placeholder.setText(msg)
+        except (RuntimeError, AttributeError):
+            pass
 
     def _detect(self):
         key = self._mode_key()
@@ -284,9 +353,8 @@ class MeasureTab(QWidget):
         if key == "precise":
             self._detect_precise(name)
             return
-        self._set_busy(True, "Detecting…")
+        self._start_busy(_BUSY_STD)
         self.window().statusBar().showMessage(f"Detecting ({MODES[self.mode.currentIndex()][0]})…")
-        self.placeholder.setText("Detecting…")
         kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked())
         if key == "published":
             kw["published"] = True
@@ -309,9 +377,8 @@ class MeasureTab(QWidget):
                 "\n\nFalling back is easy — pick Published, Current or Sensitive above.")
             self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
             return
-        self._set_busy(True, "Running Precise (PST + PlaqSeg)…")
+        self._start_busy(_BUSY_PRECISE)
         self.window().statusBar().showMessage("Precise pipeline running (this can take a minute)…")
-        self.placeholder.setText("Running the Precise pipeline (PST + PlaqSeg)…\nThis can take a minute.")
         w = Worker(engine_api.detect_precise, self.image_path,
                    plate_mm=self.plate.value())
         w.signals.finished.connect(self.on_precise_detected)
@@ -595,15 +662,19 @@ class AboutTab(QWidget):
                 ic.setPixmap(pm.scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title_box = QVBoxLayout(); title_box.setSpacing(0)
         t = QLabel("Plaque Toolkit"); t.setStyleSheet("font-size:22px; font-weight:700;")
+        nick = QLabel("“Frankenstein’s Plaque Lab”")
+        nick.setStyleSheet("font-style:italic; color:#6b7484; font-size:13px;")
         v = QLabel(f"version {__version__}"); v.setObjectName("ModeHelp")
-        title_box.addWidget(t); title_box.addWidget(v)
+        title_box.addWidget(t); title_box.addWidget(nick); title_box.addWidget(v)
         head.addWidget(ic); head.addSpacing(12); head.addLayout(title_box); head.addStretch()
         lay.addLayout(head)
 
         body = QLabel(
             "<p>A unified front-end over the validated <b>Plaque Size Tool</b> for measuring "
             "bacteriophage plaque size and turbidity, with batch cross-phage optical-density "
-            "comparison, count/PFU and figures.</p>"
+            "comparison, count/PFU and figures. Nicknamed <b>“Frankenstein’s Plaque Lab”</b> "
+            "because it stitches several tools into one — the PST detector, a PlaqSeg "
+            "deep-learning model, a manual-correction editor, and mm calibration.</p>"
             "<p><b>Measure</b> — open an image, auto-detect, edit by hand (left-drag to add, "
             "Trace-click to auto-trace, right-click to remove), then save size + turbidity.<br>"
             "<b>Compare turbidity</b> — point at a folder of phages (with optional blank / "
@@ -906,7 +977,7 @@ class MainWindow(QMainWindow):
                 ic.setPixmap(pm.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         tbox = QVBoxLayout(); tbox.setSpacing(0)
         title = QLabel("Plaque Toolkit"); title.setObjectName("HeaderTitle")
-        sub = QLabel("Measure plaque size & turbidity · compare phages")
+        sub = QLabel("“Frankenstein’s Plaque Lab” · measure plaque size & turbidity")
         sub.setObjectName("HeaderSubtitle")
         tbox.addWidget(title); tbox.addWidget(sub)
         hl.addWidget(ic); hl.addSpacing(12); hl.addLayout(tbox); hl.addStretch()

@@ -333,6 +333,7 @@ class PlaqueCanvas(QWidget):
         self._plaques = []
         for p in det.get("plaques", []):
             q = dict(p); q["_uid"] = self._next_uid(); self._plaques.append(q)
+        self._reorder()          # number 1..N top-to-bottom from the very first render
         self.tool = TOOL_SELECT
         self.selected = set()
         self._undo = []
@@ -443,17 +444,25 @@ class PlaqueCanvas(QWidget):
         col_btn = QPushButton("Colour"); col_btn.setToolTip("Pick the scale-bar colour.")
         col_btn.clicked.connect(self._pick_scalebar_color); flow.addWidget(col_btn)
 
-        exp = QPushButton("⬇  Export ▾"); exp.setObjectName("Primary")
-        exp.setToolTip("Download your data and figures (CSV, annotated figure, side-by-side, labels).")
-        menu = QMenu(exp)
+        exp = QPushButton("⬇  Export all"); exp.setObjectName("Primary")
+        exp.setToolTip("One click: save the data table (CSV) + the annotated figure to the "
+                       "'out' folder next to your image, then open that folder.")
+        exp.clicked.connect(self.export_all)
+        flow.addWidget(exp)
+
+        more = QPushButton("More ▾")
+        more.setToolTip("More export options — individual files.")
+        menu = QMenu(more)
+        menu.addAction("Everything (CSV + annotated figure)", self.export_all)
+        menu.addSeparator()
         menu.addAction("Data table (CSV)…", self.export_csv)
         menu.addAction("Annotated figure (PNG)…", self.export_figure)
         menu.addAction("Input vs annotated (side-by-side)…", self.export_comparison)
         menu.addAction("Original input image…", self.export_input)
         menu.addAction("Cropped plate for Fiji (calibrated TIFF)…", self.export_plate_crop)
         menu.addAction("Ground-truth labels…", self.export_groundtruth)
-        exp.setMenu(menu)
-        flow.addWidget(exp)
+        more.setMenu(menu)
+        flow.addWidget(more)
 
         self._btns[TOOL_SELECT].setChecked(True)
         return bar
@@ -723,7 +732,11 @@ class PlaqueCanvas(QWidget):
             item.setZValue(10)
             self.scene.addItem(item); self._overlay.append(item)
             t = QGraphicsSimpleTextItem(str(i + 1))
-            t.setBrush(QColor(255, 235, 0))
+            # white glyph with a thin dark outline: readable on any background and
+            # colour-blind-safe (was pure yellow, which washed out on pale plates)
+            t.setBrush(QColor(255, 255, 255))
+            _num_pen = QPen(QColor(0, 0, 0)); _num_pen.setWidthF(0.6); _num_pen.setCosmetic(True)
+            t.setPen(_num_pen)
             f = QFont(); f.setPointSize(8); f.setBold(True); t.setFont(f)
             t.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             t.setPos(p["center"][0], p["center"][1]); t.setZValue(11)
@@ -818,7 +831,15 @@ class PlaqueCanvas(QWidget):
         if len(self._undo) > 80:
             self._undo.pop(0)
 
+    def _reorder(self):
+        # Number plaques 1..N top-to-bottom, then left-to-right, so the on-canvas
+        # labels, the results table INDEX, the CSV, the annotated figure and the
+        # ground-truth export all read in the same human-obvious order with #1 at
+        # the top of the image. Selection is by _uid, so it survives reordering.
+        self._plaques.sort(key=lambda p: (p["center"][1], p["center"][0]))
+
     def _changed(self, msg=None):
+        self._reorder()
         self._render(); self._update_hint(msg)
         if self._on_change:
             self._on_change()
@@ -896,6 +917,37 @@ class PlaqueCanvas(QWidget):
                 QMessageBox.information(self, title, text)
         except Exception:
             pass
+
+    def _open_folder(self, path):
+        """Reveal the output folder in the OS file manager (skipped when headless)."""
+        try:
+            inst = QApplication.instance()
+            if inst is not None and inst.platformName() == "offscreen":
+                return
+            import sys
+            if sys.platform.startswith("win"):
+                os.startfile(path)                       # noqa: Windows-only
+            elif sys.platform == "darwin":
+                import subprocess; subprocess.Popen(["open", path])
+            else:
+                import subprocess; subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+
+    def export_all(self):
+        """One click: write the CSV table + annotated figure to the out folder and open it."""
+        name = os.path.splitext(os.path.basename(self.image_path))[0]
+        os.makedirs(self.out_dir, exist_ok=True)
+        csv_path = os.path.join(self.out_dir, f"data_{name}.csv")
+        df = engine_api.measure_table(self._plaques, self.orig_bgr, self.ppm, self.lawn_gray)
+        df.to_csv(csv_path, index=False)
+        fig_path = os.path.join(self.out_dir, f"figure_{name}.png")
+        pgui.save_figure(self._plaques, self.orig_bgr, fig_path, self.ppm, plate=self.plate,
+                         scalebar_mm=self._scalebar_mm, scalebar_anchor=self._scalebar_anchor,
+                         scalebar_color=self._sb_bgr())
+        self._update_hint("✓ exported %d rows + annotated figure → 'out' folder" % len(df))
+        self._open_folder(self.out_dir)
+        return self.out_dir
 
     def export_csv(self, path=None):
         """Export the per-plaque measurement table (the same rows shown on the right) to CSV."""
