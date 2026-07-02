@@ -288,11 +288,13 @@ class MeasureTab(QWidget):
         e.ignore()
 
     def dropEvent(self, e):
+        if self.busy:
+            e.ignore(); return
         for u in e.mimeData().urls():
             p = u.toLocalFile()
             if p.lower().endswith(IMG_EXTS):
                 self.image_path = p
-                self._detect()
+                self._detect()               # loads/replaces the current image
                 e.acceptProposedAction()
                 return
         e.ignore()
@@ -719,8 +721,9 @@ class BatchTab(QWidget):
         super().__init__()
         self.pool = pool
         self.last_out = None
+        self.setAcceptDrops(True)   # drop a folder anywhere on this tab to set it (see dropEvent)
 
-        self.folder = QLineEdit(); self.folder.setPlaceholderText("Folder of plate images…")
+        self.folder = QLineEdit(); self.folder.setPlaceholderText("Folder of plate images… (or drop one here)")
         browse = QPushButton("Browse…"); browse.clicked.connect(self._pick)
         self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
         self.plate.setSuffix(" mm")
@@ -768,6 +771,25 @@ class BatchTab(QWidget):
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(card, 1)
+
+    # -- drag and drop: drop a folder anywhere on the tab to set the batch folder -- #
+    def dragEnterEvent(self, e):
+        md = e.mimeData()
+        if md.hasUrls():
+            for u in md.urls():
+                if os.path.isdir(u.toLocalFile()):
+                    e.acceptProposedAction(); return
+        e.ignore()
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            p = u.toLocalFile()
+            if os.path.isdir(p):
+                self.folder.setText(p)
+                self.status.setText(f"Folder set: {p}   —   click “Run batch”.")
+                e.acceptProposedAction()
+                return
+        e.ignore()
 
     def _pick(self):
         p = QFileDialog.getExistingDirectory(self, "Folder of plate images")

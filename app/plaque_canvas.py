@@ -155,6 +155,10 @@ class _View(QGraphicsView):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setBackgroundBrush(QColor("#0e1216"))
+        # QGraphicsView grabs drops by default, which blocked drag-and-drop once an image was
+        # loaded (the editor covers the tab). Refuse drops here so they fall through to the tab.
+        self.setAcceptDrops(False)
+        self.viewport().setAcceptDrops(False)
         self._panning = False
         self._pan_last = None
         self._press_pos = None
