@@ -410,12 +410,10 @@ class PlaqueCanvas(QWidget):
                 "Drag a tight box; the detector re-scans inside it and adds plaques it finds.")
         toolbtn(TOOL_ERASE, "Erase",
                 "Click a detection to remove it (or right-click anything, in any tool).")
-        toolbtn(TOOL_DISH, "Set dish",
-                "Fix the plate outline when auto-detection grabs the wrong thing: click 3 points "
-                "around the dish rim and the mm scale re-calibrates to your circle.")
-        toolbtn(TOOL_SCALE, "Set scale (ruler)",
-                "Most accurate calibration: click two points a known distance apart (e.g. two "
-                "ruler marks), type the real mm, and the mm/px is set directly — no dish needed.")
+        toolbtn(TOOL_DISH, "Set plate",
+                "Calibrate: click 3 points on the real plate/agar rim, then type its diameter in mm "
+                "(e.g. 85 for your agar area). The mm scale is set from your circle — fixes wrong "
+                "auto-detection and gives true sizes.")
 
         def actbtn(text, slot, tip):
             b = QPushButton(text); b.setToolTip(tip); b.clicked.connect(slot)
@@ -561,7 +559,15 @@ class PlaqueCanvas(QWidget):
         if res is None:
             self._update_hint("Those 3 points line up — click 3 spread-out rim points instead.")
             return
-        self._apply_dish(*res)
+        cx, cy, r = res
+        mm, ok = QInputDialog.getDouble(
+            self, "Plate diameter",
+            "Diameter of the rim you just drew (mm)\n(e.g. your agar / plaque area ≈ 85 mm):",
+            float(self.plate_mm or 90.0), 0.1, 1000.0, 2)
+        if not ok or mm <= 0:
+            self._update_hint("dish calibration cancelled")
+            return
+        self._apply_dish(cx, cy, r, diam_mm=mm)
 
     def _scale_click(self, scene_pt):
         """Collect two points a known distance apart, then set mm/px directly from the ruler."""
@@ -606,10 +612,13 @@ class PlaqueCanvas(QWidget):
         if self._on_change:
             self._on_change()
 
-    def _apply_dish(self, cx, cy, r):
-        """Set the dish to a manual circle and recompute the mm/px calibration."""
+    def _apply_dish(self, cx, cy, r, diam_mm=None):
+        """Set the dish to a manual circle and recompute mm/px. diam_mm = the real
+        diameter (mm) of the rim just drawn; when given it becomes the working plate size."""
         diam = 2.0 * r
         self.plate = {"center": (cx, cy), "radius": r, "diam_px": diam, "axis_ratio": 1.0}
+        if diam_mm and diam_mm > 0:
+            self.plate_mm = float(diam_mm)
         if self.plate_mm and diam > 0:
             self.ppm = float(self.plate_mm) / diam
         # propagate to the shared detection dict so the table + summary card recompute
