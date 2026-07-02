@@ -100,6 +100,7 @@ TOOL_ADD = "add"
 TOOL_REGION = "region"
 TOOL_ERASE = "erase"
 TOOL_DISH = "dish"
+TOOL_SCALE = "scale"
 
 
 def _circle_from_3(p1, p2, p3):
@@ -218,6 +219,8 @@ class _View(QGraphicsView):
             self._temp.setRect(QRectF(self._press_scene, self._press_scene)); return
         if tool == TOOL_DISH:
             self.owner._dish_click(self._press_scene); return
+        if tool == TOOL_SCALE:
+            self.owner._scale_click(self._press_scene); return
 
     def mouseMoveEvent(self, e):
         pos = _pt(e)
@@ -324,6 +327,8 @@ class PlaqueCanvas(QWidget):
         self._dish_pts = []          # rim points collected by the "Set dish" tool
         self._dish_markers = []      # their on-screen dots
         self._plate_items = []       # the drawn dish circle + label (so we can redraw)
+        self._scale_pts = []         # two points for the "Calibrate from ruler" tool
+        self._scale_markers = []     # their on-screen dots/line
         self._uid = 0
         self._plaques = []
         for p in det.get("plaques", []):
@@ -408,6 +413,9 @@ class PlaqueCanvas(QWidget):
         toolbtn(TOOL_DISH, "Set dish",
                 "Fix the plate outline when auto-detection grabs the wrong thing: click 3 points "
                 "around the dish rim and the mm scale re-calibrates to your circle.")
+        toolbtn(TOOL_SCALE, "Set scale (ruler)",
+                "Most accurate calibration: click two points a known distance apart (e.g. two "
+                "ruler marks), type the real mm, and the mm/px is set directly — no dish needed.")
 
         def actbtn(text, slot, tip):
             b = QPushButton(text); b.setToolTip(tip); b.clicked.connect(slot)
@@ -452,21 +460,28 @@ class PlaqueCanvas(QWidget):
         self._btns[TOOL_SELECT].setChecked(True)
         return bar
 
+    def _clear_calib_markers(self):
+        for mk in list(self._dish_markers) + list(self._scale_markers):
+            try:
+                self.scene.removeItem(mk)
+            except Exception:
+                pass
+        self._dish_pts = []; self._dish_markers = []
+        self._scale_pts = []; self._scale_markers = []
+
     def _set_tool(self, key):
         self.tool = key
-        # leaving the dish tool: discard any half-collected rim points
-        if key != TOOL_DISH and getattr(self, "_dish_pts", None):
-            for mk in self._dish_markers:
-                try:
-                    self.scene.removeItem(mk)
-                except Exception:
-                    pass
-            self._dish_pts = []; self._dish_markers = []
+        # leaving a calibration tool: discard any half-collected points/markers
+        if key not in (TOOL_DISH, TOOL_SCALE):
+            self._clear_calib_markers()
         if key in self._btns:
             self._btns[key].setChecked(True)
         if key == TOOL_DISH:
             self._update_hint("Set dish: click 3 points around the dish rim; the mm scale "
                               "re-calibrates to your circle.")
+        elif key == TOOL_SCALE:
+            self._update_hint("Set scale: click TWO points a known distance apart (e.g. two ruler "
+                              "marks); you'll type the real mm and the scale is set directly.")
         else:
             self._update_hint()
 
@@ -547,6 +562,49 @@ class PlaqueCanvas(QWidget):
             self._update_hint("Those 3 points line up — click 3 spread-out rim points instead.")
             return
         self._apply_dish(*res)
+
+    def _scale_click(self, scene_pt):
+        """Collect two points a known distance apart, then set mm/px directly from the ruler."""
+        self._scale_pts.append((scene_pt.x(), scene_pt.y()))
+        m = QGraphicsEllipseItem(scene_pt.x() - 7, scene_pt.y() - 7, 14, 14)
+        mp = QPen(QColor(0, 220, 120)); mp.setCosmetic(True); mp.setWidth(2)
+        m.setPen(mp); m.setZValue(9); self.scene.addItem(m); self._scale_markers.append(m)
+        if len(self._scale_pts) < 2:
+            self._update_hint("Set scale: click the SECOND point a known distance away (a ruler mark).")
+            return
+        (x0, y0), (x1, y1) = self._scale_pts[:2]
+        ln = QGraphicsLineItem(x0, y0, x1, y1)
+        lp = QPen(QColor(0, 220, 120)); lp.setCosmetic(True); lp.setWidth(2)
+        ln.setPen(lp); ln.setZValue(9); self.scene.addItem(ln); self._scale_markers.append(ln)
+        px = math.hypot(x1 - x0, y1 - y0)
+        self._scale_pts = []
+        if px < 2:
+            self._clear_calib_markers()
+            self._update_hint("Those two points are basically the same — try again.")
+            return
+        mm, ok = QInputDialog.getDouble(self, "Calibrate from ruler",
+                                        "Real distance between the two points (mm):",
+                                        10.0, 0.001, 1000.0, 3)
+        self._clear_calib_markers()
+        if not ok or mm <= 0:
+            self._update_hint("scale calibration cancelled"); return
+        self._apply_ruler_scale(mm / px)
+
+    def _apply_ruler_scale(self, ppm):
+        """Set mm/px directly from a ruler measurement (independent of dish detection)."""
+        self.ppm = float(ppm)
+        try:
+            self.det["pxl_per_mm"] = self.ppm
+        except Exception:
+            pass
+        # keep plate_mm consistent so the Set-dish tool still works afterward
+        if self.plate and self.plate.get("diam_px"):
+            self.plate_mm = self.ppm * self.plate["diam_px"]
+        self._draw_scalebar()
+        self._update_hint("scale set from ruler: %.4f mm/px  (%.2f px/mm)"
+                          % (self.ppm, (1.0 / self.ppm) if self.ppm else 0.0))
+        if self._on_change:
+            self._on_change()
 
     def _apply_dish(self, cx, cy, r):
         """Set the dish to a manual circle and recompute the mm/px calibration."""
