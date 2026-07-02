@@ -38,10 +38,12 @@ MAKE_DMG=1
 ENV="${PLAQUE_ENV:-plaqueapp}"
 RUN=()
 if [[ -n "${PLAQUE_PY:-}" && -x "${PLAQUE_PY}" ]]; then
-  RUN=("$PLAQUE_PY" -m)
+  # Module name is "PyInstaller" (capital P). Python's -m lookup is case-sensitive even where
+  # the filesystem is not, so "python -m pyinstaller" fails ("No module named pyinstaller").
+  RUN=("$PLAQUE_PY" -m PyInstaller)
 else
   for c in conda mamba micromamba; do
-    if command -v "$c" >/dev/null 2>&1; then RUN=("$c" run -n "$ENV"); break; fi
+    if command -v "$c" >/dev/null 2>&1; then RUN=("$c" run -n "$ENV" pyinstaller); break; fi
   done
 fi
 if [[ ${#RUN[@]} -eq 0 ]]; then
@@ -68,7 +70,7 @@ fi
 
 # --- 2. PyInstaller build ---------------------------------------------------
 echo "Building the .app with PyInstaller ..."
-"${RUN[@]}" pyinstaller --noconfirm build/plaque_app_macos.spec
+"${RUN[@]}" --noconfirm build/plaque_app_macos.spec
 
 APP="dist/Plaque Toolkit.app"
 if [[ ! -d "$APP" ]]; then
