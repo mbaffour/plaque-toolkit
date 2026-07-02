@@ -1,8 +1,10 @@
 name: Build macOS app
 
-# Build the macOS "Plaque Toolkit.app" (+ .dmg) on real Apple runners, since PyInstaller
-# cannot cross-compile from Windows. Runs on demand (Actions tab -> "Run workflow") or when
-# you push a version tag like v1.0.0. Download the .dmg from the run's Artifacts section.
+# Build the macOS "Plaque Toolkit.app" (+ .dmg) on a real Apple-Silicon runner, since PyInstaller
+# cannot cross-compile from Windows. Apple Silicon only — it covers every Mac since late 2020, and
+# GitHub's free Intel (macos-13) runners are being deprecated and queue for hours, so Intel is not
+# built here (see the matrix note below to re-add it). Runs on demand (Actions tab -> "Run
+# workflow") or on a version tag like v1.0.0. Download the .dmg from the run's Artifacts section.
 on:
   workflow_dispatch:
   push:
@@ -17,8 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13   # Intel Macs
-            arch: x86_64
+          # Apple Silicon only. To also build Intel later, uncomment the macos-13 entry
+          # (note: GitHub's free Intel runners queue unreliably and are being retired):
+          #   - runner: macos-13   # Intel x86_64
+          #     arch: x86_64
           - runner: macos-14   # Apple Silicon (M-series)
             arch: arm64
     steps:
