@@ -953,6 +953,18 @@ DIAMETER_MM = 2 * sqrt(AREA_PXL * mm_per_px^2 / pi)</pre>
   </ul>
 
   <div class="warn">&#9888;&#65039; If no dish is detected (whole-dish not in frame, or the background color is similar to the dish rim), the app falls back to pixel-only output and warns. Make sure the entire dish rim is visible.</div>
+
+  <h3>Set plate &mdash; fix the calibration by hand (recommended for size work)</h3>
+  <p>When auto-detection grabs the wrong boundary, use the <strong>Set plate</strong> tool in the editor toolbar: it's the one clean way to calibrate.</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Step</th><th>Do this</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Click the <strong>Set plate</strong> button.</td></tr>
+      <tr><td>2</td><td>Click <strong>3 points on the real rim</strong> &mdash; the edge of the boundary whose size you know.</td></tr>
+      <tr><td>3</td><td>Type that boundary's <strong>diameter in mm</strong>. Every size recalibrates instantly.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="warn">&#9888;&#65039; <strong>Calibrate to the agar, not the lid.</strong> The vendor's &ldquo;90&nbsp;mm / 100&nbsp;mm&rdquo; is the <em>lid</em> diameter, but plaques sit on the <strong>~85&nbsp;mm agar base</strong>. Click the <em>agar</em> rim (where the plaques are) and type its real diameter (e.g. 85). Entering the lid size, or letting auto-detect trace the outer rim, biases every size by the same factor. A ruler‑validated setup here read <strong>0.040&nbsp;mm/px</strong> (&plusmn;1% across 6 photos).</div>
 </section>
 
 <!-- TURBIDITY -->
