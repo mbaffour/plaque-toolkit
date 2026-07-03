@@ -110,6 +110,14 @@ inherit any published validation, and must be validated on your own plates. Repo
 validation — the numbers below are yours to fill in from
 [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md).
 
+**"Validated" here means _your own local validation_, not an independent / peer-reviewed stamp.**
+Precise can reach high detection precision on a given setup — on the developers' own plates it scored
+**~0.95 precision** (with lower recall on faint plaques) — but that figure is *theirs*, tied to a
+specific camera / lighting / lawn, and does **not** transfer. So do **not** write that Precise "is a
+validated method"; write that *you validated it locally* and report the numbers below. For a claim
+you can cite **without** doing your own validation, use the **Published** engine (Trofimova &
+Jaschke, 2021).
+
 > Detection was validated on `[N]` plates from this imaging setup, spanning
 > `[sparse / dense / textured lawns]`, against a blinded, hand-labelled ground truth
 > `[built in the program's editor and/or cross-checked in Fiji/ImageJ]`. Against that ground

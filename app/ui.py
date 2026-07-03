@@ -38,8 +38,9 @@ MODES = [
      "Lowers the size gates to catch sub-0.4 mm plaques. Detects many more, but adds "
      "false positives — verify by eye. In-house, not independently validated.  (~a few seconds)"),
     ("Precise (PST + PlaqSeg)", "precise",
-     "Best accuracy: fuses the classic detector with a PlaqSeg deep-learning model. "
-     "In-house, not independently validated.  (~1 min on first run, then faster)"),
+     "Best accuracy: fuses the classic detector with a PlaqSeg deep-learning model. In-house "
+     "(not independently/peer-reviewed); locally validated (~0.95 precision on our test plates) — "
+     "validate on yours before publishing.  (~1 min on first run, then faster)"),
 ]
 
 # Playful, on-brand progress messages ("Frankenstein's Plaque Lab") cycled while detecting.
@@ -705,7 +706,9 @@ class AboutTab(QWidget):
             "<li><b>Sensitive</b> — lowers the size gates to catch tiny plaques; more false positives "
             "(verify by eye).</li>"
             "<li><b>Precise (PST + PlaqSeg)</b> — fuses the classic detector with a deep-learning model; "
-            "best on dense plates. ~1 min on first run. In-house, not independently validated.</li></ul>"
+            "best on dense plates. ~1 min on first run. In-house (not independently/peer-reviewed); "
+            "<b>locally validated</b> (~0.95 precision on our test plates) — report your own validation "
+            "for publication.</li></ul>"
 
             "<p><b>Editor tools &amp; buttons</b> (once an image is open)</p><ul>"
             "<li><b>Add</b> — click a plaque to auto-trace it, or drag to draw a circle.</li>"
@@ -734,8 +737,10 @@ class AboutTab(QWidget):
             "measurements.</p>"
 
             "<p style='color:#b45309'><b>Honest note.</b> The <b>Sensitive</b> and <b>Precise</b> modes are "
-            "in-house extensions, <i>not</i> independently validated — always verify their detections by eye "
-            "before reporting.</p>"
+            "in-house extensions — <i>not</i> independently / peer-reviewed. <b>Precise</b> is "
+            "<i>locally</i> validated (high precision on our test plates), which is not the same as an "
+            "independent stamp: still verify by eye and report your own validation before publishing. "
+            "For citable numbers use <b>Published (validated)</b>.</p>"
 
             "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide, interactive guide, "
             "validation, how it was built).</p>")
