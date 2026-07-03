@@ -107,6 +107,8 @@ class MeasureTab(QWidget):
         self.plate_100 = QPushButton("100 mm")
         self.plate_100.setToolTip("Quick-set 100 mm — the nominal lid diameter.")
         self.plate_100.clicked.connect(lambda: self.plate.setValue(100))
+        # changing the dish size (typing OR the 85/100 buttons) live-re-scales the current image
+        self.plate.valueChanged.connect(self._on_dish_value_changed)
 
         self.mode = QComboBox()
         for label, _key, _help in MODES:
@@ -277,6 +279,14 @@ class MeasureTab(QWidget):
         self.mode_help.setText(MODES[idx][2])
         key = MODES[idx][1]
         self.watershed.setEnabled(key not in ("published",))
+
+    def _on_dish_value_changed(self, val):
+        """Live-recalibrate the current image when the dish size changes (typing or the 85/100
+        quick-picks): re-scales the already-detected dish, so all mm sizes + the calibration
+        update immediately. Before an image is loaded it's a no-op (the value applies at detect)."""
+        if self.busy or self.editor is None:
+            return
+        self.editor.set_plate_mm(val)
 
     # -- drag and drop ------------------------------------------------------ #
     def dragEnterEvent(self, e):

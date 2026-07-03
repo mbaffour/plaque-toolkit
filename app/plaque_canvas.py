@@ -646,6 +646,31 @@ class PlaqueCanvas(QWidget):
         if self._on_change:
             self._on_change()
 
+    def set_plate_mm(self, mm):
+        """Live re-scale the CURRENT result to a new dish diameter (mm), reusing the already-
+        detected dish's pixel diameter — no re-detection. Called when the Dish box or the
+        85/100 quick-picks change. Returns False if no dish was detected. mm<=0 => pixels only."""
+        diam_px = (self.plate or {}).get("diam_px")
+        if not diam_px:
+            return False
+        mm = float(mm)
+        if mm <= 0:
+            self.plate_mm = 0.0
+            self.ppm = None
+        else:
+            self.plate_mm = mm
+            self.ppm = mm / float(diam_px)
+        try:
+            self.det["pxl_per_mm"] = self.ppm
+        except Exception:
+            pass
+        self._draw_plate(); self._draw_scalebar()
+        self._update_hint("dish = %g mm  ->  %s"
+                          % (mm, ("%.4f mm/px" % self.ppm) if self.ppm else "pixels only"))
+        if self._on_change:
+            self._on_change()
+        return True
+
     def _scalebar_mm_used(self):
         """The mm length the bar will draw at (resolves 'Auto' to the nice value)."""
         if not self.ppm:
