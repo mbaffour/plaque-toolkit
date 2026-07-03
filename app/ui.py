@@ -682,30 +682,72 @@ class AboutTab(QWidget):
         lay.addLayout(head)
 
         body = QLabel(
-            "<p>A unified front-end over the validated <b>Plaque Size Tool</b> for measuring "
-            "bacteriophage plaque size and turbidity, with batch cross-phage optical-density "
-            "comparison, count/PFU and figures. Nicknamed <b>“Frankenstein’s Plaque Lab”</b> "
-            "because it stitches several tools into one — the PST detector, a PlaqSeg "
-            "deep-learning model, a manual-correction editor, and mm calibration.</p>"
-            "<p><b>Measure</b> — open an image, auto-detect, edit by hand (left-drag to add, "
-            "Trace-click to auto-trace, right-click to remove), then save size + turbidity.<br>"
-            "<b>Compare turbidity</b> — point at a folder of phages (with optional blank / "
-            "flat-field references) to get OD, clarity, titer, per-phage stats and figures.</p>"
-            "<p><b>Citation.</b> The validated detection algorithm is from "
-            "Trofimova&nbsp;&amp;&nbsp;Jaschke, <i>Virology</i> (2021). Please cite that paper "
-            "and use <b>Published (validated)</b> mode for published measurements.</p>"
-            "<p style='color:#b45309'><b>Honest note.</b> The <b>Sensitive</b> and "
-            "<b>Precise</b> modes are in-house extensions. They are <i>not</i> independently "
-            "validated and may add false positives — always verify their detections by eye "
+            "<p>A desktop app for measuring bacteriophage <b>plaque size</b> and <b>turbidity</b> "
+            "from Petri-dish photos, built on the peer-reviewed <b>Plaque Size Tool</b>. Nicknamed "
+            "<b>“Frankenstein’s Plaque Lab”</b> because it stitches several tools into one — the PST "
+            "detector, a PlaqSeg deep-learning model, a manual-correction editor, and mm calibration. "
+            "Plaques are numbered <b>1→N from the top</b>.</p>"
+
+            "<p><b>The tabs</b></p><ul>"
+            "<li><b>Measure</b> — open one image, auto-detect, correct by hand, read size + turbidity, export.</li>"
+            "<li><b>Batch</b> — a whole folder → one CSV per plate + an all-plaques CSV + annotated images. "
+            "(Drop a folder onto the tab.)</li>"
+            "<li><b>Compare turbidity</b> — a folder of phages → optical density, clarity class, titer/PFU, "
+            "per-phage stats + figures.</li>"
+            "<li><b>Validate</b> — score the engines against your own hand-corrected labels "
+            "(precision / recall / F1 + size agreement).</li></ul>"
+
+            "<p><b>Detection engines</b> (Measure dropdown)</p><ul>"
+            "<li><b>Published (validated)</b> — the exact Trofimova &amp; Jaschke 2021 algorithm. "
+            "<i>The only citable mode.</i></li>"
+            "<li><b>Current (corrected)</b> — same algorithm + bug-fixes + better dish calibration. "
+            "Good routine default.</li>"
+            "<li><b>Sensitive</b> — lowers the size gates to catch tiny plaques; more false positives "
+            "(verify by eye).</li>"
+            "<li><b>Precise (PST + PlaqSeg)</b> — fuses the classic detector with a deep-learning model; "
+            "best on dense plates. ~1 min on first run. In-house, not independently validated.</li></ul>"
+
+            "<p><b>Editor tools &amp; buttons</b> (once an image is open)</p><ul>"
+            "<li><b>Add</b> — click a plaque to auto-trace it, or drag to draw a circle.</li>"
+            "<li><b>Detect area</b> — rubber-band a region to re-scan just there.</li>"
+            "<li><b>Erase</b> (or right-click) — remove a false positive.</li>"
+            "<li><b>Set plate</b> — click 3 points on the real agar rim, type its diameter (mm) → recalibrates.</li>"
+            "<li><b>Select / Remove selected / Undo</b> — click or box-select plaques; delete; step back.</li>"
+            "<li><b>Scale bar</b> — pick a length + colour; drag it to reposition.</li>"
+            "<li><b>⬇ Export all</b> — one click writes the CSV + annotated figure to an <code>out/</code> folder "
+            "and opens it. <b>More ▾</b> has the individual exports (CSV, side-by-side, Fiji-calibrated crop, "
+            "ground-truth labels).</li></ul>"
+
+            "<p><b>Calibration (getting mm right)</b> — set <b>Dish</b> to the diameter of the circle the tool "
+            "traces. The vendor’s “90 / 100 mm” is the <b>lid</b>; your plaques sit on the smaller <b>agar</b> "
+            "base (often ~85 mm) — use that. The <b>85 / 100</b> quick-picks (and typing a value) now "
+            "<b>re-scale the current image live</b>. A ruler laid in the agar plane is the most direct check. "
+            "Until a scale is set, sizes are in pixels only.</p>"
+
+            "<p><b>Turbidity</b> — a plaque’s <i>clarity</i>: clear ≈ fully lytic, turbid/cloudy ≈ temperate or "
+            "regrowth. Reported per-plaque (<code>TURBIDITY_REL</code>) and across phages (Compare tab). From "
+            "top-lit phone photos it is <i>apparent</i> OD (screening-grade) — for absolute OD use a backlit / "
+            "transilluminator setup with RAW images.</p>"
+
+            "<p><b>Citation.</b> The validated detection algorithm is from Trofimova&nbsp;&amp;&nbsp;Jaschke, "
+            "<i>Virology</i> (2021). Cite that paper and use <b>Published (validated)</b> mode for published "
+            "measurements.</p>"
+
+            "<p style='color:#b45309'><b>Honest note.</b> The <b>Sensitive</b> and <b>Precise</b> modes are "
+            "in-house extensions, <i>not</i> independently validated — always verify their detections by eye "
             "before reporting.</p>"
-            "<p style='color:#6b7484'>Full docs: <code>USER_GUIDE.md</code> / "
-            "<code>guide.html</code>.</p>")
+
+            "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide, interactive guide, "
+            "validation, how it was built).</p>")
         body.setObjectName("AboutBody"); body.setWordWrap(True); body.setOpenExternalLinks(True)
         body.setTextInteractionFlags(Qt.TextBrowserInteraction)
         lay.addWidget(body)
 
-        outer.addWidget(card, 0, Qt.AlignHCenter | Qt.AlignTop)
-        outer.addStretch()
+        holder = QWidget(); hl = QVBoxLayout(holder); hl.setContentsMargins(0, 0, 0, 0)
+        hl.addWidget(card, 0, Qt.AlignHCenter | Qt.AlignTop); hl.addStretch()
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(holder)
+        outer.addWidget(scroll)
 
 
 def _open_doc(name):
@@ -734,14 +776,21 @@ class BatchTab(QWidget):
         self.setAcceptDrops(True)   # drop a folder anywhere on this tab to set it (see dropEvent)
 
         self.folder = QLineEdit(); self.folder.setPlaceholderText("Folder of plate images… (or drop one here)")
+        self.folder.setToolTip("Folder with one plate photo per file. Tip: drag a folder onto this tab to set it.")
         browse = QPushButton("Browse…"); browse.clicked.connect(self._pick)
+        browse.setToolTip("Choose the folder of plate images.")
         self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
         self.plate.setSuffix(" mm")
+        self.plate.setToolTip("Dish diameter (mm) applied to every plate. Use the agar diameter (~85 mm), "
+                              "not the lid. 0 = report pixels only.")
         self.mode = QComboBox()
         for label, _k, _h in MODES:
             self.mode.addItem(label)
         self.mode.setCurrentIndex(1)   # Current — fast; Precise over a whole folder is very slow
+        self.mode.setToolTip("Detection engine for the batch. Current is a good fast default; "
+                             "Precise is very slow over a whole folder.")
         self.watershed = QCheckBox("Split touching plaques")
+        self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch.")
         self.crops = QCheckBox("Also export Fiji-calibrated plate crops")
         self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
                               "baked in (plus a .fiji.txt). Opens in Fiji already scaled in mm, so "
@@ -749,8 +798,11 @@ class BatchTab(QWidget):
 
         self.run_btn = QPushButton(" Run batch"); self.run_btn.setObjectName("Primary")
         self.run_btn.setIcon(_icon(QStyle.SP_MediaPlay)); self.run_btn.clicked.connect(self._run)
+        self.run_btn.setToolTip("Measure every image in the folder → per_plate.csv + all_plaques.csv "
+                                "+ an annotated image for each.")
         self.open_btn = QPushButton(" Open output folder"); self.open_btn.setEnabled(False)
         self.open_btn.setIcon(_icon(QStyle.SP_DirOpenIcon)); self.open_btn.clicked.connect(self._open_out)
+        self.open_btn.setToolTip("Open the folder with the batch results (enabled after a run).")
         self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setVisible(False)
         self.progress.setMaximumWidth(220)
         self.status = QLabel("Pick a folder of plate photos (one plate per image). Writes a per-plate "
