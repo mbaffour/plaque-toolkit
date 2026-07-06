@@ -31,7 +31,14 @@ def _build(arch):
 
 def load_model(path=None, device="cpu"):
     path = path or _DEF
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    # weights_only=True is the safe default (torch >= 2.6): it forbids arbitrary
+    # code execution during unpickling. plaque_clf.pt is a plain state_dict
+    # checkpoint (an OrderedDict of tensors + scalar metadata), which loads fine
+    # under this restriction. If you ever ship a checkpoint that stores a full
+    # pickled model or custom classes this will refuse to load it -- do NOT flip
+    # this back to False. TODO: keep saving checkpoints as {"state_dict": ...}
+    # (never torch.save(model)) so this stays safe.
+    ckpt = torch.load(path, map_location=device, weights_only=True)
     model = _build(ckpt.get("arch", "resnet18_imagenet_ft_2class"))
     model.load_state_dict(ckpt["state_dict"])
     model.to(device).eval()
