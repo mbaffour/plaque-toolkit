@@ -123,6 +123,22 @@ in-house extensions you used (and your own validation of them) in your Methods â
 
 The upstream source is at <https://github.com/ellinium/plaque_size_tool>.
 
+## Large files (contributors)
+
+This repo already contains some large binaries (test-plate `.tif` images and model
+weights `.pt`, tens of MB each). To keep the repo from growing further, **new** large
+assets should be added via **[Git LFS](https://git-lfs.com/)** or attached as **GitHub
+release assets** rather than committed as ordinary blobs:
+
+```bash
+git lfs install          # once per machine
+# *.tif, *.tiff, *.heic and *.pt are already routed to LFS in .gitattributes,
+# so any new/changed file matching those patterns is tracked automatically.
+```
+
+Existing history is intentionally left untouched (no rewrite), so already-committed
+files stay as they are â€” this only changes how *future* large files are stored.
+
 ## License
 
 See [LICENSE](LICENSE).

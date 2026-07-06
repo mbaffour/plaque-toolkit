@@ -12,7 +12,13 @@ build_macos.sh text eol=lf
 *.png       binary
 *.ico       binary
 *.icns      binary
-*.tif       binary
-*.tiff      binary
-*.heic      binary
-*.pt        binary
+
+# Large binaries (test images + model weights) should go through Git LFS from
+# now on so the repo stays small. This only affects files added/changed after
+# LFS is enabled (`git lfs install`) -- history is intentionally not rewritten,
+# so blobs already committed stay where they are. New large assets are better
+# published as GitHub release assets; see the "Large files" note in README.md.
+*.tif       filter=lfs diff=lfs merge=lfs -text
+*.tiff      filter=lfs diff=lfs merge=lfs -text
+*.heic      filter=lfs diff=lfs merge=lfs -text
+*.pt        filter=lfs diff=lfs merge=lfs -text
