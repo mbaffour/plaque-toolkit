@@ -1042,7 +1042,8 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self):
         m = self.menuBar().addMenu("&Help")
-        for label, doc in (("User guide", "USER_GUIDE.md"),
+        for label, doc in (("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
+                           ("User guide", "USER_GUIDE.md"),
                            ("How to validate this program", "VALIDATION_GUIDE.md"),
                            ("How it was built", "HOW_IT_WAS_BUILT.md"),
                            ("Engine reference", "ENGINES.md"),

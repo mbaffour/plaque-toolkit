@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaque Toolkit — Tool Atlas (“Frankenstein’s Plaque Lab”)</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --surface:#ffffff; --ink:#1f2733; --muted:#6b7484; --line:#e3e8f0;
+    --accent:#2563eb; --ok:#16a34a; --warn:#d97706; --danger:#dc2626; --code:#0f172a;
+    --sidebar:288px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.62 "Segoe UI","Inter","Helvetica Neue",Arial,sans-serif;}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code{background:#eef1f7;border:1px solid var(--line);border-radius:5px;padding:.05em .38em;
+    font:13px/1.4 "Cascadia Code","Consolas",monospace;color:var(--code)}
+  kbd{background:#1f2733;color:#fff;border-radius:5px;padding:.08em .45em;font-size:12px;
+    font-family:"Consolas",monospace;box-shadow:0 1px 0 #000}
+  /* layout */
+  #side{position:fixed;top:0;left:0;width:var(--sidebar);height:100vh;overflow-y:auto;
+    background:#111827;color:#cbd5e1;padding:22px 16px 40px}
+  #side h1{color:#fff;font-size:19px;margin:.2em 0 .1em}
+  #side .nick{color:#8ea2c6;font-style:italic;font-size:12.5px;margin-bottom:16px}
+  #side .grp{color:#7c8aa5;text-transform:uppercase;letter-spacing:.06em;font-size:11px;
+    font-weight:700;margin:16px 0 6px}
+  #side a{display:block;color:#cbd5e1;padding:4px 8px;border-radius:6px;font-size:13.5px}
+  #side a:hover{background:#1f2937;color:#fff;text-decoration:none}
+  main{margin-left:var(--sidebar);max-width:960px;padding:34px 40px 120px}
+  .hero{background:linear-gradient(135deg,#1f2733,#243b6b);color:#fff;border-radius:16px;
+    padding:26px 30px;margin-bottom:26px}
+  .hero h1{margin:.1em 0;font-size:28px} .hero p{margin:.3em 0;color:#d7e0f4}
+  h2{font-size:23px;margin:38px 0 10px;padding-top:10px;border-top:2px solid var(--line)}
+  h3{font-size:17px;margin:24px 0 6px;color:#243b6b}
+  section{scroll-margin-top:18px}
+  figure{margin:16px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff;
+    box-shadow:0 2px 12px rgba(20,30,60,.06)}
+  figure img{display:block;width:100%;height:auto}
+  figcaption{padding:9px 14px;font-size:12.5px;color:var(--muted);background:#fafbfe;border-top:1px solid var(--line)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.6px;background:#fff;
+    border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{border-bottom:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#f0f3fa;font-weight:700} tr:last-child td{border-bottom:0}
+  .tip,.warn,.note,.ok{border-radius:10px;padding:12px 15px;margin:14px 0;border-left:4px solid}
+  .tip{background:#eff6ff;border-color:var(--accent)}
+  .warn{background:#fff7ed;border-color:var(--warn)}
+  .ok{background:#f0fdf4;border-color:var(--ok)}
+  .note{background:#f8fafc;border-color:#94a3b8}
+  .pill{display:inline-block;border-radius:999px;padding:1px 9px;font-size:11.5px;font-weight:700}
+  .pill.green{background:#dcfce7;color:#166534} .pill.amber{background:#fef3c7;color:#92400e}
+  .pill.blue{background:#dbeafe;color:#1e40af} .pill.gray{background:#e5e7eb;color:#374151}
+  .lead{font-size:16px;color:#334155}
+  hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:900px){ #side{position:static;width:auto;height:auto} main{margin-left:0;padding:20px}
+    .cols{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<nav id="side">
+  <h1>🧫 Plaque Toolkit</h1>
+  <div class="nick">“Frankenstein’s Plaque Lab” · Tool Atlas</div>
+  <div class="grp">Start here</div>
+  <a href="#overview">What it is</a>
+  <a href="#quickstart">60-second workflow</a>
+  <a href="#layout">Window layout</a>
+  <div class="grp">Measure tab</div>
+  <a href="#parameters">Parameters row</a>
+  <a href="#open">Opening an image</a>
+  <a href="#editor">The editor & tools</a>
+  <a href="#adding">Adding plaques (circles vs shapes)</a>
+  <a href="#summary">Summary card</a>
+  <a href="#table">Results table</a>
+  <a href="#numbering">Numbering (1→N)</a>
+  <div class="grp">Getting it right</div>
+  <a href="#calibration">Calibration (mm)</a>
+  <a href="#engines">Detection engines</a>
+  <a href="#exports">Exporting</a>
+  <div class="grp">Other tabs</div>
+  <a href="#batch">Batch</a>
+  <a href="#compare">Compare turbidity</a>
+  <a href="#validate">Validate</a>
+  <a href="#turbidity">Turbidity explained</a>
+  <div class="grp">Reference</div>
+  <a href="#publishing">Publishing checklist</a>
+  <a href="#shortcuts">Keyboard shortcuts</a>
+  <a href="#faq">FAQ / troubleshooting</a>
+</nav>
+
+<main>
+  <div class="hero">
+    <h1>Tool Atlas</h1>
+    <p><b>Plaque Toolkit</b> — nicknamed <i>“Frankenstein’s Plaque Lab”</i>. A complete, screenshot‑by‑screenshot
+    reference to every tab, button, and number in the app.</p>
+    <p style="font-size:13px;opacity:.85">Measure bacteriophage plaque <b>size</b> &amp; <b>turbidity</b> from Petri‑dish photos · Windows &amp; macOS · built on the peer‑reviewed Plaque Size Tool (Trofimova &amp; Jaschke, 2021).</p>
+  </div>
+
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <h2>What it is</h2>
+    <p class="lead">One window that takes a photo of a plaque plate and gives you the <b>size</b> (area &amp; diameter in mm),
+    <b>count</b>, <b>turbidity</b> (clarity), and <b>titer</b> — with an editor to correct detections by hand and
+    exports ready for a figure or a spreadsheet.</p>
+    <p>It “stitches several tools into one”: the validated <b>PST</b> detector, a <b>PlaqSeg</b> deep‑learning model,
+    an optional classifier, a manual‑correction editor, and millimetre calibration. You pick a
+    <a href="#engines">detection engine</a>, open an image, fix anything the detector got wrong, and export.</p>
+    <div class="note"><b>Golden rule for papers:</b> only the <b>Published</b> engine is peer‑reviewed/citable.
+    Everything else is in‑house — great for day‑to‑day work, but validate it on your own plates before you publish
+    numbers from it. (More under <a href="#engines">Engines</a> and <a href="#publishing">Publishing</a>.)</div>
+  </section>
+
+  <!-- QUICKSTART -->
+  <section id="quickstart">
+    <h2>The 60‑second workflow</h2>
+    <ol>
+      <li><b>Open an image</b> — click <code>Open image…</code> or <b>drag a photo</b> onto the window (TIFF/JPEG/PNG/iPhone HEIC).</li>
+      <li><b>Set the dish size</b> — type your <b>agar</b> diameter in <b>Dish</b> (or tap <b>85</b>/<b>100</b>). Numbers re‑scale live.</li>
+      <li><b>Pick an engine</b> — <b>Precise</b> for best detection, <b>Published</b> for citable numbers.</li>
+      <li><b>Review</b> in the editor — erase false positives, add missed plaques.</li>
+      <li><b>Export all</b> — one click writes the CSV + annotated figure to an <code>out/</code> folder and opens it.</li>
+    </ol>
+  </section>
+
+  <!-- LAYOUT -->
+  <section id="layout">
+    <h2>Window layout</h2>
+    <p>Five tabs across the top: <b>Measure</b> (one plate at a time), <b>Batch</b> (a whole folder), <b>Compare turbidity</b>
+    (cross‑phage OD), <b>Validate</b> (score engines vs your labels), and <b>About</b> (a built‑in reference). The
+    <b>Help</b> menu (top‑left) opens the guides. A status bar at the very bottom shows the engine and progress.</p>
+    <figure>
+      <img src="atlas_img/measure_full.png" alt="The Measure tab with a detected plate">
+      <figcaption>The <b>Measure</b> tab after a detection — parameters row (top), the editor with numbered plaques
+      (left), the summary card and results table (right). Everything below is a close‑up of one of these pieces.</figcaption>
+    </figure>
+  </section>
+
+  <!-- PARAMETERS -->
+  <section id="parameters">
+    <h2>Measure · the Parameters row</h2>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><b>Dish</b> (mm)</td><td>The real diameter of the circle the tool traces, used to convert pixels→mm.
+        <b>Changing it re‑scales the current image instantly</b> (see <a href="#calibration">Calibration</a>).
+        Set to <code>0</code> to report pixels only.</td></tr>
+      <tr><td><b>85 / 100</b> buttons</td><td>Quick‑pick shortcuts for the Dish value. <b>85 mm</b> ≈ a common agar base;
+        <b>100 mm</b> = the nominal lid. They just set the Dish box (which then re‑scales live) — you can type any value instead.</td></tr>
+      <tr><td><b>Engine</b></td><td>The detection algorithm (<a href="#engines">Published / Current / Sensitive / Precise</a>).
+        The ★‑marked one is the recommended default. The grey line under the row explains the selected engine.</td></tr>
+      <tr><td><b>Split touching plaques</b></td><td>Watershed segmentation to separate plaques whose edges touch.
+        Helpful on crowded plates; ignored under Published.</td></tr>
+      <tr><td><b>Open image…</b></td><td>Choose a photo. You can also drag‑and‑drop one anywhere on the tab. (<kbd>Ctrl</kbd>+<kbd>O</kbd>)</td></tr>
+      <tr><td><b>Re‑detect</b></td><td>Re‑run detection on the current image with the options above (replaces current detections).</td></tr>
+      <tr><td><b>Save results</b></td><td>Write the table + overlay + turbidity to an <code>out/</code> folder next to the image. (<kbd>Ctrl</kbd>+<kbd>S</kbd>)</td></tr>
+    </table>
+  </section>
+
+  <!-- OPEN -->
+  <section id="open">
+    <h2>Opening an image (and drag‑and‑drop)</h2>
+    <p>Before anything is loaded you get a friendly drop zone. <b>Drag a photo anywhere onto the window</b> — even after a
+    plate is already loaded, dropping a new image replaces it. On the <b>Batch</b> tab, drag a <b>folder</b> to set it.</p>
+    <figure>
+      <img src="atlas_img/measure_empty.png" alt="Empty Measure tab with the drag-and-drop prompt">
+      <figcaption>The start screen. Formats: TIFF · JPEG · PNG · iPhone HEIC (HEIC decodes automatically).</figcaption>
+    </figure>
+  </section>
+
+  <!-- EDITOR -->
+  <section id="editor">
+    <h2>The editor &amp; its tools</h2>
+    <p>Once a plate is open, the left panel becomes an interactive editor. Green outlines are detected plaques, each with a
+    white number. The toolbar holds every editing tool.</p>
+    <figure>
+      <img src="atlas_img/editor.png" alt="The editor toolbar and canvas">
+      <figcaption>The editor: tool buttons on top, the zoomable image below, and a live hint line at the very bottom.</figcaption>
+    </figure>
+    <table>
+      <tr><th>Tool</th><th>What it does</th></tr>
+      <tr><td><b>Select / pan</b></td><td>Click a plaque to select it (turns red); <b>drag</b> to pan; <kbd>Shift</kbd>/<kbd>Ctrl</kbd>+drag to box‑select/deselect.</td></tr>
+      <tr><td><b>Add</b></td><td><b>Click</b> a plaque to <b>auto‑trace</b> its real outline, <b>or drag</b> to draw a circle. (See <a href="#adding">below</a> — this is why some manual plaques aren’t circles.)</td></tr>
+      <tr><td><b>Detect area</b></td><td>Rubber‑band a rectangle to <b>re‑scan just that region</b> (good for a patch the detector missed).</td></tr>
+      <tr><td><b>Erase</b></td><td>Click a plaque to remove it. <b>Right‑click</b> erases in any tool.</td></tr>
+      <tr><td><b>Set plate</b></td><td>Click <b>3 points on the real agar rim</b>, then type its diameter (mm) → recalibrates the scale. (See <a href="#calibration">Calibration</a>.)</td></tr>
+      <tr><td><b>Select all / Deselect all / Remove selected</b></td><td>Bulk selection, and delete everything selected (<kbd>Delete</kbd>).</td></tr>
+      <tr><td><b>Undo</b></td><td>Step back through edits (<kbd>u</kbd>).</td></tr>
+      <tr><td><b>– / Fit / +</b></td><td>Zoom out / fit to window (<kbd>0</kbd>) / zoom in. The mouse wheel also zooms at the cursor.</td></tr>
+      <tr><td><b>Scale bar</b> + <b>Colour</b></td><td>Pick a bar length (Auto or fixed mm) and colour; <b>drag the bar</b> on the image to reposition it.</td></tr>
+      <tr><td><span class="pill green">⬇ Export all</span></td><td>One click → CSV + annotated figure to <code>out/</code>, then opens the folder.</td></tr>
+      <tr><td><b>More ▾</b></td><td>Individual exports (see <a href="#exports">Exporting</a>).</td></tr>
+    </table>
+  </section>
+
+  <!-- ADDING -->
+  <section id="adding">
+    <h2>Adding plaques — why some aren’t circles</h2>
+    <p>With the <b>Add</b> tool, <i>how you add</i> decides the shape:</p>
+    <table>
+      <tr><th>Gesture</th><th>Result</th><th>Shape</th></tr>
+      <tr><td><b>Click</b> (tap, no drag)</td><td>Auto‑<b>traces the plaque’s real outline</b></td><td>A contour that follows the true edge — <b>often not circular</b></td></tr>
+      <tr><td><b>Drag</b> outward</td><td>Draws a <b>circle</b> of that radius</td><td>A perfect circle</td></tr>
+    </table>
+    <div class="ok"><b>This does not bias your numbers.</b> Every plaque’s size is computed from its <b>area</b> as an
+    <i>area‑equivalent diameter</i>: <code>d = 2·√(area/π)</code>. A traced blob and a drawn circle both collapse to one
+    clean diameter. Auto‑detected plaques are traced outlines too, so a clicked add just matches them.</div>
+    <p><b>Want them all circular?</b> Drag small circles instead of clicking. <b>Want the true shape/area?</b> Click to
+    auto‑trace. Both measure identically.</p>
+  </section>
+
+  <!-- SUMMARY -->
+  <section id="summary">
+    <h2>The summary card</h2>
+    <figure>
+      <img src="atlas_img/summary_card.png" alt="Summary card: plaques, median, mean, calibration">
+      <figcaption>Top‑right of the Measure tab. Updates live as you edit or change the dish size.</figcaption>
+    </figure>
+    <ul>
+      <li><b>PLAQUES</b> — current count (after your edits).</li>
+      <li><b>MEDIAN Ø / MEAN Ø (mm)</b> — the middle and average area‑equivalent diameter.</li>
+      <li><b>CALIBRATION</b> — the scale. <span class="pill green">0.0830 mm/px ✓</span> in green = calibrated;
+        <span class="pill amber">Not set</span> in amber = pixels only (set a Dish size or use Set plate).</li>
+    </ul>
+    <div class="warn"><b>Tilt warning.</b> If the detected dish is elliptical (axis‑ratio &gt; 1.03), a warning appears —
+    the mm scale is biased. Re‑shoot the plate straight‑on.</div>
+  </section>
+
+  <!-- TABLE -->
+  <section id="table">
+    <h2>The results table</h2>
+    <figure>
+      <img src="atlas_img/results_table.png" alt="Per-plaque results table">
+      <figcaption>One row per plaque. Sortable (click a header). This is exactly what the CSV export contains.</figcaption>
+    </figure>
+    <table>
+      <tr><th>Column</th><th>Meaning</th></tr>
+      <tr><td><code>INDEX</code></td><td>Plaque number — <b>1 is the topmost</b> plaque, counting down.</td></tr>
+      <tr><td><code>AREA_PXL</code></td><td>Area in pixels (convex hull, halo‑inclusive).</td></tr>
+      <tr><td><code>DIAMETER_PXL</code></td><td>Area‑equivalent diameter in pixels: <code>2·√(area/π)</code>.</td></tr>
+      <tr><td><code>AREA_MM2</code> / <code>DIAMETER_MM</code></td><td>The same in mm (need calibration; blank if pixels‑only).</td></tr>
+      <tr><td><code>MEAN_GRAY</code></td><td>Mean brightness inside the plaque (0–255). Lower = clearer/darker.</td></tr>
+      <tr><td><code>TURBIDITY_REL</code></td><td>Plaque brightness ÷ surrounding lawn. ~1 = as opaque as the lawn (turbid); lower = clearer. (See <a href="#turbidity">Turbidity</a>.)</td></tr>
+      <tr><td><code>SOURCE</code></td><td>How it was found: <code>auto</code> (detector), <code>manual</code> (you added it), <code>watershed</code> (split from a touching pair).</td></tr>
+    </table>
+  </section>
+
+  <!-- NUMBERING -->
+  <section id="numbering">
+    <h2>Numbering — 1→N from the top</h2>
+    <p>Plaques are numbered <b>top‑to‑bottom</b> (then left‑to‑right): #1 is the highest plaque in the image, and the
+    numbers march downward. The on‑image labels, the table <code>INDEX</code>, the CSV, the annotated figure, and the
+    exported labels all use this same order, and it re‑sorts automatically whenever you add or erase a plaque. Selecting a
+    plaque never changes its number.</p>
+  </section>
+
+  <!-- CALIBRATION -->
+  <section id="calibration">
+    <h2>Calibration — getting millimetres right</h2>
+    <p>All the mm numbers come from one scale: <code>mm per pixel = dish_mm ÷ dish_pixels</code>. Getting the dish size
+    right is the single most important thing for accurate sizes.</p>
+    <div class="warn"><b>Agar, not lid.</b> The “90 mm / 100 mm” printed on the dish box is the <b>lid</b>. Your plaques
+    grow on the smaller <b>agar</b> base (often ~85 mm). Enter the <b>agar</b> diameter you actually measure — using the lid
+    size scales every plaque by the same wrong factor.</div>
+    <h3>Three ways to set the scale</h3>
+    <ol>
+      <li><b>Dish box (live).</b> Type your agar diameter (or tap <b>85</b>/<b>100</b>). Every mm value + the calibration
+      re‑scale <b>instantly</b> — no re‑detection. Use the up/down arrows to nudge and watch the numbers move.</li>
+      <li><b>Set plate tool.</b> Click <b>3 points on the real agar rim</b> → the app fits that circle → type its mm
+      diameter. Best when the auto‑detected boundary isn’t the agar edge.</li>
+      <li><b>In‑frame ruler (gold standard).</b> Lay a ruler in the plane of the agar and read the scale directly; use it as
+      a one‑time check of the dish method.</li>
+    </ol>
+    <div class="tip">Until a scale is set, sizes are reported <b>in pixels only</b> and the calibration chip reads
+    <span class="pill amber">Not set</span>. That’s fine for relative work — just note it.</div>
+  </section>
+
+  <!-- ENGINES -->
+  <section id="engines">
+    <h2>Detection engines</h2>
+    <p>Pick the engine in the Measure dropdown. Only <b>one</b> is citable.</p>
+    <table>
+      <tr><th>Engine</th><th>What it is</th><th>Validation</th><th>Use for</th></tr>
+      <tr><td><b>Published</b> <span class="pill green">citable</span></td>
+        <td>The exact Trofimova &amp; Jaschke 2021 algorithm, unchanged.</td>
+        <td>Peer‑reviewed &amp; validated — the only citable mode.</td>
+        <td>Numbers that go in a paper.</td></tr>
+      <tr><td><b>Current</b></td>
+        <td>Same algorithm + bug‑fixes + better dish calibration.</td>
+        <td>In‑house; differs from Published only slightly.</td>
+        <td>Routine day‑to‑day measuring (fast default).</td></tr>
+      <tr><td><b>Sensitive</b> <span class="pill amber">noisy</span></td>
+        <td>Current with the size gates lowered to catch tiny plaques.</td>
+        <td>In‑house, not validated — more false positives.</td>
+        <td>Finding sub‑0.4 mm plaques; exploratory.</td></tr>
+      <tr><td><b>Precise</b> <span class="pill blue">best detection</span></td>
+        <td>Fuses PST with a <b>PlaqSeg</b> deep‑learning model (+ optional classifier).</td>
+        <td>In‑house (not independently/peer‑reviewed); <b>locally validated</b> (~0.95 precision on our test plates). ~1 min on first run.</td>
+        <td>The best detector on dense plates.</td></tr>
+    </table>
+    <div class="warn"><b>What “validated” means here.</b> Only <b>Published</b> carries an independent, peer‑reviewed stamp.
+    <b>Precise</b> was validated <i>locally, on our own plates</i> (high precision) — that is real and useful, but it is
+    <b>not</b> an independent stamp and does <b>not</b> transfer to other setups. For a paper: use Published, <b>or</b> use
+    Precise and report <i>your own</i> validation (that’s what the <a href="#validate">Validate</a> tab is for). Never write
+    that Precise “is a validated method.”</div>
+  </section>
+
+  <!-- EXPORTS -->
+  <section id="exports">
+    <h2>Exporting</h2>
+    <p>The green <b>⬇ Export all</b> button is the one‑click path: it writes the <b>CSV table</b> + the <b>annotated figure</b>
+    to an <code>out/</code> folder next to your image and opens that folder. The <b>More ▾</b> button beside it has the
+    individual options:</p>
+    <table>
+      <tr><th>Export</th><th>What you get</th></tr>
+      <tr><td><b>Data table (CSV)</b></td><td>One row per plaque — every column from the <a href="#table">results table</a>.</td></tr>
+      <tr><td><b>Annotated figure (PNG)</b></td><td>The plate with green outlines, the white numbers, and the scale bar, exactly as shown.</td></tr>
+      <tr><td><b>Input vs annotated</b></td><td>Side‑by‑side original/annotated image — great for QC and slides.</td></tr>
+      <tr><td><b>Original input image</b></td><td>The decoded source (HEIC saved as PNG).</td></tr>
+      <tr><td><b>Cropped plate for Fiji</b></td><td>A TIFF with the mm scale <b>baked in</b> — Fiji/ImageJ opens it already calibrated, so cropping a plaque keeps the scale. Plus a <code>.fiji.txt</code> sidecar.</td></tr>
+      <tr><td><b>Ground‑truth labels</b></td><td>A reusable <code>labels_*.json</code> of your verified plaque set — feed it to the <a href="#validate">Validate</a> tab.</td></tr>
+    </table>
+  </section>
+
+  <!-- BATCH -->
+  <section id="batch">
+    <h2>Batch — a whole folder at once</h2>
+    <figure>
+      <img src="atlas_img/batch.png" alt="Batch tab">
+      <figcaption>Point at a folder (one plate per image) and run. Drag a folder onto the tab to set it.</figcaption>
+    </figure>
+    <p>Writes, into an output folder: <code>per_plate.csv</code> (count, median/mean diameter, calibration, tilt flag per
+    plate), <code>all_plaques.csv</code> (every plaque across the set), and an annotated image per plate. Tick
+    <b>“Also export Fiji‑calibrated plate crops”</b> to get a calibrated TIFF per image too. <b>Current</b> is the sensible
+    engine here — Precise over a whole folder is very slow.</p>
+  </section>
+
+  <!-- COMPARE -->
+  <section id="compare">
+    <h2>Compare turbidity — across phages</h2>
+    <figure>
+      <img src="atlas_img/compare.png" alt="Compare turbidity tab">
+      <figcaption>Batch optical‑density turbidity across a folder of phages, with optional blank / flat‑field references.</figcaption>
+    </figure>
+    <p>Give it a folder of phage plates (optionally a blank/flat‑field for the light reference) and it computes
+    <b>apparent optical density</b>, a <b>clarity class</b>, <b>titer (PFU/mL)</b> from dilution/volume, per‑phage statistics
+    and box/histogram figures. See <a href="#turbidity">Turbidity explained</a> for what the numbers mean and their limits.</p>
+  </section>
+
+  <!-- VALIDATE -->
+  <section id="validate">
+    <h2>Validate — score the engines on your plates</h2>
+    <figure>
+      <img src="atlas_img/validate.png" alt="Validate tab">
+      <figcaption>Point at a folder of your <code>labels_*.json</code> ground‑truth files to score each engine.</figcaption>
+    </figure>
+    <p>This is how you turn “Precise looks good” into a defensible number. Correct a few plates by hand in the editor,
+    <b>Export → Ground‑truth labels</b>, then point the Validate tab at that folder. It reports, per engine,
+    <b>precision / recall / F1</b> and per‑plaque <b>size agreement</b> — the exact figures to put in your Methods.</p>
+  </section>
+
+  <!-- TURBIDITY -->
+  <section id="turbidity">
+    <h2>Turbidity explained</h2>
+    <p>Turbidity is a plaque’s <b>clarity</b> — a real, publishable phenotype: <b>clear</b> plaques ≈ fully lytic phage;
+    <b>turbid/cloudy</b> plaques ≈ temperate (lysogeny) or resistant regrowth inside the plaque. It’s reported two ways:</p>
+    <ul>
+      <li><b>Per plaque</b> (Measure tab): <code>MEAN_GRAY</code> and <code>TURBIDITY_REL</code> (plaque ÷ lawn).</li>
+      <li><b>Across phages</b> (Compare tab): apparent OD, clarity class, titer, stats, figures.</li>
+    </ul>
+    <div class="warn"><b>Screening‑grade, not absolute OD.</b> From top‑lit phone photos the value is <i>apparent</i> optical
+    density — the phone tone‑maps the image. Treat it as a <b>relative</b> clarity measure. For absolute OD, use a backlit
+    transilluminator setup with RAW images. It’s optional for a pure size study and doesn’t affect the size numbers.</div>
+  </section>
+
+  <!-- PUBLISHING -->
+  <section id="publishing">
+    <h2>Publishing checklist</h2>
+    <ol>
+      <li>Image <b>straight‑on</b> (dish circular, not elliptical); fixed lighting.</li>
+      <li>Calibrate to the <b>agar</b> diameter (or a ruler); state the value.</li>
+      <li>Use <b>Published</b> for citable numbers, or use Precise and <b>report your own validation</b> (Validate tab: P/R/F1 + size agreement + a negative control).</li>
+      <li>State that “size” = convex‑hull area‑equivalent diameter (<b>halo‑inclusive</b>, a slight upper bound).</li>
+      <li>Treat the <b>plate</b> (not the plaque) as the replicate; aggregate to per‑plate means; ≥ 3 plates/condition.</li>
+    </ol>
+    <p>Full templates: <code>docs/METHODS_TEMPLATE.md</code>, <code>docs/PUBLICATION.md</code>, <code>docs/VALIDATION_GUIDE.md</code>
+    (also in the <b>Help</b> menu).</p>
+  </section>
+
+  <!-- SHORTCUTS -->
+  <section id="shortcuts">
+    <h2>Keyboard shortcuts</h2>
+    <table>
+      <tr><th>Key</th><th>Action</th></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open image</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save results</td></tr>
+      <tr><td>mouse wheel · <kbd>+</kbd> / <kbd>−</kbd></td><td>Zoom (at cursor)</td></tr>
+      <tr><td><kbd>0</kbd></td><td>Fit image to window</td></tr>
+      <tr><td>drag</td><td>Pan · (in Add) draw a circle</td></tr>
+      <tr><td>click</td><td>Select a plaque · (in Add) auto‑trace · (in Erase) remove</td></tr>
+      <tr><td>right‑click</td><td>Erase a plaque (any tool)</td></tr>
+      <tr><td><kbd>Shift</kbd>/<kbd>Ctrl</kbd>+drag</td><td>Box select / deselect</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>Remove selected</td></tr>
+      <tr><td><kbd>u</kbd></td><td>Undo</td></tr>
+    </table>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq">
+    <h2>FAQ / troubleshooting</h2>
+    <h3>Why are some manual plaques not circles?</h3>
+    <p>Because you <b>clicked</b> (auto‑trace) rather than <b>dragged</b> (draw circle). Both measure the same way (area →
+    equivalent diameter). See <a href="#adding">Adding plaques</a>.</p>
+    <h3>The mm columns are blank / say “Not set”.</h3>
+    <p>No scale yet. Set a <b>Dish</b> size (or use <b>Set plate</b>). With Dish = 0 you get pixels only.</p>
+    <h3>I changed the dish size and nothing happened.</h3>
+    <p>Changing the dish live‑re‑scales <b>only when a dish was detected</b>. If the boundary wasn’t found, use <b>Set plate</b>
+    to define it, then the numbers follow.</p>
+    <h3>Precise is slow / says unavailable.</h3>
+    <p>Precise loads a deep‑learning model — the <b>first</b> run takes ~1 min, then it’s quick. If it’s unavailable, that
+    machine lacks the model/torch; use Current or Published.</p>
+    <h3>A “tilted dish” warning appears.</h3>
+    <p>The plate was shot at an angle so the dish looks elliptical, which biases the mm scale. Re‑shoot straight‑on.</p>
+    <h3>Does it read iPhone photos?</h3>
+    <p>Yes — HEIC/HEIF decode automatically (and EXIF rotation is honoured).</p>
+    <h3>The app is unsigned (SmartScreen / Gatekeeper warning).</h3>
+    <p>Normal for indie scientific tools. Windows: <i>More info → Run anyway</i>. macOS: right‑click → <i>Open → Open</i>.</p>
+    <hr>
+    <p style="color:#6b7484;font-size:13px">Plaque Toolkit · “Frankenstein’s Plaque Lab” · built on the peer‑reviewed Plaque
+    Size Tool (Trofimova &amp; Jaschke, <i>Virology</i> 2021). The Sensitive/Precise modes and PlaqSeg are in‑house and not
+    independently validated — verify by eye and validate on your own plates before reporting.</p>
+  </section>
+</main>
+</body>
+</html>
