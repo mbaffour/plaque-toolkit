@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it using the metadata below, AND cite the
+  underlying peer-reviewed Plaque Size Tool (Trofimova & Jaschke, 2021).
+title: 'Plaque Toolkit ("Frankenstein''s Plaque Lab")'
+abstract: >-
+  A cross-platform desktop application for measuring bacteriophage plaque size and
+  turbidity from Petri-dish photos. Built on the peer-reviewed Plaque Size Tool, it adds
+  a fused PST + PlaqSeg detector, a manual-correction editor, millimetre calibration,
+  batch processing, count/PFU, and optical-density turbidity comparison.
+type: software
+version: 1.0.0
+date-released: '2026-07-07'
+license: Apache-2.0
+repository-code: 'https://github.com/mbaffour/plaque-toolkit'
+# TODO before you cite it in a paper:
+#   1. Confirm the author list, add affiliations + ORCID iDs.
+#   2. Archive a release to Zenodo (see docs/PUBLISHING_CHECKLIST.md) and paste the DOI below.
+authors:
+  - family-names: Baffour Awuah
+    given-names: Michael
+    # affiliation: 'Your lab / institution'
+    # orcid: 'https://orcid.org/0000-0000-0000-0000'
+# doi: '10.5281/zenodo.XXXXXXX'   # <- fill in after the Zenodo release
+references:
+  - type: article
+    title: >-
+      Plaque Size Tool: an automated plaque analysis tool for simplifying and
+      standardising bacteriophage plaque morphology measurements
+    authors:
+      - family-names: Trofimova
+        given-names: Ellina
+      - family-names: Jaschke
+        given-names: Paul R.
+    journal: Virology
+    year: 2021
+    volume: 561
+    start: 1
+    end: 5
+    doi: 10.1016/j.virol.2021.05.011
