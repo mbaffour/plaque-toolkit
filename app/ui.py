@@ -1298,6 +1298,10 @@ def launch():
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Plaque Toolkit")
     app.setStyleSheet(style.get_stylesheet("light"))
+    # warm the Precise models (YOLO + classifier) in the background so the first Precise
+    # run doesn't pay the cold load — runs only for the real GUI, not headless self-tests
+    import threading
+    threading.Thread(target=engine_api.warmup_precise, daemon=True).start()
     icon_path = engine_api.resource_path("icon.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))

@@ -149,6 +149,32 @@ def _torch_inprocess_available():
     return _TORCH_INPROC
 
 
+_WARMED = False
+
+
+def warmup_precise():
+    """Preload the Precise models (PlaqSeg YOLO + the classifier) into their module caches
+    so the user's FIRST Precise click doesn't pay the cold import/load. Safe to call from a
+    background daemon thread; no-ops when torch is unavailable or already warmed. Never
+    raises — warmup is best-effort."""
+    global _WARMED
+    if _WARMED:
+        return
+    try:
+        if not _torch_inprocess_available():
+            return
+        from precise.pipeline import _load_yolo, DEFAULT_WEIGHTS
+        _load_yolo(DEFAULT_WEIGHTS)          # populate the YOLO cache
+        try:
+            from precise import combine
+            combine.load_clf()               # populate the classifier cache
+        except Exception:
+            pass
+        _WARMED = True
+    except Exception:
+        pass
+
+
 def precise_available():
     """Best-effort check that the Precise pipeline *could* run here.
     Returns (ok: bool, reason: str). Cheap — checks files/dirs + import availability,
@@ -250,8 +276,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
             progress("Running Precise pipeline in-process (PST + PlaqSeg + classifier)…")
         try:
             from precise.pipeline import run_inprocess
+            # reuse `base` (the classic detection already computed above) so the pipeline's
+            # PST front doesn't repeat the identical normal pass or re-read the image.
             summ = run_inprocess(path, plate_mm=(plate_mm or 100), out_dir=out_dir,
-                                 clf=True, blob=False, tag=tag)
+                                 clf=True, blob=False, tag=tag, base=base)
         except Exception as e:  # surface a friendly message; keep the GUI alive
             raise PreciseUnavailable(
                 "The in-process Precise pipeline failed:\n\n%s\n\n"

@@ -28,10 +28,18 @@ if _ROOT not in sys.path:
 import plaque_gui
 
 
-def detect(image_path, plate_mm):
-    # PST NORMAL pass (used for the density switch reference count).
-    res_n = plaque_gui.run_detection(image_path, plate_mm, True, False)
-    (_d, orig_bgr, _g, plaques_n, ppm_n, _c, _l, plate) = res_n
+def detect(image_path, plate_mm, base=None):
+    # PST NORMAL pass (used for the density switch reference count). When the caller already
+    # ran the identical normal detection (engine_api.detect_precise computes `base` for the
+    # editor), reuse it instead of repeating that ~3 s pass.
+    if base is not None:
+        orig_bgr = base["orig_bgr"]
+        plaques_n = base["plaques"]
+        ppm_n = base["pxl_per_mm"]
+        plate = base["plate"]
+    else:
+        res_n = plaque_gui.run_detection(image_path, plate_mm, True, False)
+        (_d, orig_bgr, _g, plaques_n, ppm_n, _c, _l, plate) = res_n
 
     # PST SENSITIVE pass (recall candidates for the sparse/clean branch).
     res_s = plaque_gui.run_detection(image_path, plate_mm, True, True)

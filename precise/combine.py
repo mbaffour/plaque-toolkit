@@ -148,16 +148,24 @@ def clf_crop(bgr, cx, cy, dia_px):
     return cv2.resize(win, (CLF_PATCH, CLF_PATCH), interpolation=cv2.INTER_AREA)
 
 
+_CLF_CACHE = None
+
+
 def load_clf():
-    """Import _research/clf/infer.py and load the model. Returns (model, meta) or
-    raises with a clear message if torch/torchvision or the checkpoint is absent."""
+    """Import _research/clf/infer.py and load the model once (cached). Returns
+    (infer, model, meta) or raises with a clear message if torch/torchvision or the
+    checkpoint is absent. Caching avoids re-loading the ResNet checkpoint on every plate."""
+    global _CLF_CACHE
+    if _CLF_CACHE is not None:
+        return _CLF_CACHE
     import importlib.util
     infer_path = os.path.join(CLF_DIR, "infer.py")
     spec = importlib.util.spec_from_file_location("clf_infer", infer_path)
     infer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(infer)
     model, meta = infer.load_model()
-    return infer, model, meta
+    _CLF_CACHE = (infer, model, meta)
+    return _CLF_CACHE
 
 
 # --------------------------------------------------------------------------- #

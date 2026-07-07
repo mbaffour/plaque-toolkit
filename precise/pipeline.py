@@ -68,7 +68,7 @@ def _load_yolo(weights):
 
 
 def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None,
-                  blob=False, weights=None, conf=0.1, iou=0.5, tag=None):
+                  blob=False, weights=None, conf=0.1, iou=0.5, tag=None, base=None):
     """Run the entire Precise pipeline on ONE image in this process and return the
     summary dict (same shape as the subprocess path's summary_<tag>.json).
 
@@ -89,7 +89,7 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
     # --- Stage 1: PST front (dish geometry, calibration, PST normal+sensitive centers).
     # Reuses plaque_gui.run_detection via pst_front.detect (same code the plaque-env
     # subprocess ran). Returns the same dict shape combine expects.
-    pst = pst_front.detect(image_path, str(plate_mm))
+    pst = pst_front.detect(image_path, str(plate_mm), base=base)
     mm_per_px = pst["mm_per_px"]
     if not mm_per_px:
         # No dish to calibrate from (e.g. an already-cropped plate). Prefer an embedded
@@ -105,7 +105,7 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
         pst["mm_per_px"] = mm_per_px
 
     # --- Stage 3: PlaqSeg primary on the ORIGINAL image (tiled YOLO + global NMS).
-    bgr = cv2.imread(image_path)
+    bgr = base["orig_bgr"] if base is not None else cv2.imread(image_path)
     if bgr is None:
         from PIL import Image
         import numpy as np
