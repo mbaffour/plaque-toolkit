@@ -1331,6 +1331,23 @@ def uitest():
     # exercise the precise availability path (must not crash, returns a (bool, reason))
     avail = engine_api.precise_available()
     ok = ok and isinstance(avail, tuple) and isinstance(avail[0], bool)
+    # exercise the Fiji correspondence modules so the frozen build is gated on them too
+    fiji_ok = False
+    try:
+        import tempfile
+        from app import fiji_export, fiji_match, imagej_roi, fiji_dialog  # noqa: F401
+        amf = fiji_export.app_match_frame(measure.editor.plaques, measure.editor.orig_bgr,
+                                          measure.editor.plate, measure.editor.ppm)
+        binfo = fiji_export.save_bundle(measure.editor.plaques, measure.editor.orig_bgr,
+                                        measure.editor.plate, measure.editor.ppm,
+                                        measure.editor.lawn_gray,
+                                        os.path.join(tempfile.gettempdir(), "uitest_fiji"), "uitest")
+        fiji_ok = (len(amf) == det["n_plaques"] and binfo["n"] == det["n_plaques"]
+                   and len(imagej_roi.oval_roi(0, 0, 4, 4)) == 64
+                   and os.path.exists(binfo["roiset"]))
+    except Exception as e:      # pragma: no cover
+        print("UITEST fiji-check error:", e)
+    ok = ok and fiji_ok
     print("UITEST", "OK" if ok else "FAIL", "| rows", measure.model.rowCount(),
-          "| precise_available", avail[0])
+          "| precise_available", avail[0], "| fiji", fiji_ok)
     return 0 if ok else 1
