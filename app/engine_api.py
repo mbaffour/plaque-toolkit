@@ -82,24 +82,72 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
     }
 
 
+def _eff_radius(p):
+    """Area-equivalent radius (px) of a plaque, whatever its shape."""
+    import math
+    if p.get("kind") == "circle" and p.get("radius"):
+        return float(p["radius"])
+    return math.sqrt(max(float(p.get("area_pxl", 0.0)), 1.0) / math.pi)
+
+
+def overlap_flags(plaques, margin=1.0):
+    """Return a list of bools: True where a plaque's area-equivalent disk overlaps/touches
+    another's (centre distance < (r_i + r_j) * margin). Uniform for circles and contours,
+    O(n^2) over the (few) plaques. Overlapping plaques can't be sized reliably, so callers
+    can flag/exclude them."""
+    import math
+    n = len(plaques)
+    flags = [False] * n
+    g = [(float(p["center"][0]), float(p["center"][1]), _eff_radius(p)) for p in plaques]
+    for i in range(n):
+        xi, yi, ri = g[i]
+        for j in range(i + 1, n):
+            xj, yj, rj = g[j]
+            if math.hypot(xi - xj, yi - yj) < (ri + rj) * margin:
+                flags[i] = True
+                flags[j] = True
+    return flags
+
+
+def _circularity(p):
+    """4*pi*A / P^2 in [0,1]; 1.0 = perfect circle. Circles score 1.0; irregular contours
+    (comet/blob/fused) score lower, so odd shapes are visible in the table."""
+    import cv2
+    import math
+    import numpy as np
+    if p.get("kind") == "circle":
+        return 1.0
+    c = np.asarray(p.get("contour"), dtype=np.int32).reshape(-1, 1, 2)
+    per = cv2.arcLength(c, True)
+    if per <= 0:
+        return 0.0
+    area = cv2.contourArea(c)
+    return round(min(1.0, 4.0 * math.pi * area / (per * per)), 3)
+
+
 def measure_table(plaques, orig_bgr, ppm, lawn_gray):
     """Per-plaque DataFrame mirroring what save_results writes, but WITHOUT writing files
-    (for live display of the editable plaque set)."""
+    (for live display of the editable plaque set). Adds CIRCULARITY (shape) and OVERLAP
+    (touches another plaque) so irregular / confluent plaques are visible and filterable."""
     import cv2
     import pandas as pd
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
     means = [pst.mean_gray_in_mask(gray, pgui._plaque_mask(gray.shape, p)) for p in plaques]
     lg = lawn_gray if lawn_gray is not None else pst.estimate_lawn_gray(gray)
     turb = pst.turbidity_indices(means, lg)
+    over = overlap_flags(plaques)
     rows = []
-    for i, (p, mg, tb) in enumerate(zip(plaques, means, turb), start=1):
+    for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm)
         rows.append({"INDEX": i, "AREA_PXL": round(p["area_pxl"], 2),
                      "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": round(area_mm2, 2),
                      "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
-                     "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""), "SOURCE": p["source"]})
+                     "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""),
+                     "CIRCULARITY": _circularity(p), "OVERLAP": ("yes" if ov else "no"),
+                     "SOURCE": p["source"]})
     return pd.DataFrame(rows, columns=["INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-                                       "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"])
+                                       "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL",
+                                       "CIRCULARITY", "OVERLAP", "SOURCE"])
 
 
 def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray):

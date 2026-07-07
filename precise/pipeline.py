@@ -86,34 +86,59 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
         out_dir = os.path.join(os.path.dirname(image_path), "out_precise")
     os.makedirs(out_dir, exist_ok=True)
 
-    # --- Stage 1: PST front (dish geometry, calibration, PST normal+sensitive centers).
-    # Reuses plaque_gui.run_detection via pst_front.detect (same code the plaque-env
-    # subprocess ran). Returns the same dict shape combine expects.
-    pst = pst_front.detect(image_path, str(plate_mm), base=base)
-    mm_per_px = pst["mm_per_px"]
-    if not mm_per_px:
-        # No dish to calibrate from (e.g. an already-cropped plate). Prefer an embedded
-        # ImageJ/Fiji mm scale if the image carries one (our "…_plate.tif" crop does);
-        # otherwise run UNCALIBRATED (pixel-only sizes) like Published/Current/Sensitive —
-        # never hard-fail just because there's no Petri dish in frame.
+    def _embedded_mm(fallback):
+        # No dish to calibrate from (e.g. an already-cropped plate): prefer an embedded
+        # ImageJ/Fiji mm scale (our "…_plate.tif" crop carries one), else run uncalibrated.
+        if fallback:
+            return fallback
         try:
             import plate_crop
-            emb = plate_crop.read_mm_per_px(image_path)
+            return plate_crop.read_mm_per_px(image_path)
         except Exception:
-            emb = None
-        mm_per_px = emb or None
-        pst["mm_per_px"] = mm_per_px
+            return None
 
-    # --- Stage 3: PlaqSeg primary on the ORIGINAL image (tiled YOLO + global NMS).
+    # Read the image + load the YOLO model up front (both stages need them).
     bgr = base["orig_bgr"] if base is not None else cv2.imread(image_path)
     if bgr is None:
         from PIL import Image
         import numpy as np
         bgr = cv2.cvtColor(np.array(Image.open(image_path).convert("RGB")),
                            cv2.COLOR_RGB2BGR)
-    model = _load_yolo(weights)
+    model = _load_yolo(weights)                 # pre-load in main thread (no cache race)
     from _plaqseg.run_plaqseg import detect_plaqseg
-    ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mm_per_px or 0.0))
+
+    # The PST SENSITIVE pass (OpenCV, one run_detection) and the YOLO inference (torch,
+    # releases the GIL) are independent — both need only the image + calibration. Run them
+    # CONCURRENTLY when we already have `base` (the GUI path, so calibration is known and
+    # only one PST call happens → no engine-global race). Set PRECISE_PARALLEL=0 to disable.
+    parallel = base is not None and os.environ.get("PRECISE_PARALLEL", "1") != "0"
+    if parallel:
+        import threading
+        mmpp0 = _embedded_mm(base.get("pxl_per_mm"))     # calibration for YOLO, known up front
+        out, errs = {}, {}
+
+        def _guard(key, fn):
+            try:
+                out[key] = fn()
+            except Exception as e:  # capture; re-raised on the main thread below
+                errs[key] = e
+
+        ta = threading.Thread(target=_guard, args=("pst",
+                              lambda: pst_front.detect(image_path, str(plate_mm), base=base)))
+        tb = threading.Thread(target=_guard, args=("ps",
+                              lambda: detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mmpp0 or 0.0))))
+        ta.start(); tb.start(); ta.join(); tb.join()
+        if errs:
+            raise next(iter(errs.values()))
+        pst = out["pst"]
+        ps_rows, _raw = out["ps"]
+        mm_per_px = pst["mm_per_px"] or mmpp0
+        pst["mm_per_px"] = mm_per_px
+    else:
+        pst = pst_front.detect(image_path, str(plate_mm), base=base)
+        mm_per_px = pst["mm_per_px"] or _embedded_mm(None)
+        pst["mm_per_px"] = mm_per_px
+        ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mm_per_px or 0.0))
 
     # detect_plaqseg returns the CSV schema (X,Y,AREA_PXL,...); combine expects the
     # lowercase load_plaqseg schema. Convert in-memory (no CSV round-trip).

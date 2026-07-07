@@ -14,8 +14,12 @@ COLUMN_TOOLTIPS = {
     "MEAN_GRAY": "Mean brightness inside the plaque (0–255). Lower = clearer / darker.",
     "TURBIDITY_REL": "Relative turbidity: plaque brightness ÷ surrounding lawn. "
                      "~1 = as opaque as the lawn (turbid); lower = clearer.",
+    "CIRCULARITY": "Shape roundness 4·π·area / perimeter² (0–1). 1 = perfect circle; "
+                   "lower = irregular / comet / elongated. Circles you draw score 1.",
+    "OVERLAP": "yes = this plaque touches/overlaps another, so its size is unreliable. "
+               "Tick 'Exclude overlapping plaques' to drop these from the stats.",
     "SOURCE": "How the plaque was found: auto (detector), manual (you added it), "
-              "or watershed (split from a touching pair).",
+              "freehand (you drew the outline), or watershed (split from a touching pair).",
 }
 
 

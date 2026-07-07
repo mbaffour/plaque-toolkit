@@ -263,10 +263,11 @@ def trace_by_contour(candidates, x, y):
     return best["hull"], best["area"], best["center"]
 
 
-def trace_at(candidates, gray, x, y):
-    """Auto-trace at (x, y): prefer a detector contour, fall back to flood-fill."""
+def trace_at(candidates, gray, x, y, tol=20):
+    """Auto-trace at (x, y): prefer a detector contour, fall back to a flood-fill whose
+    sensitivity is `tol` (higher grabs fainter/larger boundaries)."""
     res = trace_by_contour(candidates, x, y)
-    return res if res is not None else autotrace(gray, x, y)
+    return res if res is not None else autotrace(gray, x, y, tol=tol)
 
 
 def autotrace(gray, x, y, tol=20, max_area=100000):

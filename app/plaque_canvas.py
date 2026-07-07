@@ -30,8 +30,8 @@ from PySide6.QtGui import QImage, QPixmap, QPen, QBrush, QColor, QPainter, QPoly
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLayout, QSizePolicy, QGraphicsView,
     QGraphicsScene, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPolygonItem,
-    QGraphicsLineItem, QGraphicsSimpleTextItem, QPushButton, QButtonGroup, QLabel,
-    QComboBox, QMenu, QFileDialog, QMessageBox, QInputDialog, QColorDialog)
+    QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPathItem, QPushButton, QButtonGroup,
+    QLabel, QComboBox, QSpinBox, QMenu, QFileDialog, QMessageBox, QInputDialog, QColorDialog)
 
 
 class FlowLayout(QLayout):
@@ -97,6 +97,7 @@ from app import engine_api
 
 TOOL_SELECT = "select"
 TOOL_ADD = "add"
+TOOL_FREEHAND = "freehand"
 TOOL_REGION = "region"
 TOOL_ERASE = "erase"
 TOOL_DISH = "dish"
@@ -117,8 +118,10 @@ def _circle_from_3(p1, p2, p3):
     return ux, uy, math.hypot(x1 - ux, y1 - uy)
 
 _COL = {"auto": QColor(40, 220, 70), "manual": QColor(30, 170, 255),
-        "region": QColor(255, 170, 0), "watershed": QColor(180, 120, 255)}
+        "region": QColor(255, 170, 0), "watershed": QColor(180, 120, 255),
+        "freehand": QColor(30, 170, 255)}
 _DEFAULT_COL = QColor(40, 220, 70)
+_OVERLAP_COL = QColor(255, 40, 150)     # hot pink: overlapping plaques (distinct from red selection)
 _SEL = QColor(255, 45, 45)
 _SEL_FILL = QColor(255, 45, 45, 70)
 _SCALE_OPTIONS = [("Auto", None), ("0.5 mm", 0.5), ("1 mm", 1.0), ("2 mm", 2.0),
@@ -217,6 +220,10 @@ class _View(QGraphicsView):
             self._temp = QGraphicsEllipseItem(); self._temp.setPen(self._dash())
             self.scene().addItem(self._temp)
             self._size_circle(self._press_scene, self._press_scene); return
+        if tool == TOOL_FREEHAND:
+            self._free_pts = [self._press_scene]
+            self._free_item = QGraphicsPolygonItem(); self._free_item.setPen(self._dash())
+            self.scene().addItem(self._free_item); return
         if tool == TOOL_REGION:
             self._temp = QGraphicsRectItem(); self._temp.setPen(self._dash())
             self.scene().addItem(self._temp)
@@ -240,6 +247,12 @@ class _View(QGraphicsView):
                 self._moved = True
             self.owner._auto_fit = False
             return
+        if getattr(self, "_free_item", None) is not None:
+            scene = self.mapToScene(pos)
+            self._free_pts.append(scene)
+            self._free_item.setPolygon(QPolygonF(self._free_pts))
+            self._moved = True
+            return
         if self._temp is not None:
             scene = self.mapToScene(pos)
             if self.owner.tool == TOOL_ADD and self._box_mode is None:
@@ -257,6 +270,10 @@ class _View(QGraphicsView):
             if e.button() == Qt.LeftButton and not self._moved and self.owner.tool == TOOL_SELECT:
                 self.owner._toggle_select_at(self.mapToScene(_pt(e)))
             return
+        if getattr(self, "_free_item", None) is not None and e.button() == Qt.LeftButton:
+            self.scene().removeItem(self._free_item); self._free_item = None
+            pts = self._free_pts; self._free_pts = []
+            self.owner._add_freehand(pts); return
         if e.button() != Qt.LeftButton:
             return super().mouseReleaseEvent(e)
         if self._temp is not None:
@@ -433,6 +450,9 @@ class PlaqueCanvas(QWidget):
                 "Shift+drag = box-select, Ctrl+drag = box-deselect.")
         toolbtn(TOOL_ADD, "Add",
                 "Click a plaque the program missed to auto-trace it, or drag to draw a circle.")
+        toolbtn(TOOL_FREEHAND, "Draw shape",
+                "Freehand-trace any outline: press and drag all the way around an irregular "
+                "plaque, then release. For comet/blob shapes the auto-trace can't follow.")
         toolbtn(TOOL_REGION, "Detect area",
                 "Drag a tight box; the detector re-scans inside it and adds plaques it finds.")
         toolbtn(TOOL_ERASE, "Erase",
@@ -441,6 +461,14 @@ class PlaqueCanvas(QWidget):
                 "Calibrate: click 3 points on the real plate/agar rim, then type its diameter in mm "
                 "(e.g. 85 for your agar area). The mm scale is set from your circle — fixes wrong "
                 "auto-detection and gives true sizes.")
+
+        flow.addWidget(QLabel(" Trace tol:"))
+        self.trace_tol = QSpinBox(); self.trace_tol.setRange(1, 100); self.trace_tol.setValue(20)
+        self.trace_tol.setFixedWidth(58)
+        self.trace_tol.setToolTip("Auto-trace sensitivity for the Add tool (flood-fill tolerance). "
+                                  "Higher grabs fainter / larger boundaries; lower stays tighter. "
+                                  "Default 20.")
+        flow.addWidget(self.trace_tol)
 
         def actbtn(text, slot, tip):
             b = QPushButton(text); b.setToolTip(tip); b.clicked.connect(slot)
@@ -516,6 +544,9 @@ class PlaqueCanvas(QWidget):
         elif key == TOOL_SCALE:
             self._update_hint("Set scale: click TWO points a known distance apart (e.g. two ruler "
                               "marks); you'll type the real mm and the scale is set directly.")
+        elif key == TOOL_FREEHAND:
+            self._update_hint("Draw shape: press and drag all the way around an irregular plaque, "
+                              "then release to store the outline (measured by its true area).")
         else:
             self._update_hint()
 
@@ -769,8 +800,11 @@ class PlaqueCanvas(QWidget):
         self._clear_overlay()
         for i, p in enumerate(self._plaques):
             sel = p.get("_uid") in self.selected
-            col = _SEL if sel else _COL.get(p.get("source", "auto"), _DEFAULT_COL)
+            over = p.get("overlap") and not sel
+            col = _SEL if sel else (_OVERLAP_COL if over else _COL.get(p.get("source", "auto"), _DEFAULT_COL))
             pen = QPen(col, 2.4 if sel else 1.4); pen.setCosmetic(True)
+            if over:
+                pen.setStyle(Qt.DashLine)      # dashed + pink = "overlaps a neighbour"
             if p["kind"] == "circle":
                 r = float(p.get("radius", math.sqrt(max(p["area_pxl"], 1) / math.pi)))
                 cx, cy = p["center"]
@@ -892,6 +926,14 @@ class PlaqueCanvas(QWidget):
         # ground-truth export all read in the same human-obvious order with #1 at
         # the top of the image. Selection is by _uid, so it survives reordering.
         self._plaques.sort(key=lambda p: (p["center"][1], p["center"][0]))
+        self._mark_overlaps()
+
+    def _mark_overlaps(self):
+        """Tag each plaque with p['overlap'] = True when it touches/overlaps a neighbour,
+        so _render can flag them and the table/stats can exclude them."""
+        flags = engine_api.overlap_flags(self._plaques)
+        for p, f in zip(self._plaques, flags):
+            p["overlap"] = bool(f)
 
     def _changed(self, msg=None):
         self._reorder()
@@ -909,14 +951,36 @@ class PlaqueCanvas(QWidget):
         self._changed(f"erased a {removed.get('source', 'auto')} plaque")
 
     def _add_point(self, scene_pt):
-        res = pgui.trace_at(self.candidates, self.proc_gray, scene_pt.x(), scene_pt.y())
+        tol = getattr(self, "trace_tol", None)
+        tol_val = tol.value() if tol is not None else 20
+        res = pgui.trace_at(self.candidates, self.proc_gray, scene_pt.x(), scene_pt.y(), tol=tol_val)
         if res is None:
-            self._update_hint("couldn't auto-trace there — drag to draw a circle instead"); return
+            self._update_hint("couldn't auto-trace there — raise 'Trace tol', use Draw shape, "
+                              "or drag to draw a circle"); return
         hull, area, center = res
         self._push_undo()
         self._plaques.append({"source": "manual", "kind": "contour", "_uid": self._next_uid(),
                               "contour": hull, "area_pxl": float(area), "center": center})
         self._changed("added a traced plaque")
+
+    def _add_freehand(self, pts):
+        """Store a user-drawn outline as a real (possibly non-convex) contour plaque, so
+        irregular shapes are measured by their true area — no circle fit."""
+        if len(pts) < 3:
+            self._update_hint("draw a longer outline — drag around the plaque, then release"); return
+        arr = np.array([[int(round(p.x())), int(round(p.y()))] for p in pts], dtype=np.int32)
+        area = float(cv2.contourArea(arr))
+        if area < 4:
+            self._update_hint("that outline was too small"); return
+        m = cv2.moments(arr)
+        if m["m00"]:
+            center = (m["m10"] / m["m00"], m["m01"] / m["m00"])
+        else:
+            center = (float(arr[:, 0].mean()), float(arr[:, 1].mean()))
+        self._push_undo()
+        self._plaques.append({"source": "freehand", "kind": "contour", "_uid": self._next_uid(),
+                              "contour": arr.reshape(-1, 1, 2), "area_pxl": area, "center": center})
+        self._changed("added a freehand outline")
 
     def _add_circle(self, center, r):
         self._push_undo()

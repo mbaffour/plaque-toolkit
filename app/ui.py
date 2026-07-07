@@ -152,6 +152,13 @@ class MeasureTab(QWidget):
         self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch. "
                                   "Helpful on crowded plates; ignored under Published mode.")
 
+        self.exclude_overlaps = QCheckBox("Exclude overlaps from stats")
+        self.exclude_overlaps.setToolTip("Leave overlapping/touching plaques (OVERLAP=yes, shown "
+                                         "dashed-pink) OUT of the median/mean diameter — their size "
+                                         "is unreliable. They stay visible and in the CSV, just not "
+                                         "in the summary numbers.")
+        self.exclude_overlaps.stateChanged.connect(lambda _=0: self.refresh_table())
+
         self.open_btn = QPushButton(" Open image…"); self.open_btn.setObjectName("Primary")
         self.open_btn.setIcon(_icon(QStyle.SP_DirOpenIcon))
         self.open_btn.clicked.connect(self.open_image)
@@ -179,7 +186,7 @@ class MeasureTab(QWidget):
         sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setStyleSheet("color:#d6dbe5")
         pl.addSpacing(4); pl.addWidget(sep); pl.addSpacing(4)
         pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
-        pl.addWidget(self.watershed)
+        pl.addWidget(self.watershed); pl.addWidget(self.exclude_overlaps)
         sep2 = QFrame(); sep2.setFrameShape(QFrame.VLine); sep2.setStyleSheet("color:#d6dbe5")
         pl.addSpacing(4); pl.addWidget(sep2); pl.addSpacing(4)
         pl.addWidget(self.orient_btn)
@@ -288,6 +295,8 @@ class MeasureTab(QWidget):
             (self.plate_100, "Set dish to 100 mm", "Quick-set the lid diameter to 100 mm."),
             (self.mode, "Detection engine", "Choose the plaque-detection engine."),
             (self.watershed, "Split touching plaques", "Separate plaques whose edges touch."),
+            (self.exclude_overlaps, "Exclude overlapping plaques from statistics",
+             "Leave overlapping plaques out of the median and mean diameter."),
             (self.orient_btn, "Orient image", "Rotate or flip the plate to match a reference orientation."),
             (self.open_btn, "Open image", "Open a plaque photo (Ctrl+O)."),
             (self.redetect_btn, "Re-detect", "Re-run detection with the current options."),
@@ -438,7 +447,7 @@ class MeasureTab(QWidget):
         if not on:
             self._busy_timer.stop()
         for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,
-                  self.watershed, self.plate_85, self.plate_100) + self._orient_btns:
+                  self.watershed, self.exclude_overlaps, self.plate_85, self.plate_100) + self._orient_btns:
             w.setEnabled(not on)
         if not on:
             self.save_btn.setEnabled(self.editor is not None)
@@ -568,7 +577,14 @@ class MeasureTab(QWidget):
                                       det["pxl_per_mm"], det["lawn_gray"])
         self._set_table_df(df)
         n = len(df)
-        dm = pd.to_numeric(df["DIAMETER_MM"], errors="coerce").dropna()
+        stats_df = df
+        if self.exclude_overlaps.isChecked() and "OVERLAP" in df.columns:
+            stats_df = df[df["OVERLAP"] != "yes"]
+        n_excl = n - len(stats_df)
+        if n_excl:
+            ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."
+            flag = (flag + "  " + ov_msg) if flag else ov_msg
+        dm = pd.to_numeric(stats_df["DIAMETER_MM"], errors="coerce").dropna()
         cal = det["pxl_per_mm"]
         self._set_summary(
             n=n,
