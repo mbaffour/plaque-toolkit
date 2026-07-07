@@ -94,7 +94,12 @@ class FijiCompareDialog(QDialog):
         parts = [f"<b>Matched {s['n_matched']}</b> of {s['n_app']} app plaques "
                  f"to {s['n_fiji']} Fiji rows."]
         if s.get("aligned"):
-            parts.append(f"Auto-aligned (scale ×{s['scale']:.3f}).")
+            flip = " + mirror-flip" if s.get("reflected") else ""
+            parts.append(f"Auto-aligned (scale ×{s['scale']:.3f}{flip}).")
+            if s.get("reflected"):
+                parts.append("<span style='color:#b45309'>Heads-up: your Fiji image is "
+                             "mirror-flipped relative to the app (matched anyway). Use the app's "
+                             "Orient ▾ to keep them the same way up.</span>")
         if s["bias_mean_mm"] is not None:
             parts.append(f"Mean difference (app − Fiji): <b>{s['bias_mean_mm']:+.3f} mm</b>.")
         if s["loa_low_mm"] is not None:

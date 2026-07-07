@@ -92,15 +92,22 @@ def _two_point_similarity(f0, f1, a0, a1):
     return scale, R, t
 
 
-def _ransac_align(F, A, tol, iters=4000, seed=12345):
-    """Find a similarity mapping Fiji points F into the app frame A that maximises inliers.
+def _reflect(F):
+    """Mirror a point set across the x-axis (negate y). Combined with the rotation search
+    this covers every mirror-flip, so alignment handles all 8 dihedral orientations."""
+    G = np.asarray(F, float).copy()
+    G[:, 1] = -G[:, 1]
+    return G
+
+
+def _ransac_similarity(F, A, tol, iters=4000, seed=12345):
+    """Best proper-rotation similarity mapping F into A's frame (no reflection).
     Returns (scale, R, t, n_inliers) or None."""
     n, m = len(F), len(A)
     if n < 2 or m < 2:
         return None
     rng = np.random.default_rng(seed)
-    best = None
-    best_in = -1
+    best, best_in = None, -1
     for _ in range(int(iters)):
         i0, i1 = rng.integers(0, n, 2)
         j0, j1 = rng.integers(0, m, 2)
@@ -119,15 +126,39 @@ def _ransac_align(F, A, tol, iters=4000, seed=12345):
             best_in, best = inl, (scale, R, t)
     if best is None or best_in < 2:
         return None
-    # refine on the inlier correspondences
-    scale, R, t = best
-    Ft = _apply(scale, R, t, F)
-    d = np.linalg.norm(Ft[:, None, :] - A[None, :, :], axis=2)
+    scale, R, t = best                      # refine on the inlier correspondences
+    d = np.linalg.norm(_apply(scale, R, t, F)[:, None, :] - A[None, :, :], axis=2)
     jmin = d.argmin(axis=1)
     keep = d[np.arange(n), jmin] <= tol
     if keep.sum() >= 2:
         scale, R, t = _umeyama(F[keep], A[jmin[keep]])
     return scale, R, t, best_in
+
+
+def _ransac_align(F, A, tol, iters=4000, seed=12345):
+    """Align Fiji points F into the app frame A, trying BOTH orientations (direct and
+    mirror-flipped) so a flipped plate still matches. Returns a dict with a transform
+    callable ``tf``, ``scale`` and ``reflected`` — or None."""
+    best = None
+    for reflected in (False, True):
+        G = _reflect(F) if reflected else np.asarray(F, float)
+        res = _ransac_similarity(G, A, tol, iters, seed)
+        if res is None:
+            continue
+        scale, R, t, inl = res
+        if best is None or inl > best["inliers"]:
+            best = {"scale": float(scale), "R": R, "t": t,
+                    "reflected": reflected, "inliers": int(inl)}
+    if best is None:
+        return None
+    scale, R, t, reflected = best["scale"], best["R"], best["t"], best["reflected"]
+
+    def tf(pts):
+        P = _reflect(pts) if reflected else np.asarray(pts, float)
+        return (scale * (R @ P.T).T) + t
+
+    best["tf"] = tf
+    return best
 
 
 def _greedy_match(A, B, tol):
@@ -170,14 +201,16 @@ def match(app_df, fiji_df, align="auto", tol=None):
     scale = 1.0
     Ft = F
     aligned = False
+    reflected = False
     if align == "auto" and len(A) >= 2 and len(F) >= 2:
         # tolerance for RANSAC in the app frame; if we don't know app scale yet, use a
         # generous span-based fallback
         rtol = tol if tol else 0.15 * float(np.linalg.norm(A.max(0) - A.min(0)) or 1.0)
-        res = _ransac_align(F, A, rtol)
-        if res is not None:
-            scale, R, t, _ = res
-            Ft = _apply(scale, R, t, F)
+        al = _ransac_align(F, A, rtol)
+        if al is not None:
+            scale = al["scale"]
+            reflected = al["reflected"]
+            Ft = al["tf"](F)
             aligned = True
     if tol is None:
         tol = 0.6 * med if med and med > 0 else 0.1 * float(np.linalg.norm(A.max(0) - A.min(0)) or 1.0)
@@ -211,7 +244,8 @@ def match(app_df, fiji_df, align="auto", tol=None):
     summary = {
         "n_app": int(len(A)), "n_fiji": int(len(F)), "n_matched": int(len(pairs)),
         "n_unmatched_app": len(unmatched_app), "n_unmatched_fiji": len(unmatched_fiji),
-        "tol": round(float(tol), 3), "aligned": aligned, "scale": round(float(scale), 5),
+        "tol": round(float(tol), 3), "aligned": aligned, "reflected": bool(reflected),
+        "scale": round(float(scale), 5),
         "bias_mean_mm": round(float(np.mean(deltas)), 4) if deltas.size else None,
         "bias_sd_mm": round(float(np.std(deltas, ddof=1)), 4) if deltas.size > 1 else None,
         "loa_low_mm": None, "loa_high_mm": None,

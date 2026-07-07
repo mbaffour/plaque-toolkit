@@ -311,6 +311,12 @@ saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
     Start with one export:</p>
     <div class="step"><div class="n">1</div><div class="b">In Plaque Toolkit: <span class="path">Export ▾ → Fiji registration bundle</span>. It writes, into an <code>out/&lt;name&gt;_fiji/</code> folder: a calibrated crop <code>_plate.tif</code>, an ImageJ ROI set <code>_RoiSet.zip</code> (numbered top‑down), a numbered <code>_map.png</code>, and a <code>_registration.csv</code> (each plaque's X/Y in px &amp; mm).</div></div>
 
+    <div class="note"><b>Orientation.</b> The exported crop and ROIs are in the plate's <b>current
+    orientation in the app</b> — so if you rotate/flip with <b>Orient ▾</b> to match your Fiji plates,
+    do it <i>before</i> exporting and everything lines up. Even if they don't match, <b>Compare vs Fiji…</b>
+    now corrects any rotation <i>and</i> mirror-flip automatically (and warns you when it detected a flip),
+    so position‑matching still finds the same plaques across all orientations.</div>
+
     <h3>A · Load the app's outlines into Fiji — guarantees #k = #k <span style="color:#6b7484">(fastest)</span></h3>
     <ol>
       <li>Open <code>&lt;name&gt;_plate.tif</code> in Fiji (already calibrated in mm).</li>
