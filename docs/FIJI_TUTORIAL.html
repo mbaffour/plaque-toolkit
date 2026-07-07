@@ -3,69 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Measuring plaques in Fiji / ImageJ — Plaque Toolkit tutorial</title>
+<title>Measuring plaques in Fiji / ImageJ — detailed tutorial (Plaque Toolkit)</title>
 <style>
   :root{--bg:#f4f6fb;--surface:#fff;--ink:#1f2733;--muted:#6b7484;--line:#e3e8f0;
-    --accent:#2563eb;--ok:#16a34a;--warn:#d97706;--code:#0f172a;--sidebar:280px;}
+    --accent:#2563eb;--ok:#16a34a;--warn:#d97706;--code:#0f172a;--sidebar:290px;}
   *{box-sizing:border-box} html{scroll-behavior:smooth}
   body{margin:0;background:var(--bg);color:var(--ink);
     font:15px/1.62 "Segoe UI","Inter","Helvetica Neue",Arial,sans-serif}
   a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
   code{background:#eef1f7;border:1px solid var(--line);border-radius:5px;padding:.05em .4em;
     font:13px/1.4 "Cascadia Code","Consolas",monospace;color:var(--code)}
-  kbd{background:#1f2733;color:#fff;border-radius:5px;padding:.08em .45em;font-size:12px;
-    font-family:"Consolas",monospace}
+  pre{background:#0f172a;color:#e5edff;border-radius:10px;padding:12px 14px;overflow:auto;font-size:12.5px;
+    font-family:"Consolas",monospace;line-height:1.5}
+  kbd{background:#1f2733;color:#fff;border-radius:5px;padding:.08em .45em;font-size:12px;font-family:"Consolas",monospace}
   .path{background:#0f172a;color:#e5edff;border-radius:6px;padding:.12em .5em;font-size:13px;
     font-family:"Consolas",monospace;white-space:nowrap}
   #side{position:fixed;top:0;left:0;width:var(--sidebar);height:100vh;overflow-y:auto;
     background:#0e7d5b;color:#d7f5e8;padding:22px 16px 40px}
   #side h1{color:#fff;font-size:18px;margin:.2em 0} #side .sub{color:#a7e6cf;font-size:12.5px;margin-bottom:14px}
-  #side a{display:block;color:#d7f5e8;padding:5px 9px;border-radius:6px;font-size:13.5px}
+  #side a{display:block;color:#d7f5e8;padding:4px 9px;border-radius:6px;font-size:13.4px}
   #side a:hover{background:#0b6b4e;color:#fff;text-decoration:none}
-  #side .grp{color:#8fd9bf;text-transform:uppercase;letter-spacing:.06em;font-size:11px;font-weight:700;margin:15px 0 5px}
-  main{margin-left:var(--sidebar);max-width:900px;padding:32px 40px 120px}
+  #side .grp{color:#8fd9bf;text-transform:uppercase;letter-spacing:.06em;font-size:11px;font-weight:700;margin:14px 0 5px}
+  main{margin-left:var(--sidebar);max-width:920px;padding:32px 40px 130px}
   .hero{background:linear-gradient(135deg,#0e7d5b,#166534);color:#fff;border-radius:16px;padding:24px 28px;margin-bottom:22px}
   .hero h1{margin:.1em 0;font-size:26px} .hero p{margin:.3em 0;color:#d9f7ea}
-  h2{font-size:22px;margin:34px 0 8px;padding-top:8px;border-top:2px solid var(--line)}
-  h3{font-size:16px;margin:20px 0 4px;color:#166534}
+  h2{font-size:22px;margin:36px 0 8px;padding-top:8px;border-top:2px solid var(--line)}
+  h3{font-size:16.5px;margin:22px 0 4px;color:#166534}
   section{scroll-margin-top:16px}
-  .step{display:flex;gap:14px;margin:16px 0;padding:14px 16px;background:#fff;border:1px solid var(--line);
+  .step{display:flex;gap:14px;margin:14px 0;padding:13px 16px;background:#fff;border:1px solid var(--line);
     border-radius:12px;box-shadow:0 2px 10px rgba(20,40,30,.05)}
-  .step .n{flex:0 0 34px;height:34px;border-radius:50%;background:#166534;color:#fff;font-weight:700;
-    display:flex;align-items:center;justify-content:center}
+  .step .n{flex:0 0 32px;height:32px;border-radius:50%;background:#166534;color:#fff;font-weight:700;
+    display:flex;align-items:center;justify-content:center;font-size:14px}
   .step .b{flex:1}
   .tip,.warn,.ok,.note{border-radius:10px;padding:11px 14px;margin:12px 0;border-left:4px solid;font-size:14px}
   .tip{background:#eff6ff;border-color:var(--accent)} .warn{background:#fff7ed;border-color:var(--warn)}
   .ok{background:#f0fdf4;border-color:var(--ok)} .note{background:#f8fafc;border-color:#94a3b8}
-  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.6px;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.4px;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
   th,td{border-bottom:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
   th{background:#eef7f1;font-weight:700} tr:last-child td{border-bottom:0}
   details{background:#fff;border:1px solid var(--line);border-radius:10px;margin:10px 0;padding:2px 14px}
-  summary{cursor:pointer;font-weight:600;padding:10px 0;color:#166534}
-  details[open]{padding-bottom:12px}
+  summary{cursor:pointer;font-weight:600;padding:10px 0;color:#166534} details[open]{padding-bottom:12px}
   .chk{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:14px 0}
   .chk label{display:block;padding:5px 0;cursor:pointer} .chk input{margin-right:9px;transform:scale(1.15)}
   figure{margin:14px 0;text-align:center} figcaption{font-size:12.5px;color:var(--muted);margin-top:6px}
   .eq{font-family:"Cambria Math","Times New Roman",serif;font-size:18px}
+  .lead{font-size:16px;color:#334155} hr{border:0;border-top:1px solid var(--line);margin:26px 0}
   @media(max-width:900px){#side{position:static;width:auto;height:auto} main{margin-left:0;padding:18px}}
 </style>
 </head>
 <body>
 <nav id="side">
   <h1>🔬 Measuring in Fiji</h1>
-  <div class="sub">for the Plaque Toolkit workflow</div>
-  <div class="grp">Basics</div>
-  <a href="#why">Why & what you'll measure</a>
-  <a href="#open">1 · Open the image</a>
+  <div class="sub">detailed guide · Plaque Toolkit</div>
+  <div class="grp">Foundations</div>
+  <a href="#why">Why &amp; what you measure</a>
+  <a href="#prep">1 · Prepare the image</a>
   <a href="#scale">2 · Set the scale (mm)</a>
-  <a href="#measurements">3 · Set Measurements</a>
-  <div class="grp">Measure</div>
+  <a href="#measurements">3 · Set Measurements (all of them)</a>
+  <div class="grp">Size</div>
   <a href="#one">4 · Measure one plaque</a>
-  <a href="#many">5 · Measure many (ROI Manager)</a>
-  <a href="#auto">Optional · Analyze Particles</a>
-  <a href="#save">6 · Save the results</a>
-  <div class="grp">Use it</div>
-  <a href="#compare">7 · Compare to Plaque Toolkit</a>
+  <a href="#many">5 · Many plaques (ROI Manager)</a>
+  <a href="#auto">6 · Automatic (Analyze Particles)</a>
+  <div class="grp">Gray value / clarity</div>
+  <a href="#gray">7 · Gray value &amp; turbidity</a>
+  <a href="#profile">8 · Profiles &amp; histograms</a>
+  <a href="#od">9 · Toward optical density</a>
+  <div class="grp">Scale up</div>
+  <a href="#macro">10 · Macros &amp; batch</a>
+  <a href="#save">11 · Save &amp; analyse</a>
+  <a href="#compare">12 · Compare to Plaque Toolkit</a>
+  <div class="grp">Reference</div>
+  <a href="#columns">Results columns</a>
   <a href="#checklist">Checklist</a>
   <a href="#shortcuts">Shortcuts</a>
   <a href="#faq">FAQ</a>
@@ -73,172 +81,252 @@
 <main>
   <div class="hero">
     <h1>Measuring plaques in Fiji (ImageJ)</h1>
-    <p>A step‑by‑step, hands‑on guide to measuring bacteriophage plaque <b>size</b> in Fiji — as the independent
-    reference to validate <b>Plaque Toolkit</b> (and to make scale‑bar figures).</p>
+    <p>The detailed version — plaque <b>size</b> <i>and</i> <b>gray value / clarity (turbidity)</b>, densitometry, ROI
+    workflows, macros, and how it all lines up with <b>Plaque Toolkit</b>.</p>
   </div>
 
   <section id="why">
-    <h2>Why do this — and what you'll measure</h2>
-    <p>Fiji is your <b>independent yardstick</b>. You measure a handful of plaques by hand in Fiji, then compare those
-    diameters to what Plaque Toolkit reports. That comparison (bias + limits of agreement) is the <b>size‑validation</b>
-    a reviewer will ask for. Fiji also lets you crop a single plaque and add a correct scale bar for a figure.</p>
-    <div class="ok"><b>Match definitions.</b> Plaque Toolkit reports the <b>area‑equivalent diameter</b>
-    <span class="eq">d = 2·√(A/π)</span>. So the cleanest thing to measure in Fiji is the plaque's <b>Area</b>, then
-    compute the same equivalent diameter — apples to apples. (You can also record Feret's diameter and the fit‑ellipse
-    axes; more below.)</p>
-    <figure>
-      <svg width="360" height="180" viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
-        <rect width="360" height="180" rx="10" fill="#0e1216"/>
-        <ellipse cx="120" cy="90" rx="66" ry="58" fill="#3a3f45" stroke="#7CFC00" stroke-width="2.5"/>
-        <line x1="54" y1="90" x2="186" y2="90" stroke="#ff5a5a" stroke-width="2"/>
-        <circle cx="54" cy="90" r="3" fill="#ff5a5a"/><circle cx="186" cy="90" r="3" fill="#ff5a5a"/>
-        <text x="120" y="40" fill="#9fe6c4" font-size="12" text-anchor="middle" font-family="Segoe UI">traced plaque → Area A</text>
-        <text x="120" y="150" fill="#ff9d9d" font-size="12" text-anchor="middle" font-family="Segoe UI">line = a diameter</text>
-        <text x="255" y="80" fill="#e5edff" font-size="15" font-family="Cambria Math,serif">d = 2·√(A/π)</text>
-        <text x="255" y="104" fill="#8fd9bf" font-size="11" font-family="Segoe UI">area‑equivalent</text>
-        <text x="255" y="118" fill="#8fd9bf" font-size="11" font-family="Segoe UI">diameter (matches the tool)</text>
-      </svg>
-      <figcaption>Measure the plaque's area, then convert to an area‑equivalent diameter to match Plaque Toolkit.</figcaption>
-    </figure>
-    <div class="tip"><b>Keep orientation consistent.</b> Use the <b>same rotation/flip</b> in Fiji and in Plaque Toolkit
-    (the tool now has an <b>Orient ▾</b> menu) so the same plaque is “#1” in both and coordinates line up.</div>
+    <h2>Why, and the two things you measure</h2>
+    <p class="lead">Fiji is your independent yardstick for validating Plaque Toolkit, and a densitometer for clarity. Two
+    families of measurement:</p>
+    <table>
+      <tr><th>Family</th><th>Fiji gives</th><th>Plaque Toolkit column</th></tr>
+      <tr><td><b>Spatial</b> (needs a mm scale)</td><td>Area, Perimeter, Feret, ellipse axes → diameter</td><td><code>AREA_MM2</code>, <code>DIAMETER_MM</code></td></tr>
+      <tr><td><b>Intensity / gray value</b> (no scale needed)</td><td>Mean/Min/Max/StdDev gray, Integrated density</td><td><code>MEAN_GRAY</code>, <code>TURBIDITY_REL</code></td></tr>
+    </table>
+    <div class="ok"><b>Match definitions.</b> The tool's diameter is the <b>area‑equivalent</b> <span class="eq">d = 2√(A/π)</span>,
+    and its turbidity is <b>plaque mean gray ÷ lawn mean gray</b>. Measure <b>Area</b> and <b>Mean gray value</b> in Fiji and
+    you can reproduce both exactly.</div>
+    <div class="tip"><b>Same orientation.</b> Rotate/flip the plate the same way in Fiji and in Plaque Toolkit (use the
+    tool's <b>Orient ▾</b> menu) so plaque #1 is the same in both.</div>
   </section>
 
-  <section id="open">
-    <h2>1 · Open the image</h2>
-    <div class="step"><div class="n">1</div><div class="b">
-      <b>File → Open…</b> and choose your plate image. <b>Best:</b> export the plate from Plaque Toolkit via
-      <span class="path">Export ▾ → Cropped plate for Fiji</span> — that TIFF has the <b>mm scale baked in</b>, so Fiji
-      opens it already calibrated and you can <b>skip step 2</b>. Check it: <span class="path">Image → Properties…</span>
-      (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) should show <i>Pixel width</i> in mm.
-    </div></div>
-    <div class="note">If you open a raw phone photo instead, its scale is unknown — do step 2. For colour plates,
-    <span class="path">Image → Type → 8‑bit</span> can make thresholding easier later (optional).</div>
+  <section id="prep">
+    <h2>1 · Prepare the image</h2>
+    <div class="step"><div class="n">1</div><div class="b"><b>Open:</b> <span class="path">File → Open…</span>. Best is the Plaque Toolkit export <span class="path">Export ▾ → Cropped plate for Fiji</span> — a TIFF with the <b>mm scale baked in</b> (skip step 2). Verify with <span class="path">Image → Properties…</span> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>).</div></div>
+    <div class="step"><div class="n">2</div><div class="b"><b>Make it single‑channel for gray‑value work.</b> Gray value is only well‑defined on one channel: <span class="path">Image → Type → 8‑bit</span> (RGB→gray), <b>or</b> <span class="path">Image → Color → Split Channels</span> and measure the channel with the best plaque contrast (often the one matching your lawn's colour). Keep a copy of the original for size/figures.</div></div>
+    <div class="step"><div class="n">3</div><div class="b"><b>Flatten uneven lighting</b> (optional, big help on phone photos): <span class="path">Process → Subtract Background…</span> — rolling‑ball radius a bit larger than the biggest plaque; tick <i>Light background</i> if plaques are darker than the lawn. Do this on a <b>duplicate</b> so your raw pixels stay intact for the record.</div></div>
+    <div class="note"><b>Transmitted vs reflected light.</b> On a light box (transmitted), a <i>clear</i> plaque is <b>bright</b>; on
+    top light (reflected), it's usually <b>darker</b> than the lawn. Note which you have — it sets the sign of "clarity".
+    You can <span class="path">Edit → Invert</span> so "clearer = higher value" if that's easier to reason about.</div>
   </section>
 
   <section id="scale">
     <h2>2 · Set the scale — pixels → millimetres</h2>
-    <p>Skip this if you opened the tool's calibrated crop. Otherwise, tell Fiji how many pixels equal a known real
-    distance.</p>
-    <div class="step"><div class="n">1</div><div class="b">Pick the <b>straight‑line</b> tool (5th icon on the toolbar).</div></div>
-    <div class="step"><div class="n">2</div><div class="b">Draw a line along a <b>known distance</b> — ideally a <b>ruler</b> laid in the agar plane, or across the <b>agar</b> diameter (not the lid!).</div></div>
-    <div class="step"><div class="n">3</div><div class="b">Open <span class="path">Analyze → Set Scale…</span> — Fiji fills in <i>Distance in pixels</i> from your line. Type the <b>Known distance</b> and set <b>Unit of length</b> = <code>mm</code>. Tick <b>Global</b> to apply it to every image you open this session. Click <b>OK</b>.</div></div>
+    <p>Skip if you opened the calibrated crop. Otherwise:</p>
+    <div class="step"><div class="n">1</div><div class="b"><b>Straight‑line</b> tool → draw along a <b>known distance</b> (a ruler in the agar plane, or the <b>agar</b> diameter — <i>not</i> the lid).</div></div>
+    <div class="step"><div class="n">2</div><div class="b"><span class="path">Analyze → Set Scale…</span> → <i>Known distance</i> + <i>Unit</i> = <code>mm</code>, tick <b>Global</b>, OK.</div></div>
     <figure>
       <svg width="330" height="176" viewBox="0 0 330 176" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI">
         <rect x="1" y="1" width="328" height="174" rx="8" fill="#f3f5f9" stroke="#c7ccd6"/>
         <rect x="0" y="0" width="330" height="26" rx="8" fill="#2f6f52"/>
         <text x="12" y="17" fill="#fff" font-size="12.5" font-weight="700">Set Scale</text>
-        <text x="18" y="55" font-size="12.5" fill="#1f2733">Distance in pixels:</text><rect x="150" y="43" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="56" font-size="12" fill="#334">712</text>
-        <text x="18" y="82" font-size="12.5" fill="#1f2733">Known distance:</text><rect x="150" y="70" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="83" font-size="12" fill="#334">10</text>
-        <text x="18" y="109" font-size="12.5" fill="#1f2733">Unit of length:</text><rect x="150" y="97" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="110" font-size="12" fill="#334">mm</text>
-        <rect x="18" y="124" width="14" height="14" fill="#fff" stroke="#9aa3b2"/><path d="M20 131 l3 4 l6 -8" stroke="#166534" stroke-width="2" fill="none"/><text x="38" y="135" font-size="12.5" fill="#1f2733">Global</text>
+        <text x="18" y="55" font-size="12.5">Distance in pixels:</text><rect x="150" y="43" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="56" font-size="12">712</text>
+        <text x="18" y="82" font-size="12.5">Known distance:</text><rect x="150" y="70" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="83" font-size="12">10</text>
+        <text x="18" y="109" font-size="12.5">Unit of length:</text><rect x="150" y="97" width="70" height="18" fill="#fff" stroke="#9aa3b2"/><text x="155" y="110" font-size="12">mm</text>
+        <rect x="18" y="124" width="14" height="14" fill="#fff" stroke="#9aa3b2"/><path d="M20 131 l3 4 l6 -8" stroke="#166534" stroke-width="2" fill="none"/><text x="38" y="135" font-size="12.5">Global</text>
         <rect x="150" y="147" width="52" height="20" rx="3" fill="#2f6f52"/><text x="176" y="161" fill="#fff" font-size="12" text-anchor="middle">OK</text>
         <text x="18" y="161" font-size="11" fill="#6b7484">Scale: 71.2 px/mm</text>
       </svg>
-      <figcaption>The Set Scale dialog (mock‑up). “Global” reuses the scale for the whole session.</figcaption>
+      <figcaption>Set Scale (mock‑up). <b>Note:</b> spatial calibration does <i>not</i> change gray values — those stay 0–255.</figcaption>
     </figure>
-    <div class="warn"><b>Agar, not lid.</b> The vendor's “90 mm / 100 mm” is the lid. Calibrate to the <b>agar</b> (where
-    plaques grow, often ~85 mm) or a ruler — the same rule as in Plaque Toolkit.</div>
   </section>
 
   <section id="measurements">
-    <h2>3 · Choose what to measure</h2>
-    <div class="step"><div class="n">1</div><div class="b">Open <span class="path">Analyze → Set Measurements…</span> and tick these:</div></div>
+    <h2>3 · Set Measurements — turn on everything you'll want</h2>
+    <p><span class="path">Analyze → Set Measurements…</span>. Tick these (spatial + intensity), set <b>Decimal places</b> = 3:</p>
     <table>
-      <tr><th>Tick this</th><th>Gives you</th></tr>
-      <tr><td><b>Area</b></td><td>Plaque area (in mm² once calibrated) → convert to <span class="eq">d = 2√(A/π)</span>. <b>Your primary number.</b></td></tr>
-      <tr><td><b>Perimeter</b></td><td>Outline length; also used for shape.</td></tr>
-      <tr><td><b>Fit ellipse</b></td><td><code>Major</code> / <code>Minor</code> axis lengths (mm) — a direct diameter for roundish plaques.</td></tr>
-      <tr><td><b>Feret's diameter</b></td><td><code>Feret</code> (longest caliper span) + <code>MinFeret</code> — the max/min width.</td></tr>
-      <tr><td><b>Shape descriptors</b></td><td><code>Circularity</code>, <code>AR</code> (aspect ratio) — sanity‑check round vs irregular.</td></tr>
-      <tr><td><b>Display label</b></td><td>Puts the image name in each row (handy across many plates).</td></tr>
+      <tr><th>Option</th><th>Column(s)</th><th>Meaning for plaques</th></tr>
+      <tr><td><b>Area</b></td><td>Area</td><td>Plaque area (mm²) → <span class="eq">d=2√(A/π)</span>. <b>Primary size.</b></td></tr>
+      <tr><td><b>Mean gray value</b></td><td>Mean</td><td>Average brightness inside the plaque → <b>clarity</b>. <b>Primary intensity.</b></td></tr>
+      <tr><td><b>Min &amp; max gray value</b></td><td>Min, Max</td><td>Darkest/brightest pixel — centre clearing vs edge.</td></tr>
+      <tr><td><b>Standard deviation</b></td><td>StdDev</td><td>How uniform the clearing is (texture).</td></tr>
+      <tr><td><b>Integrated density</b></td><td>IntDen, RawIntDen</td><td>IntDen = Area×Mean; RawIntDen = <b>sum of pixel values</b> (total "amount" of clearing).</td></tr>
+      <tr><td><b>Median</b> / <b>Modal gray</b></td><td>Median, Mode</td><td>Robust centre of the brightness distribution.</td></tr>
+      <tr><td><b>Perimeter</b></td><td>Perim.</td><td>Outline length; feeds circularity.</td></tr>
+      <tr><td><b>Fit ellipse</b></td><td>Major, Minor, Angle</td><td>Ellipse axis diameters (mm) — a direct diameter for round plaques.</td></tr>
+      <tr><td><b>Feret's diameter</b></td><td>Feret, MinFeret</td><td>Longest / shortest caliper width.</td></tr>
+      <tr><td><b>Shape descriptors</b></td><td>Circ., AR, Round, Solidity</td><td>Sanity‑check round vs irregular / halo.</td></tr>
+      <tr><td><b>Centroid</b></td><td>X, Y</td><td>Plaque position (mm) — to match against the tool's numbering.</td></tr>
+      <tr><td><b>Display label</b></td><td>Label</td><td>Image name in every row — essential across many plates.</td></tr>
+      <tr><td><b>Redirect to:</b></td><td>—</td><td>Measure intensity on <i>another</i> open image (e.g. the raw original) while using ROIs drawn on a processed one. Powerful for densitometry.</td></tr>
     </table>
-    <div class="note">Set <b>Decimal places</b> to 3 while you're here. Click OK.</div>
   </section>
 
   <section id="one">
-    <h2>4 · Measure one plaque</h2>
-    <p>Pick whichever selection method you like — then press <kbd>Ctrl</kbd>+<kbd>M</kbd> (<b>Measure</b>) to send a row
-    to the Results table.</p>
+    <h2>4 · Measure one plaque (size)</h2>
+    <p>Select a plaque, then <kbd>Ctrl</kbd>+<kbd>M</kbd> (<b>Measure</b>) → a row in Results.</p>
     <details open>
-      <summary>Method A — Wand (auto‑trace the outline) &nbsp;·&nbsp; recommended for Area</summary>
+      <summary>Method A — Wand (auto‑trace the outline) · recommended for Area</summary>
       <ol>
-        <li>Select the <b>Wand (tracing)</b> tool (looks like a magic wand on the toolbar).</li>
-        <li><b>Double‑click</b> it to set a <i>Tolerance</i> (start ~20–40) and mode <i>Legacy/8‑connected</i>.</li>
-        <li><b>Click inside a plaque</b> — Fiji traces its boundary. If it grabs too much/little, tweak the tolerance and click again.</li>
-        <li><kbd>Ctrl</kbd>+<kbd>M</kbd> → you get <b>Area</b> (+ Feret, ellipse). This is the cleanest match to the tool's area‑equivalent diameter.</li>
+        <li>Select the <b>Wand (tracing)</b> tool. <b>Double‑click</b> it to set <i>Tolerance</i> (start 20–40) and <i>Legacy / 8‑connected</i> mode.</li>
+        <li>Click inside a plaque → it traces the boundary. Tweak tolerance &amp; re‑click if it grabs too much/little.</li>
+        <li><kbd>Ctrl</kbd>+<kbd>M</kbd> → Area (+ Feret, ellipse, and — because you ticked them — Mean gray etc. of that same region).</li>
       </ol>
     </details>
-    <details>
-      <summary>Method B — Oval selection (fast, for round plaques)</summary>
-      <ol>
-        <li>Pick the <b>Oval</b> tool. Drag an ellipse to cover the plaque; hold <kbd>Shift</kbd> for a circle.</li>
-        <li>Nudge/resize with the handles until it hugs the clear zone.</li>
-        <li><kbd>Ctrl</kbd>+<kbd>M</kbd> → Area + (Fit ellipse) Major/Minor diameters.</li>
-      </ol>
-    </details>
-    <details>
-      <summary>Method C — Line across the diameter (quickest single number)</summary>
-      <ol>
-        <li><b>Straight‑line</b> tool. Draw across the widest part of the plaque, edge to edge.</li>
-        <li><kbd>Ctrl</kbd>+<kbd>M</kbd> → <b>Length</b> = that diameter (mm).</li>
-      </ol>
-      <div class="note">Fast, but it's one chord — for irregular plaques the Area method is fairer.</div>
-    </details>
-    <div class="tip">To convert an Area to the tool's diameter: <span class="eq">d = 2·√(Area/π)</span>. In a spreadsheet:
-    <code>=2*SQRT(Area/PI())</code>.</div>
+    <details><summary>Method B — Oval selection (fast, round plaques)</summary>
+      <ol><li>Oval tool → drag over the plaque (<kbd>Shift</kbd> = circle); resize with handles.</li><li><kbd>Ctrl</kbd>+<kbd>M</kbd> → Area + ellipse Major/Minor.</li></ol></details>
+    <details><summary>Method C — Line across the diameter (one quick number)</summary>
+      <ol><li>Straight‑line tool → draw edge‑to‑edge across the widest part.</li><li><kbd>Ctrl</kbd>+<kbd>M</kbd> → Length = that diameter (mm).</li></ol>
+      <div class="note">One chord only — for irregular plaques the Area method is fairer.</div></details>
+    <div class="tip">Area → tool‑style diameter in a spreadsheet: <code>=2*SQRT(Area/PI())</code>.</div>
   </section>
 
   <section id="many">
     <h2>5 · Measure many plaques (ROI Manager)</h2>
-    <p>The efficient way to do a whole plate and keep every outline.</p>
-    <div class="step"><div class="n">1</div><div class="b">Open <span class="path">Analyze → Tools → ROI Manager…</span> (or just press <kbd>t</kbd> after a selection to create it).</div></div>
-    <div class="step"><div class="n">2</div><div class="b">Select a plaque (wand/oval), press <kbd>t</kbd> to <b>Add [t]</b> it to the manager. Repeat for each plaque.</div></div>
-    <div class="step"><div class="n">3</div><div class="b">In the ROI Manager click <b>Measure</b> — every ROI is measured into the Results table at once. <b>More ▸ Save…</b> stores the ROI set (<code>RoiSet.zip</code>) so you can reload and re‑measure later.</div></div>
-    <div class="tip">Tick <b>Show All</b> + <b>Labels</b> in the ROI Manager to see numbered outlines on the image — makes it easy to match against Plaque Toolkit's numbering.</div>
+    <div class="step"><div class="n">1</div><div class="b"><span class="path">Analyze → Tools → ROI Manager…</span> (or press <kbd>t</kbd> after a selection).</div></div>
+    <div class="step"><div class="n">2</div><div class="b">Select a plaque → <kbd>t</kbd> to <b>Add</b> it. Repeat for each. Tick <b>Show All</b> + <b>Labels</b> to see numbered outlines.</div></div>
+    <div class="step"><div class="n">3</div><div class="b"><b>Measure</b> (all ROIs at once). For a movie/stack use <b>More ▸ Multi Measure</b>. <b>More ▸ Save…</b> writes <code>RoiSet.zip</code> so you can reload and re‑measure any time.</div></div>
+    <div class="tip"><b>Redirect trick:</b> draw/trace ROIs on the background‑subtracted image, but set <span class="path">Set Measurements → Redirect to: &lt;raw original&gt;</span> so the <b>gray values come from the untouched pixels</b> — clean densitometry without altering your data.</div>
   </section>
 
   <section id="auto">
-    <h2>Optional · Automatic (Analyze Particles)</h2>
-    <details>
-      <summary>Threshold + Analyze Particles — automated area for all plaques</summary>
+    <h2>6 · Automatic detection (Analyze Particles)</h2>
+    <details><summary>Threshold → Analyze Particles (area + intensity for every plaque)</summary>
       <ol>
-        <li><span class="path">Image → Adjust → Threshold…</span> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>). Drag the sliders so <b>only the clear plaques</b> are highlighted, then <b>Apply</b>.</li>
-        <li><span class="path">Analyze → Analyze Particles…</span>. Set a <b>Size (mm²)</b> range to drop specks, a <b>Circularity</b> range (e.g. 0.5–1.0), tick <b>Display results</b>, <b>Add to Manager</b>, <b>Exclude on edges</b>.</li>
-        <li>OK → every plaque is measured automatically.</li>
+        <li><span class="path">Image → Adjust → Threshold…</span> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>) → slide so only the plaques highlight (don't <i>Apply</i> if you want to keep the grayscale for intensity — Analyze Particles can read a thresholded overlay while measuring the underlying gray).</li>
+        <li><span class="path">Analyze → Analyze Particles…</span> → <b>Size (mm²)</b> range to drop specks, <b>Circularity</b> 0.4–1.0, tick <b>Display results</b>, <b>Add to Manager</b>, <b>Exclude on edges</b>, <b>Summarize</b>.</li>
+        <li>OK → area + (with intensity ticked) mean gray for every plaque, plus a Summary row (count, total area, mean).</li>
       </ol>
-      <div class="warn">On top‑lit phone photos, thresholding plaques cleanly is hard (uneven lighting, halos). The manual
-      wand/ROI route is usually more reliable — this is exactly the problem Plaque Toolkit's detector solves.</div>
-    </details>
+      <div class="warn">Top‑lit phone photos threshold poorly (uneven light, halos) — the manual wand/ROI route is usually more
+      reliable. This gap is exactly why Plaque Toolkit's detector exists.</div></details>
+  </section>
+
+  <section id="gray">
+    <h2>7 · Gray value &amp; turbidity — the clarity measurement</h2>
+    <p class="lead">A plaque's <b>gray value</b> is how bright/dark it is, which tells you how <b>clear vs turbid</b> it is. This is
+    the Fiji equivalent of Plaque Toolkit's <code>MEAN_GRAY</code> and <code>TURBIDITY_REL</code>.</p>
+    <div class="note">Do this on a <b>single‑channel</b> image (step 1). On an RGB image ImageJ measures a weighted brightness
+    that depends on <span class="path">Edit → Options → Conversions</span> — convert to 8‑bit or split channels so "gray value"
+    is unambiguous.</div>
+
+    <h3>Measure a plaque's brightness</h3>
+    <div class="step"><div class="n">1</div><div class="b">Select the plaque (wand/oval) → <kbd>Ctrl</kbd>+<kbd>M</kbd>. Read <b>Mean</b> (mean gray, 0–255), <b>Min/Max</b>, <b>StdDev</b>, <b>IntDen/RawIntDen</b>.</div></div>
+    <ul>
+      <li><b>Mean</b> — average clarity of that plaque (≈ the tool's <code>MEAN_GRAY</code>).</li>
+      <li><b>RawIntDen</b> — sum of all pixel values = total "clearing signal" (scales with size × depth).</li>
+      <li><b>StdDev</b> — uniformity; a mottled/turbid plaque has higher StdDev than a cleanly lysed one.</li>
+    </ul>
+
+    <h3>Turn it into <i>relative</i> turbidity (like the tool)</h3>
+    <div class="step"><div class="n">2</div><div class="b">Select a clean patch of the surrounding <b>lawn</b> (no plaques) → <kbd>Ctrl</kbd>+<kbd>M</kbd> → note its <b>Mean</b> = lawn brightness.</div></div>
+    <div class="step"><div class="n">3</div><div class="b">Compute <b>relative turbidity = plaque Mean ÷ lawn Mean</b>. ~1 → as opaque as the lawn (<b>turbid</b>); much lower (transmitted light) → <b>clear</b>. This mirrors <code>TURBIDITY_REL</code>.</div></div>
+    <figure>
+      <svg width="440" height="150" viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI">
+        <rect width="440" height="150" rx="10" fill="#0e1216"/>
+        <rect x="20" y="30" width="400" height="90" fill="#4a4f56"/>
+        <ellipse cx="140" cy="75" rx="42" ry="36" fill="#c9d2da" stroke="#7CFC00" stroke-width="2"/>
+        <ellipse cx="300" cy="75" rx="42" ry="36" fill="#8b939c" stroke="#7CFC00" stroke-width="2"/>
+        <rect x="360" y="40" width="46" height="30" fill="none" stroke="#ffd23f" stroke-width="2" stroke-dasharray="4 3"/>
+        <text x="140" y="79" fill="#0e1216" font-size="12" text-anchor="middle" font-weight="700">clear</text>
+        <text x="300" y="79" fill="#0e1216" font-size="12" text-anchor="middle" font-weight="700">turbid</text>
+        <text x="383" y="86" fill="#ffd23f" font-size="10" text-anchor="middle">lawn</text>
+        <text x="140" y="135" fill="#9fe6c4" font-size="11" text-anchor="middle">Mean ≈ 205</text>
+        <text x="300" y="135" fill="#9fe6c4" font-size="11" text-anchor="middle">Mean ≈ 120</text>
+        <text x="383" y="30" fill="#ffd23f" font-size="10" text-anchor="middle">Mean ≈ 90</text>
+      </svg>
+      <figcaption>Measure each plaque's Mean gray and a lawn patch; ratio = relative turbidity (transmitted‑light example).</figcaption>
+    </figure>
+    <div class="tip">Doing a whole plate? Add the lawn patch and every plaque to the <b>ROI Manager</b>, <b>Measure</b> once,
+    then divide each plaque's Mean by the lawn Mean in your spreadsheet.</div>
+  </section>
+
+  <section id="profile">
+    <h2>8 · See the clearing — profiles &amp; histograms</h2>
+    <h3>Intensity profile across a plaque</h3>
+    <div class="step"><div class="n">1</div><div class="b">Straight‑line tool → draw a line across a plaque (through the centre) → <kbd>Ctrl</kbd>+<kbd>K</kbd> (<span class="path">Analyze → Plot Profile</span>).</div></div>
+    <p>You get a brightness‑vs‑position plot: a <b>dip</b> (top light) or <b>peak</b> (transmitted) at the plaque — its depth is
+    the clearing strength, its width is the diameter. Click <b>List</b>/<b>Save</b> to export the profile, or <b>Live</b> to
+    scrub across plaques.</p>
+    <figure>
+      <svg width="380" height="150" viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI">
+        <rect width="380" height="150" rx="10" fill="#fff" stroke="#e3e8f0"/>
+        <line x1="40" y1="120" x2="360" y2="120" stroke="#94a3b8"/><line x1="40" y1="20" x2="40" y2="120" stroke="#94a3b8"/>
+        <polyline points="40,45 120,45 150,95 230,95 260,45 360,45" fill="none" stroke="#166534" stroke-width="2.5"/>
+        <text x="200" y="140" fill="#6b7484" font-size="11" text-anchor="middle">distance across plaque (mm)</text>
+        <text x="14" y="70" fill="#6b7484" font-size="11" transform="rotate(-90 14 70)">gray value</text>
+        <text x="195" y="112" fill="#166534" font-size="10" text-anchor="middle">clearing</text>
+      </svg>
+      <figcaption>Plot Profile — the flat lawn level, then the plaque's clearing (dip here = top‑lit, darker plaque).</figcaption>
+    </figure>
+    <h3>Histogram of a plaque</h3>
+    <p>Select a plaque → <kbd>Ctrl</kbd>+<kbd>H</kbd> (<span class="path">Analyze → Histogram</span>) → the distribution of gray
+    values inside it, with Mean / Mode / Min / Max / StdDev. <b>List</b> exports the bins.</p>
+  </section>
+
+  <section id="od">
+    <h2>9 · Toward optical density (advanced)</h2>
+    <p>Gray value isn't optical density — but you can approximate. <span class="path">Analyze → Calibrate…</span> → Function
+    <b>Uncalibrated OD</b> maps each 8‑bit pixel to <span class="eq">OD = log₁₀(255 / value)</span>, so Mean then reads as
+    apparent OD. For <b>calibrated</b> OD you image a step‑tablet / known OD standards in the same shot and fit a curve
+    (Rodbard) in that same dialog.</p>
+    <div class="warn"><b>Same caveat as Plaque Toolkit.</b> From top‑lit phone photos this is <i>apparent</i> OD (the phone
+    tone‑maps the image) — treat it as <b>relative / screening‑grade</b>. True absorbance needs a back‑lit transilluminator
+    (even, diffuse light), a locked exposure, and ideally RAW capture.</div>
+  </section>
+
+  <section id="macro">
+    <h2>10 · Do it fast — record a macro &amp; batch</h2>
+    <div class="step"><div class="n">1</div><div class="b"><span class="path">Plugins → Macros → Record…</span>, then do your steps once (open, set scale, measure). Fiji writes the macro code for you.</div></div>
+    <div class="step"><div class="n">2</div><div class="b">Save it, then run over a folder with <span class="path">Process → Batch → Macro…</span> (pick the input folder, paste the recorded code, Process).</div></div>
+    <p>A minimal “measure everything already in the ROI Manager, on the current image” macro:</p>
+    <pre>run("Set Measurements...", "area mean min standard integrated shape feret's redirect=None decimal=3");
+roiManager("Measure");
+saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
+    <div class="note">You can also drag a folder of plates in with <span class="path">File → Import → Image Sequence…</span> to
+    make a stack, then <b>ROI Manager ▸ Multi Measure</b> across all slices at once.</div>
   </section>
 
   <section id="save">
-    <h2>6 · Save the results</h2>
-    <div class="step"><div class="n">1</div><div class="b">In the <b>Results</b> window: <span class="path">File → Save As…</span> → save as <code>.csv</code> (e.g. <code>fiji_&lt;plate&gt;.csv</code>).</div></div>
-    <div class="step"><div class="n">2</div><div class="b">One CSV per plate keeps things tidy for the comparison in the next step. (<b>Results → Clear Results</b> before the next plate.)</div></div>
+    <h2>11 · Save &amp; analyse</h2>
+    <ul>
+      <li><b>Results table</b> → <span class="path">File → Save As…</span> → <code>.csv</code> (one per plate; <b>Clear Results</b> between plates).</li>
+      <li><b>ROI set</b> → ROI Manager <b>More ▸ Save…</b> (<code>RoiSet.zip</code>) — your reusable, re‑measurable outlines.</li>
+      <li><b>Distributions</b> → <span class="path">Results → Distribution…</span> for a quick histogram of any column (e.g. diameter).</li>
+      <li><b>Scale‑bar figure</b> → <span class="path">Analyze → Tools → Scale Bar…</span> (works because the image is calibrated).</li>
+    </ul>
   </section>
 
   <section id="compare">
-    <h2>7 · Compare to Plaque Toolkit</h2>
-    <p>Now line the two up. In Plaque Toolkit, measure the same plate and <span class="path">Export all</span> → <code>data_&lt;plate&gt;.csv</code> (its <code>DIAMETER_MM</code> is already area‑equivalent). In your spreadsheet:</p>
+    <h2>12 · Compare to Plaque Toolkit</h2>
+    <p>Measure the same plate in Plaque Toolkit and <span class="path">Export all</span> → <code>data_&lt;plate&gt;.csv</code>. In a spreadsheet:</p>
     <ol>
-      <li>Convert each Fiji <b>Area</b> to a diameter: <code>=2*SQRT(Area/PI())</code>.</li>
-      <li>Match plaques by number/position; put Fiji d next to the tool's <code>DIAMETER_MM</code>.</li>
-      <li>Compute the <b>difference</b> (tool − Fiji) per plaque → mean bias + 95% limits (Bland–Altman). That's your size‑agreement result.</li>
+      <li><b>Size:</b> convert Fiji Area → <code>=2*SQRT(Area/PI())</code>; match by number; difference vs the tool's <code>DIAMETER_MM</code> → mean bias + 95% limits (Bland–Altman).</li>
+      <li><b>Turbidity:</b> Fiji (plaque Mean ÷ lawn Mean) vs the tool's <code>TURBIDITY_REL</code> — check they trend together.</li>
+      <li><b>Detection (optional):</b> your Fiji ROI count vs the tool's count on the same plate.</li>
     </ol>
-    <div class="ok">This paragraph — “tool vs Fiji, bias X mm, limits Y–Z” — is exactly the <b>size validation</b> for your Methods.
+    <div class="ok">Those two sentences — size agreement and turbidity agreement — are the <b>validation</b> for your Methods.
     See <code>docs/METHODS_TEMPLATE.md</code> and <code>docs/PUBLISHING_CHECKLIST.md</code>.</div>
   </section>
 
+  <section id="columns">
+    <h2>Results columns — quick reference</h2>
+    <table>
+      <tr><th>Column</th><th>Is</th></tr>
+      <tr><td><code>Area</code></td><td>Selection area (mm² if calibrated, else px²)</td></tr>
+      <tr><td><code>Mean, Min, Max, StdDev</code></td><td>Gray‑value stats inside the selection (0–255 for 8‑bit)</td></tr>
+      <tr><td><code>Median, Mode</code></td><td>Robust centre of the gray distribution</td></tr>
+      <tr><td><code>IntDen</code></td><td>Area × Mean (calibrated integrated density)</td></tr>
+      <tr><td><code>RawIntDen</code></td><td>Sum of pixel values (uncalibrated total)</td></tr>
+      <tr><td><code>Perim.</code></td><td>Outline length</td></tr>
+      <tr><td><code>Major, Minor, Angle</code></td><td>Fit‑ellipse axes + orientation</td></tr>
+      <tr><td><code>Feret, MinFeret</code></td><td>Max / min caliper diameter</td></tr>
+      <tr><td><code>Circ., AR, Round, Solidity</code></td><td>Shape descriptors (1.0 = perfect circle)</td></tr>
+      <tr><td><code>X, Y</code></td><td>Centroid position</td></tr>
+    </table>
+  </section>
+
   <section id="checklist">
-    <h2>Quick checklist</h2>
+    <h2>Checklist</h2>
     <div class="chk">
-      <label><input type="checkbox"> Opened the image (calibrated crop, or raw + Set Scale)</label>
-      <label><input type="checkbox"> Scale is in <b>mm</b> (Image → Properties confirms)</label>
-      <label><input type="checkbox"> Set Measurements: Area, Fit ellipse, Feret, Shape, Display label</label>
-      <label><input type="checkbox"> Measured each plaque (wand → Area) into the ROI Manager</label>
-      <label><input type="checkbox"> Saved ROIs (<code>RoiSet.zip</code>) + Results (<code>.csv</code>)</label>
-      <label><input type="checkbox"> Converted Area → d = 2√(A/π) and compared to the tool's DIAMETER_MM</label>
+      <label><input type="checkbox"> Image open; single‑channel (8‑bit / split) for gray‑value work</label>
+      <label><input type="checkbox"> Scale set to mm (Image → Properties confirms)</label>
+      <label><input type="checkbox"> Set Measurements: Area, Mean, Min/Max, StdDev, IntDen, Feret, Fit ellipse, Shape, Centroid, Label</label>
+      <label><input type="checkbox"> Each plaque traced into the ROI Manager (Show All + Labels)</label>
+      <label><input type="checkbox"> A lawn patch measured for the turbidity ratio</label>
+      <label><input type="checkbox"> ROIs (RoiSet.zip) + Results (.csv) saved</label>
+      <label><input type="checkbox"> Area → d=2√(A/π); plaque Mean ÷ lawn Mean computed</label>
+      <label><input type="checkbox"> Compared to the tool's DIAMETER_MM &amp; TURBIDITY_REL</label>
       <label><input type="checkbox"> Same orientation used in Fiji and Plaque Toolkit</label>
     </div>
   </section>
@@ -249,28 +337,35 @@
       <tr><th>Key</th><th>Action</th></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>M</kbd></td><td>Measure the current selection</td></tr>
       <tr><td><kbd>t</kbd></td><td>Add selection to the ROI Manager</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Plot Profile (needs a line/selection)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Histogram of the selection</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></td><td>Image → Properties (check the scale)</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>Threshold</td></tr>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd></td><td>Zoom in / out</td></tr>
-      <tr><td><kbd>Space</kbd>+drag</td><td>Pan the image</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd></td><td>Duplicate (crop a plaque to work on)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> · <kbd>Space</kbd>+drag</td><td>Zoom · pan</td></tr>
     </table>
   </section>
 
   <section id="faq">
     <h2>FAQ</h2>
-    <h3>My measurements are in pixels, not mm.</h3>
-    <p>The scale isn't set. Open the tool's calibrated crop, or do step 2 (Set Scale, Unit = mm, tick Global).</p>
-    <h3>Which “diameter” should I report?</h3>
-    <p>To match Plaque Toolkit, use the <b>area‑equivalent</b> diameter from Area. Feret and ellipse‑Major are fine
-    alternatives if you state which you used and keep it consistent.</p>
-    <h3>The wand grabs the whole plate or nothing.</h3>
-    <p>Double‑click the wand and adjust <i>Tolerance</i>; try 8‑connected/Legacy mode. Or use the Oval method.</p>
-    <h3>Halo vs sharp zone?</h3>
-    <p>Decide once and be consistent: trace the sharp clear zone, or include the halo. Plaque Toolkit's number is
-    halo‑inclusive (convex hull), so trace the halo if you want the closest match — and say which in your Methods.</p>
+    <h3>My gray values look wrong / change when I recolour.</h3>
+    <p>You're measuring an RGB image. Convert to <b>8‑bit</b> (or split channels) first so "gray value" is a single, defined
+    number. RGB "brightness" depends on <span class="path">Edit → Options → Conversions</span> (weighted vs unweighted).</p>
+    <h3>Should turbidity be a ratio or a difference?</h3>
+    <p>Plaque Toolkit uses the <b>ratio</b> (plaque ÷ lawn), so use that to compare. A difference (lawn − plaque) is also
+    fine if you're consistent and state it.</p>
+    <h3>Uneven lighting is skewing my means.</h3>
+    <p><span class="path">Process → Subtract Background…</span> on a duplicate, and/or always measure a <b>local</b> lawn patch
+    next to each plaque rather than one global lawn value.</p>
+    <h3>Which diameter should I report?</h3>
+    <p>To match the tool, the <b>area‑equivalent</b> diameter from Area. Feret / ellipse‑Major are fine alternatives —
+    state which and stay consistent.</p>
+    <h3>Halo vs sharp clear zone?</h3>
+    <p>Decide once. The tool's size is halo‑inclusive (convex hull), so trace the halo for the closest match; measure the
+    sharp zone if that's your definition — and say which in Methods.</p>
     <hr>
-    <p style="color:#6b7484;font-size:13px">Companion to Plaque Toolkit (“Frankenstein's Plaque Lab”). Fiji/ImageJ is by
-    Schindelin et al. (2012) / Schneider et al. (2012) — cite it if you report Fiji measurements.</p>
+    <p style="color:#6b7484;font-size:13px">Companion to Plaque Toolkit (“Frankenstein's Plaque Lab”). Cite Fiji/ImageJ
+    (Schindelin et al. 2012; Schneider et al. 2012) if you report Fiji measurements.</p>
   </section>
 </main>
 </body>
