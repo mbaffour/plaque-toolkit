@@ -25,7 +25,7 @@ import numpy as np
 import cv2
 import pandas as pd
 
-from PySide6.QtCore import Qt, QRectF, QPointF, QRect, QSize, QPoint
+from PySide6.QtCore import Qt, QRectF, QPointF, QRect, QSize, QPoint, Signal
 from PySide6.QtGui import QImage, QPixmap, QPen, QBrush, QColor, QPainter, QPolygonF, QFont
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLayout, QSizePolicy, QGraphicsView,
@@ -312,6 +312,11 @@ class _View(QGraphicsView):
 class PlaqueCanvas(QWidget):
     """Interactive editor widget. Drop-in for the old EditorWidget."""
 
+    # emitted whenever the on-canvas selection changes; payload is the list of selected
+    # plaque _uid values (in top-down plaque order). Lets the results table mirror the
+    # canvas selection (and vice-versa) so a plaque and its row stay linked.
+    selection_changed = Signal(object)
+
     def __init__(self, det, image_path, out_dir, on_change=None, parent=None, face="#ffffff"):
         super().__init__(parent)
         self.det = det
@@ -376,6 +381,23 @@ class PlaqueCanvas(QWidget):
     @property
     def plaques(self):
         return self._plaques
+
+    def selected_uids(self):
+        """Selected plaque _uid values, in top-down plaque order."""
+        return [p.get("_uid") for p in self._plaques if p.get("_uid") in self.selected]
+
+    def get_selected_plaques(self):
+        """Plaque dicts currently selected on the canvas (top-down order)."""
+        return [p for p in self._plaques if p.get("_uid") in self.selected]
+
+    def select_uids(self, uids):
+        """Set the canvas selection to the given _uid values and redraw. Does NOT re-emit
+        selection_changed — used by the table→canvas sync to avoid a feedback loop."""
+        self.selected = set(u for u in (uids or []) if u is not None)
+        self._render(); self._update_hint()
+
+    def _emit_selection(self):
+        self.selection_changed.emit(self.selected_uids())
 
     def save(self):
         return pgui.save_results(self._plaques, self.orig_bgr, self.image_path, self.out_dir,
@@ -464,6 +486,7 @@ class PlaqueCanvas(QWidget):
         menu.addAction("Input vs annotated (side-by-side)…", self.export_comparison)
         menu.addAction("Original input image…", self.export_input)
         menu.addAction("Cropped plate for Fiji (calibrated TIFF)…", self.export_plate_crop)
+        menu.addAction("Fiji registration bundle (crop + ROIs + map)…", self.export_fiji_bundle)
         menu.addAction("Ground-truth labels…", self.export_groundtruth)
         more.setMenu(menu)
         flow.addWidget(more)
@@ -821,7 +844,7 @@ class PlaqueCanvas(QWidget):
             self._clear_selection(); return
         uid = self._plaques[idx].get("_uid")
         (self.selected.discard if uid in self.selected else self.selected.add)(uid)
-        self._render(); self._update_hint()
+        self._render(); self._update_hint(); self._emit_selection()
 
     def _box_select(self, rect, mode):
         n = 0
@@ -834,15 +857,18 @@ class PlaqueCanvas(QWidget):
                     self.selected.discard(uid); n += 1
         self._render()
         self._update_hint("%s %d plaque(s) in the box" % ("selected" if mode == "select" else "deselected", n))
+        self._emit_selection()
 
     def _select_all(self):
         self.selected = set(p.get("_uid") for p in self._plaques)
         self._render(); self._update_hint("selected all %d" % len(self.selected))
+        self._emit_selection()
 
     def _clear_selection(self):
         if self.selected:
             self.selected.clear(); self._render()
         self._update_hint("selection cleared")
+        self._emit_selection()
 
     def _remove_selected(self):
         if not self.selected:
@@ -1061,6 +1087,31 @@ class PlaqueCanvas(QWidget):
                    "the scale and the Fiji steps."
                    % (w, h, info["tiff"], cal, os.path.basename(info["readme"]) if info["readme"] else ""))
         return info["tiff"]
+
+    def export_fiji_bundle(self, path=None):
+        """Write the Fiji registration bundle: calibrated crop + ImageJ ROIs (same numbering)
+        + a numbered map + a registration CSV, so the SAME plaque can be compared in Fiji."""
+        from app import fiji_export
+        name = os.path.splitext(os.path.basename(self.image_path))[0]
+        dest = path or os.path.join(self.out_dir, f"{name}_fiji")
+        try:
+            info = fiji_export.save_bundle(self._plaques, self.orig_bgr, self.plate, self.ppm,
+                                           self.lawn_gray, dest, name)
+        except Exception as e:
+            self._info("Fiji bundle failed", str(e))
+            return None
+        cal = "" if info["calibrated"] else (
+            "\n\nNote: no dish was detected, so the crop is NOT calibrated — set the scale in "
+            "Fiji, or compare by pixels (auto-align).")
+        self._update_hint("✓ Fiji bundle (%d plaques) → %s" % (info["n"], os.path.basename(dest)))
+        self._open_folder(dest)
+        self._info("Fiji registration bundle saved",
+                   "Saved for %d plaques to:\n\n%s\n\nOpen '%s_plate.tif' in Fiji, then either "
+                   "load '%s_RoiSet.zip' in the ROI Manager (ROI #k = plaque #k), or trace your "
+                   "own and use 'Compare vs Fiji…' next to the table.%s\n\n"
+                   "'%s_fiji.txt' has the step-by-step."
+                   % (info["n"], dest, name, name, cal, name))
+        return dest
 
     def export_groundtruth(self, path=None):
         """Write the corrected plaque set as a reusable labels file (JSON + sibling CSV)."""

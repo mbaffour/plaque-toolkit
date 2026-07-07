@@ -68,6 +68,8 @@
   <a href="#gray">7 · Gray value &amp; turbidity</a>
   <a href="#profile">8 · Profiles &amp; histograms</a>
   <a href="#od">9 · Toward optical density</a>
+  <div class="grp">Same plaque, both tools</div>
+  <a href="#registration">★ Match the same plaque</a>
   <div class="grp">Scale up</div>
   <a href="#macro">10 · Macros &amp; batch</a>
   <a href="#save">11 · Save &amp; analyse</a>
@@ -297,6 +299,39 @@ saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
     </ol>
     <div class="ok">Those two sentences — size agreement and turbidity agreement — are the <b>validation</b> for your Methods.
     See <code>docs/METHODS_TEMPLATE.md</code> and <code>docs/PUBLISHING_CHECKLIST.md</code>.</div>
+    <div class="tip"><b>“Match by number” only works if the numbers refer to the same plaque.</b> They don't by
+    default — the app counts top‑down, Fiji counts in the order you clicked. The next section makes the
+    correspondence exact (and can do the whole comparison for you).</div>
+  </section>
+
+  <section id="registration">
+    <h2>★ Match the <i>same</i> plaque in both tools</h2>
+    <p class="lead">The app numbers plaques 1→N top‑down; Fiji's ROI Manager numbers them in click
+    order — so “#7” is a different plaque in each. Plaque Toolkit gives you three ways to line them up.
+    Start with one export:</p>
+    <div class="step"><div class="n">1</div><div class="b">In Plaque Toolkit: <span class="path">Export ▾ → Fiji registration bundle</span>. It writes, into an <code>out/&lt;name&gt;_fiji/</code> folder: a calibrated crop <code>_plate.tif</code>, an ImageJ ROI set <code>_RoiSet.zip</code> (numbered top‑down), a numbered <code>_map.png</code>, and a <code>_registration.csv</code> (each plaque's X/Y in px &amp; mm).</div></div>
+
+    <h3>A · Load the app's outlines into Fiji — guarantees #k = #k <span style="color:#6b7484">(fastest)</span></h3>
+    <ol>
+      <li>Open <code>&lt;name&gt;_plate.tif</code> in Fiji (already calibrated in mm).</li>
+      <li><span class="path">ROI Manager → More ▸ Open…</span> → pick <code>&lt;name&gt;_RoiSet.zip</code>. The app's exact plaques appear, <b>in the same order and number</b> — ROI #k is plaque #k.</li>
+      <li>Set Measurements (Area, Centroid, Feret's, Display label) → <b>Measure</b>. Row k ↔ plaque #k.</li>
+    </ol>
+    <div class="note">This measures the app's boundaries, so it validates the <b>measurement</b>, not Fiji's independent segmentation. For an independent check of detection/outlines, use method B.</div>
+
+    <h3>B · Trace your own, let the app match by position <span style="color:#6b7484">(best for validation)</span></h3>
+    <ol>
+      <li>Open <code>&lt;name&gt;_plate.tif</code> (or your own image) and trace/measure plaques <b>your way</b>. Set Measurements <b>must</b> include <b>Centroid</b> (X, Y) and <b>Area</b>.</li>
+      <li><span class="path">File → Save As → Results…</span> → a CSV.</li>
+      <li>Back in Plaque Toolkit, next to the table click <b>Compare vs Fiji…</b>, choose that CSV. The app pairs every Fiji row to the nearest plaque <b>by location</b> and prints the per‑plaque differences plus mean bias, 95% limits of agreement and r — <b>no matching numbers required</b>.</li>
+    </ol>
+    <div class="tip">Opened the app's crop? Choose <b>“the crop I exported (exact match)”</b>. Used your own
+    image at a different size/rotation? Choose <b>“auto‑align”</b> and the app solves the scale/rotation/offset
+    before matching. (Mirror‑flipped plates: fix orientation first with the app's <b>Orient ▾</b>.)</div>
+
+    <h3>C · Eyeball with the numbered map <span style="color:#6b7484">(simplest)</span></h3>
+    <p>Keep <code>&lt;name&gt;_map.png</code> open beside Fiji — it shows each plaque's number on the plate, so you
+    always know which one is #k while you measure by hand.</p>
   </section>
 
   <section id="columns">

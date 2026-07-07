@@ -10,18 +10,19 @@ import matplotlib
 matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
 
 import pandas as pd
-from PySide6.QtCore import Qt, QThreadPool, QTimer
-from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut, QAction, QDesktopServices
+from PySide6.QtCore import Qt, QThreadPool, QTimer, QItemSelectionModel
+from PySide6.QtGui import (QPixmap, QIcon, QKeySequence, QShortcut, QAction, QDesktopServices,
+                           QFont, QActionGroup)
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
-    QFrame, QProgressBar, QStyle, QMenu)
+    QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
-from app.widgets import PandasTableModel, NumericSortProxy
+from app.widgets import PandasTableModel, NumericSortProxy, CopyableTableView
 from app.plaque_canvas import PlaqueCanvas
 
 IMG_FILTER = "Images (*.tif *.tiff *.jpg *.jpeg *.png *.heic *.heif)"
@@ -84,6 +85,9 @@ def _icon(sp):
 
 # --------------------------------------------------------------------------- #
 class MeasureTab(QWidget):
+    _SEL_HINT = ("Tip: click a plaque on the image to highlight its row here (and vice-versa). "
+                 "Select rows and press Ctrl+C to copy them for Excel.")
+
     def __init__(self, pool):
         super().__init__()
         self.pool = pool
@@ -91,6 +95,7 @@ class MeasureTab(QWidget):
         self.image_path = None
         self.editor = None
         self.busy = False
+        self._syncing = False          # guards the two-way canvas<->table selection link
         self.setAcceptDrops(True)
         # rotating, on-brand progress messages while a detection runs
         self._busy_timer = QTimer(self); self._busy_timer.setInterval(2200)
@@ -212,7 +217,7 @@ class MeasureTab(QWidget):
         # ---- right panel: summary card + table ----------------------------- #
         self.summary_card = self._build_summary_card()
 
-        self.table = QTableView()
+        self.table = CopyableTableView()
         self.model = PandasTableModel()
         self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
         self.table.setModel(self.proxy)
@@ -223,11 +228,39 @@ class MeasureTab(QWidget):
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setHighlightSections(False)
+        self.table.setAccessibleName("Per-plaque measurements table")
+        self.table.setAccessibleDescription(
+            "One row per plaque: number, diameter, area, mean gray and turbidity. "
+            "Click a row to highlight that plaque on the image. Press Ctrl+C to copy "
+            "selected rows for Excel.")
+        # keep the image and the table linked both ways
+        self.table.selectionModel().selectionChanged.connect(self._on_table_selection)
+        self.table.copied.connect(
+            lambda n: self.window().statusBar().showMessage(
+                f"Copied {n} row(s) to the clipboard — paste into Excel (Ctrl+V).", 4000))
 
         table_card = QFrame(); table_card.setObjectName("Card")
         tcl = QVBoxLayout(table_card); tcl.setContentsMargins(12, 10, 12, 12)
+        caprow = QHBoxLayout(); caprow.setContentsMargins(0, 0, 0, 0)
         cap = QLabel("Per-plaque measurements"); cap.setObjectName("SummaryHeading")
-        tcl.addWidget(cap); tcl.addWidget(self.table)
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setToolTip("Copy the selected rows (or the whole table if none are "
+                                 "selected) as tab-separated text — paste straight into Excel. "
+                                 "Shortcut: Ctrl+C while the table is focused.")
+        self.copy_btn.setAccessibleName("Copy measurements to clipboard")
+        self.copy_btn.clicked.connect(lambda: self.table.copy_selection(all_rows=False, headers=True))
+        self.fiji_btn = QPushButton("Compare vs Fiji…")
+        self.fiji_btn.setToolTip("Pair your Fiji measurements to these plaques by location and "
+                                 "show the per-plaque differences — the same plaque in both tools, "
+                                 "regardless of numbering. (Export the Fiji bundle first if you "
+                                 "haven't: Export ▾ → Fiji registration bundle.)")
+        self.fiji_btn.setAccessibleName("Compare against Fiji results")
+        self.fiji_btn.clicked.connect(self._open_fiji_compare)
+        caprow.addWidget(cap); caprow.addStretch()
+        caprow.addWidget(self.fiji_btn); caprow.addWidget(self.copy_btn)
+        self.sel_readout = QLabel(self._SEL_HINT); self.sel_readout.setObjectName("ModeHelp")
+        self.sel_readout.setWordWrap(True)
+        tcl.addLayout(caprow); tcl.addWidget(self.table); tcl.addWidget(self.sel_readout)
 
         right = QWidget(); rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(12)
@@ -242,6 +275,32 @@ class MeasureTab(QWidget):
         lay.addWidget(params_box)
         lay.addLayout(strip)
         lay.addWidget(split, 1)
+
+        self._apply_a11y()
+
+    # -- accessibility ------------------------------------------------------ #
+    def _apply_a11y(self):
+        """Screen-reader names/descriptions on the main controls and an explicit tab order
+        so the tab stops flow left-to-right through the parameters, then into the table."""
+        named = [
+            (self.plate, "Dish diameter", "Petri-dish diameter in millimetres, used to convert pixels to mm."),
+            (self.plate_85, "Set dish to 85 mm", "Quick-set the agar-base diameter to 85 mm."),
+            (self.plate_100, "Set dish to 100 mm", "Quick-set the lid diameter to 100 mm."),
+            (self.mode, "Detection engine", "Choose the plaque-detection engine."),
+            (self.watershed, "Split touching plaques", "Separate plaques whose edges touch."),
+            (self.orient_btn, "Orient image", "Rotate or flip the plate to match a reference orientation."),
+            (self.open_btn, "Open image", "Open a plaque photo (Ctrl+O)."),
+            (self.redetect_btn, "Re-detect", "Re-run detection with the current options."),
+            (self.save_btn, "Save results", "Write the measurement table, overlay and turbidity (Ctrl+S)."),
+        ]
+        for w, name, desc in named:
+            w.setAccessibleName(name)
+            w.setAccessibleDescription(desc)
+        order = [self.plate, self.plate_85, self.plate_100, self.mode, self.watershed,
+                 self.orient_btn, self.open_btn, self.redetect_btn, self.save_btn,
+                 self.table, self.fiji_btn, self.copy_btn]
+        for a, b in zip(order, order[1:]):
+            self.setTabOrder(a, b)
 
     # -- summary card ------------------------------------------------------- #
     def _build_summary_card(self):
@@ -457,6 +516,7 @@ class MeasureTab(QWidget):
                                    os.path.join(os.path.dirname(self.image_path), "out"),
                                    on_change=self.refresh_table,
                                    face=style.LIGHT["surface"])
+        self.editor.selection_changed.connect(self._on_canvas_selection)
         self.canvas_layout.addWidget(self.editor)
 
     def on_detected(self, det):
@@ -489,7 +549,7 @@ class MeasureTab(QWidget):
         if isinstance(precise, dict) and precise.get("precise"):
             summ = precise.get("precise_summary", {})
             df = precise.get("precise_df")
-            self.model.set_dataframe(df)
+            self._set_table_df(df)
             n = int(summ.get("n_final", len(df)))
             median = summ.get("median_diam_mm")
             mean = summ.get("mean_diam_mm")
@@ -506,7 +566,7 @@ class MeasureTab(QWidget):
             flag = (flag + "  " + extra) if flag else extra
         df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
                                       det["pxl_per_mm"], det["lawn_gray"])
-        self.model.set_dataframe(df)
+        self._set_table_df(df)
         n = len(df)
         dm = pd.to_numeric(df["DIAMETER_MM"], errors="coerce").dropna()
         cal = det["pxl_per_mm"]
@@ -515,6 +575,90 @@ class MeasureTab(QWidget):
             median=(dm.median() if len(dm) else None),
             mean=(dm.mean() if len(dm) else None),
             cal=cal, flag=flag)
+
+    # -- canvas <-> table selection link ------------------------------------ #
+    def _set_table_df(self, df):
+        """Refresh the table without letting the model-reset wipe the canvas selection,
+        then re-mirror the canvas selection into the fresh rows."""
+        self._syncing = True
+        try:
+            self.model.set_dataframe(df)
+        finally:
+            self._syncing = False
+        if self.editor is not None:
+            self._apply_canvas_selection_to_table(self.editor.selected_uids())
+
+    def _on_canvas_selection(self, uids):
+        """A plaque was (de)selected on the image → mirror it onto the table rows."""
+        if self._syncing:
+            return
+        self._apply_canvas_selection_to_table(list(uids or []))
+
+    def _on_table_selection(self, *args):
+        """Row(s) selected in the table → highlight the matching plaque(s) on the image."""
+        if self._syncing or self.editor is None:
+            return
+        sm = self.table.selectionModel()
+        rows = sorted({self.proxy.mapToSource(ix).row() for ix in sm.selectedIndexes()})
+        plaques = self.editor.plaques
+        uids = [plaques[r].get("_uid") for r in rows if 0 <= r < len(plaques)]
+        self._syncing = True
+        try:
+            self.editor.select_uids(uids)
+        finally:
+            self._syncing = False
+        self._update_selected_readout(uids)
+
+    def _apply_canvas_selection_to_table(self, uids):
+        sm = self.table.selectionModel()
+        if sm is None or self.editor is None:
+            return
+        uidset = set(u for u in (uids or []) if u is not None)
+        self._syncing = True
+        try:
+            sm.clearSelection()
+            first = None
+            if uidset:
+                for i, p in enumerate(self.editor.plaques):
+                    if p.get("_uid") in uidset:
+                        prox = self.proxy.mapFromSource(self.model.index(i, 0))
+                        sm.select(prox, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+                        if first is None:
+                            first = prox
+                if first is not None:
+                    self.table.scrollTo(first, QAbstractItemView.EnsureVisible)
+        finally:
+            self._syncing = False
+        self._update_selected_readout(list(uidset))
+
+    def _update_selected_readout(self, uids):
+        uids = [u for u in (uids or []) if u is not None]
+        if not uids:
+            self.sel_readout.setText(self._SEL_HINT); return
+        if len(uids) == 1 and self.editor is not None:
+            try:
+                i = next(k for k, p in enumerate(self.editor.plaques) if p.get("_uid") == uids[0])
+                row = self.model.dataframe().iloc[i]
+                turb = row["TURBIDITY_REL"]
+                turb = "—" if turb in ("", None) else turb
+                self.sel_readout.setText(
+                    f"Selected  #{row['INDEX']}  ·  Ø {row['DIAMETER_MM']} mm  ·  area {row['AREA_MM2']} mm²"
+                    f"  ·  gray {row['MEAN_GRAY']}  ·  turbidity {turb}  —  Ctrl+C to copy this row")
+                return
+            except (StopIteration, IndexError, KeyError):
+                pass
+        self.sel_readout.setText(f"{len(uids)} plaques selected — Ctrl+C to copy their rows")
+
+    def _open_fiji_compare(self):
+        if self.editor is None:
+            QMessageBox.information(self, "Open an image first",
+                                   "Detect plaques first, then compare them against your Fiji results.")
+            return
+        from app import fiji_export, fiji_dialog
+        app_df = fiji_export.app_match_frame(self.editor.plaques, self.editor.orig_bgr,
+                                             self.editor.plate, self.editor.ppm)
+        dlg = fiji_dialog.FijiCompareDialog(app_df, calibrated=bool(self.editor.ppm), parent=self)
+        dlg.exec()
 
     def save(self):
         if self.editor is None:
@@ -584,7 +728,7 @@ class CompareTab(QWidget):
         runrow.addWidget(self.progress)
 
         self.qc = QLabel("—"); self.qc.setWordWrap(True); self.qc.setObjectName("ModeHelp")
-        self.table = QTableView(); self.model = PandasTableModel()
+        self.table = CopyableTableView(); self.model = PandasTableModel()
         self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
         self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
@@ -864,7 +1008,7 @@ class BatchTab(QWidget):
                              "CSV, an all-plaques CSV and an annotated image for each.")
         self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
 
-        self.table = QTableView(); self.model = PandasTableModel()
+        self.table = CopyableTableView(); self.model = PandasTableModel()
         self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
         self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True); self.table.verticalHeader().setVisible(False)
@@ -986,10 +1130,10 @@ class ValidateTab(QWidget):
                              "Export → Ground-truth labels. Point here at that folder and score the engines.")
         self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
 
-        self.mode_table = QTableView(); self.mode_model = PandasTableModel()
+        self.mode_table = CopyableTableView(); self.mode_model = PandasTableModel()
         self.mode_table.setModel(self.mode_model); self.mode_table.setAlternatingRowColors(True)
         self.mode_table.verticalHeader().setVisible(False); self.mode_table.horizontalHeader().setStretchLastSection(True)
-        self.plate_table = QTableView(); self.plate_model = PandasTableModel()
+        self.plate_table = CopyableTableView(); self.plate_model = PandasTableModel()
         self.pproxy = NumericSortProxy(); self.pproxy.setSourceModel(self.plate_model)
         self.plate_table.setModel(self.pproxy); self.plate_table.setSortingEnabled(True)
         self.plate_table.setAlternatingRowColors(True); self.plate_table.verticalHeader().setVisible(False)
@@ -1091,6 +1235,16 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.Save, self, activated=self._shortcut_save)
 
     def _build_menu(self):
+        # View — accessibility: enlarge the whole UI's text in one place
+        view = self.menuBar().addMenu("&View")
+        ts = view.addMenu("Text size")
+        grp = QActionGroup(self); grp.setExclusive(True)
+        for label, sc in (("Normal", 1.0), ("Large (120%)", 1.2), ("Larger (140%)", 1.4)):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(abs(sc - 1.0) < 1e-3)
+            a.triggered.connect(lambda _=False, s=sc: self._set_text_scale(s))
+            grp.addAction(a); ts.addAction(a)
+
         m = self.menuBar().addMenu("&Help")
         for label, doc in (("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
                            ("Measuring in Fiji (tutorial)", "FIJI_TUTORIAL.html"),
@@ -1106,6 +1260,13 @@ class MainWindow(QMainWindow):
         about = QAction("About Plaque Toolkit", self)
         about.triggered.connect(lambda: self.tabs.setCurrentWidget(self.about_tab))
         m.addAction(about)
+
+    def _set_text_scale(self, scale):
+        """Re-apply the app stylesheet at a larger font scale (accessibility)."""
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(style.get_stylesheet("light", scale))
+        self.statusBar().showMessage(f"Text size set to {int(round(scale * 100))}%", 3000)
 
     def _build_header(self):
         bar = QFrame(); bar.setObjectName("HeaderBar"); bar.setFixedHeight(64)

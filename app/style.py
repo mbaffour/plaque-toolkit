@@ -4,6 +4,7 @@ A single accent colour, consistent spacing, rounded controls, hover/pressed stat
 styled tabs / group boxes / tables. ``get_stylesheet()`` is applied once in launch().
 A professional light theme is the default; a dark variant is available as a bonus.
 """
+import re
 
 # --------------------------------------------------------------------------- #
 #  Palettes — one accent colour per theme, everything derives from these.
@@ -54,10 +55,24 @@ def palette(theme="light"):
     return DARK if theme == "dark" else LIGHT
 
 
-def get_stylesheet(theme="light"):
-    """Return a complete Qt stylesheet string for the chosen theme."""
+def _scale_fonts(css, scale):
+    """Multiply every ``font-size: Npx`` in a stylesheet by ``scale`` (>=1.0), so a single
+    "Larger text" setting enlarges the whole UI consistently. Clamped to a sane range."""
+    if not scale or abs(scale - 1.0) < 1e-3:
+        return css
+    scale = max(1.0, min(2.0, float(scale)))
+    return re.sub(r"font-size:\s*(\d+)px",
+                  lambda m: f"font-size: {max(9, int(round(int(m.group(1)) * scale)))}px",
+                  css)
+
+
+def get_stylesheet(theme="light", scale=1.0):
+    """Return a complete Qt stylesheet string for the chosen theme.
+
+    ``scale`` > 1.0 enlarges every font-size in the sheet — the accessibility
+    "Larger text" setting in the View menu."""
     c = palette(theme)
-    return f"""
+    css = f"""
 * {{
     font-family: {_FONT};
     font-size: 13px;
@@ -431,6 +446,7 @@ QLabel#AboutBody {{
     line-height: 150%;
 }}
 """
+    return _scale_fonts(css, scale)
 
 
 # Colours the matplotlib canvas / figures should match the Qt theme with.

@@ -1,6 +1,8 @@
 """Small shared Qt widgets."""
 import pandas as pd
-from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt
+from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QTableView, QMenu, QApplication
 
 # Hover help for the per-plaque result columns (shown on the table headers).
 COLUMN_TOOLTIPS = {
@@ -32,6 +34,10 @@ class PandasTableModel(QAbstractTableModel):
         self._df = df.reset_index(drop=True) if df is not None else pd.DataFrame()
         self.endResetModel()
 
+    def dataframe(self):
+        """The backing DataFrame (row i corresponds to the i-th plaque / INDEX i+1)."""
+        return self._df
+
     def rowCount(self, parent=None):
         return len(self._df)
 
@@ -47,6 +53,12 @@ class PandasTableModel(QAbstractTableModel):
         if role == Qt.UserRole:
             # raw value for numeric-aware sorting
             return val
+        if role == Qt.ToolTipRole:
+            # hovering any cell explains its column (a11y: values gain context, not just headers)
+            try:
+                return COLUMN_TOOLTIPS.get(str(self._df.columns[index.column()]))
+            except (IndexError, TypeError):
+                return None
         if role == Qt.TextAlignmentRole:
             try:
                 float(val)
@@ -84,3 +96,79 @@ class NumericSortProxy(QSortFilterProxyModel):
             return float(lv) < float(rv)
         except (TypeError, ValueError):
             return str(lv) < str(rv)
+
+
+class CopyableTableView(QTableView):
+    """QTableView with Excel-friendly clipboard support.
+
+    • Ctrl+C copies the selected rows as TSV (tab-separated, with a header row) so it
+      pastes straight into Excel/Sheets with columns split. If nothing is selected it
+      copies the whole table.
+    • Right-click offers Copy selected / Copy whole table / Select all.
+    Rows are emitted in the currently-visible (sorted) order, using the same rounded
+    display strings shown on screen and in the CSV export."""
+
+    copied = Signal(int)   # number of data rows placed on the clipboard
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context_menu)
+
+    # -- build the clipboard payload ---------------------------------------- #
+    def _selected_rows(self):
+        sm = self.selectionModel()
+        if sm is None:
+            return []
+        return sorted({ix.row() for ix in sm.selectedIndexes()})
+
+    def selection_tsv(self, all_rows=False, headers=True):
+        """Return the selected rows (or all rows) as an Excel-ready TSV string plus the
+        data-row count: (text, n_rows). Rows follow the current visible/sorted order."""
+        model = self.model()
+        if model is None:
+            return "", 0
+        ncols = model.columnCount()
+        rows = list(range(model.rowCount())) if all_rows else self._selected_rows()
+        if not rows:                                   # nothing highlighted → copy everything
+            rows = list(range(model.rowCount()))
+        lines = []
+        if headers:
+            lines.append("\t".join(
+                str(model.headerData(c, Qt.Horizontal, Qt.DisplayRole) or "")
+                for c in range(ncols)))
+        for r in rows:
+            lines.append("\t".join(
+                str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                for c in range(ncols)))
+        return "\r\n".join(lines), len(rows)
+
+    def copy_selection(self, all_rows=False, headers=True):
+        text, n = self.selection_tsv(all_rows=all_rows, headers=headers)
+        QApplication.clipboard().setText(text)
+        self.copied.emit(n)
+        return n
+
+    # -- interaction -------------------------------------------------------- #
+    def keyPressEvent(self, e):
+        if e.matches(QKeySequence.Copy):
+            self.copy_selection(all_rows=False, headers=True)
+            e.accept(); return
+        super().keyPressEvent(e)
+
+    def _context_menu(self, pos):
+        model = self.model()
+        if model is None:
+            return
+        m = QMenu(self)
+        n_sel = len(self._selected_rows())
+        a_sel = m.addAction(f"Copy {n_sel or 'selected'} row(s) with headers"
+                            if n_sel else "Copy selected rows")
+        a_sel.setEnabled(n_sel > 0)
+        a_sel.triggered.connect(lambda: self.copy_selection(all_rows=False, headers=True))
+        a_all = m.addAction("Copy whole table (for Excel)")
+        a_all.triggered.connect(lambda: self.copy_selection(all_rows=True, headers=True))
+        m.addSeparator()
+        a_pick = m.addAction("Select all")
+        a_pick.triggered.connect(self.selectAll)
+        m.exec(self.viewport().mapToGlobal(pos))
