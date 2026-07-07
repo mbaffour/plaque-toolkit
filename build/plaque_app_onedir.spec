@@ -26,9 +26,10 @@ binaries += collect_dynamic_libs("pillow_heif")
 hiddenimports = []
 hiddenimports += collect_submodules("pillow_heif")
 hiddenimports += [
-    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar",
+    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar", "plate_crop",
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
-    "app.style", "app.env_paths",
+    "app.style", "app.env_paths", "app.plaque_canvas",
+    "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
     "imutils", "pandas", "PIL.ImageOps", "PIL.ImageStat", "PIL.ImageEnhance",
     "matplotlib.backends.backend_qtagg",
 ]

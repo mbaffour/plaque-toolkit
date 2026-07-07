@@ -29,6 +29,7 @@ iPhone/HEIC support, overlap (watershed) segmentation, and quality control — a
 3. [Which tool should I use?](#3-which-tool-should-i-use)
 4. [Setup (one time)](#4-setup-one-time)
 5. [The drag‑and‑drop launchers](#5-the-drag-and-drop-launchers)
+5b. [Desktop app — editor tools & recent features](#5b-desktop-app--editor-tools--recent-features)
 6. [Command‑line reference](#6-command-line-reference)
 7. [Output files & data dictionary](#7-output-files--data-dictionary)
 8. [Understanding turbidity (important)](#8-understanding-turbidity-important)
@@ -167,6 +168,42 @@ diameter, then opens the results folder.
 
 ---
 
+## 5b. Desktop app — editor tools & recent features
+
+Once an image is detected, the **Measure** tab's editor lets you correct and measure by hand.
+
+**Editor tools (toolbar):**
+- **Select / pan** — click a plaque to select it (turns red); drag to pan, wheel to zoom. Shift‑drag = box‑select, Ctrl‑drag = box‑deselect.
+- **Add** — click a plaque the detector missed and it **auto‑traces the true outline**; or drag to draw a circle. The **Trace tol** spinbox controls auto‑trace sensitivity (higher grabs fainter/larger boundaries).
+- **Draw shape** — press‑and‑drag all the way around an **irregular plaque** (comet, blob, fused) and release; the outline is stored as a real contour and **measured by its true area** — no circle fit.
+- **Detect area** — drag a box; the detector re‑scans just inside it.
+- **Set plate** — click 3 points on the agar rim, type its mm diameter → sets the scale.
+- **Erase** — click a detection to remove it (or right‑click anything, any tool).
+
+**Measuring irregular shapes.** Size is always contour‑based: a plaque's `AREA_MM2` is its real
+outline area and `DIAMETER_MM` is the area‑equivalent `2·√(A/π)`, so odd shapes are measured
+faithfully. The **`CIRCULARITY`** column (1 = round, lower = irregular) flags comet/elongated
+plaques. For shapes the auto‑trace can't follow, use **Draw shape**.
+
+**Overlapping plaques.** Confluent/touching plaques can't be sized reliably. The app flags them:
+the **`OVERLAP`** column reads `yes` and they render **dashed hot‑pink** on the image. Tick
+**Exclude overlaps from stats** (next to the engine) to leave them out of the median/mean
+diameter (they stay visible and in the CSV); the summary shows how many were excluded.
+
+**Copy & tracking.** Select rows and press **Ctrl+C** (or the **Copy** button) to copy the table
+as Excel‑ready TSV. **Click a plaque on the image → its table row highlights** (and vice‑versa),
+so a plaque and its measurement stay linked. **View → Text size** enlarges the whole UI.
+
+**Orient.** **Orient ▾** rotates/flips the plate (e.g. to match your Fiji hand‑labelling) and
+re‑detects; do it *before* exporting so exports carry that orientation.
+
+**Fiji / ImageJ integration.** **Export ▾ → Fiji registration bundle** writes a calibrated crop +
+an ImageJ ROI set (numbered to match) + a numbered map + a registration CSV; **Compare vs Fiji…**
+pairs your Fiji measurements to the app's plaques **by position** (any rotation/flip) and reports
+per‑plaque differences. Full walkthrough: **[FIJI_TUTORIAL.html](FIJI_TUTORIAL.html)**.
+
+---
+
 ## 6. Command‑line reference
 
 Run from the `Plaque Size Tool` folder. Prefix everything with `conda run -n plaque python`.
@@ -247,7 +284,9 @@ heic_to_tiff.py  -d FOLDER  [-o OUTFOLDER]
 | `DIAMETER_MM` | mm | area‑equivalent diameter in mm |
 | `MEAN_GRAY` | 0–255 | mean brightness inside the plaque |
 | `TURBIDITY_REL` | 0–1 | **within‑plate** clarity index (0 = clearest plaque here, 1 = lawn). *Not* cross‑plate comparable — see [§8](#8-understanding-turbidity-important). |
-| `SOURCE` *(GUI / `--watershed` only)* | – | `auto` / `manual` / `watershed` |
+| `CIRCULARITY` *(app)* | 0–1 | shape roundness `4·π·area/perimeter²`; 1 = perfect circle, lower = irregular / comet / elongated |
+| `OVERLAP` *(app)* | yes/no | `yes` = touches/overlaps another plaque, so its size is unreliable (see the Exclude‑overlaps toggle) |
+| `SOURCE` *(GUI / `--watershed` only)* | – | `auto` / `manual` / `freehand` / `watershed` |
 
 - **`out_<name>.<ext>`** — annotated image (plaques circled + numbered; watershed‑recovered in cyan).
 
