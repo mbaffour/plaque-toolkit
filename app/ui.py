@@ -4,6 +4,7 @@
 The validated engine is reached only through app.engine_api."""
 import os
 import sys
+import tempfile
 
 import matplotlib
 matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
-    QFrame, QProgressBar, QStyle)
+    QFrame, QProgressBar, QStyle, QMenu)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
@@ -111,6 +112,22 @@ class MeasureTab(QWidget):
         # changing the dish size (typing OR the 85/100 buttons) live-re-scales the current image
         self.plate.valueChanged.connect(self._on_dish_value_changed)
 
+        # image orientation — rotate / flip the plate (e.g. to match your Fiji hand-labelling)
+        self._cur_img = None       # current (oriented) BGR array
+        self._detect_src = None    # path detection runs on (an oriented temp; None => image_path)
+        self.orient_btn = QPushButton("Orient ▾")
+        self.orient_btn.setToolTip("Rotate or flip the plate to match your reference orientation "
+                                   "(e.g. your Fiji hand-labelling). Re-runs detection on the new view.")
+        _om = QMenu(self.orient_btn)
+        _om.addAction("Rotate 90° left", lambda: self._orient("ccw"))
+        _om.addAction("Rotate 90° right", lambda: self._orient("cw"))
+        _om.addSeparator()
+        _om.addAction("Flip left–right", lambda: self._orient("fliph"))
+        _om.addAction("Flip top–bottom", lambda: self._orient("flipv"))
+        self.orient_btn.setMenu(_om)
+        self.orient_btn.setEnabled(False)
+        self._orient_btns = (self.orient_btn,)
+
         self.mode = QComboBox()
         for label, _key, _help in MODES:
             self.mode.addItem(label)
@@ -158,6 +175,9 @@ class MeasureTab(QWidget):
         pl.addSpacing(4); pl.addWidget(sep); pl.addSpacing(4)
         pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
         pl.addWidget(self.watershed)
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.VLine); sep2.setStyleSheet("color:#d6dbe5")
+        pl.addSpacing(4); pl.addWidget(sep2); pl.addSpacing(4)
+        pl.addWidget(self.orient_btn)
         pl.addStretch()
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
 
@@ -305,6 +325,7 @@ class MeasureTab(QWidget):
             p = u.toLocalFile()
             if p.lower().endswith(IMG_EXTS):
                 self.image_path = p
+                self._cur_img = None; self._detect_src = None
                 self._detect()               # loads/replaces the current image
                 e.acceptProposedAction()
                 return
@@ -318,11 +339,38 @@ class MeasureTab(QWidget):
         if not path:
             return
         self.image_path = path
+        self._cur_img = None; self._detect_src = None   # fresh image → identity orientation
         self._detect()
 
     def redetect(self):
         if self.image_path and not self.busy:
             self._detect()
+
+    def _orient(self, op):
+        """Rotate/flip the loaded plate and re-detect on the new orientation, so the image,
+        coordinates and any exported labels all match (e.g. your Fiji hand-labelling). Outputs
+        stay named/saved next to the original image."""
+        if self.busy or self.image_path is None:
+            return
+        if self.editor is not None and any(p.get("source") == "manual" for p in self.editor.plaques):
+            if QMessageBox.question(
+                    self, "Re-orient plate",
+                    "Rotating/flipping re-runs detection and discards your manual edits.\n"
+                    "Best to orient the plate first, then label. Continue?",
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+        try:
+            if self._cur_img is None:
+                self._cur_img = engine_api.read_image(self.image_path)
+            self._cur_img = engine_api.rotate_flip(self._cur_img, op)
+            stem = os.path.splitext(os.path.basename(self.image_path))[0]
+            tmp = os.path.join(tempfile.gettempdir(), "plaquetk_oriented_" + stem + ".png")
+            engine_api.write_image(tmp, self._cur_img)
+            self._detect_src = tmp
+        except Exception as e:
+            QMessageBox.warning(self, "Orientation failed", str(e))
+            return
+        self._detect()
 
     def _set_busy(self, on, message=""):
         self.busy = on
@@ -331,11 +379,13 @@ class MeasureTab(QWidget):
         if not on:
             self._busy_timer.stop()
         for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,
-                  self.watershed, self.plate_85, self.plate_100):
+                  self.watershed, self.plate_85, self.plate_100) + self._orient_btns:
             w.setEnabled(not on)
         if not on:
             self.save_btn.setEnabled(self.editor is not None)
             self.redetect_btn.setEnabled(self.image_path is not None)
+            for _b in self._orient_btns:
+                _b.setEnabled(self.image_path is not None)
             self._mode_changed(self.mode.currentIndex())
 
     def _start_busy(self, msgs):
@@ -375,7 +425,7 @@ class MeasureTab(QWidget):
             kw["small"] = True; kw["sensitive"] = True
         else:  # current
             kw["small"] = True
-        w = Worker(engine_api.detect_single, self.image_path, **kw)
+        w = Worker(engine_api.detect_single, self._detect_src or self.image_path, **kw)
         w.signals.finished.connect(self.on_detected)
         w.signals.error.connect(self.on_error)
         self.pool.start(w)
@@ -392,7 +442,7 @@ class MeasureTab(QWidget):
             return
         self._start_busy(_BUSY_PRECISE)
         self.window().statusBar().showMessage("Precise pipeline running (this can take a minute)…")
-        w = Worker(engine_api.detect_precise, self.image_path,
+        w = Worker(engine_api.detect_precise, self._detect_src or self.image_path,
                    plate_mm=self.plate.value())
         w.signals.finished.connect(self.on_precise_detected)
         w.signals.error.connect(self.on_precise_error)

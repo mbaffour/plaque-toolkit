@@ -31,6 +31,26 @@ def read_image(path):
     return pst.read_image_bgr(path)
 
 
+def rotate_flip(bgr, op):
+    """Return a rotated/flipped copy of a BGR image. op ∈ {cw, ccw, fliph, flipv}."""
+    import cv2
+    if op == "cw":
+        return cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+    if op == "ccw":
+        return cv2.rotate(bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if op == "fliph":
+        return cv2.flip(bgr, 1)   # left–right
+    if op == "flipv":
+        return cv2.flip(bgr, 0)   # top–bottom
+    return bgr
+
+
+def write_image(path, bgr):
+    """Write a BGR image to disk (used for the oriented working copy)."""
+    import cv2
+    cv2.imwrite(path, bgr)
+
+
 def detect_single(path, plate_mm=None, small=False, watershed=False, published=False, sensitive=False):
     """Run the validated detection on one image; return a results dict (no Qt types).
     sensitive=True lowers the size gates to catch tiny plaques (forced off under published)."""

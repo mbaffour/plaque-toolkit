@@ -151,6 +151,10 @@
         The ★‑marked one is the recommended default. The grey line under the row explains the selected engine.</td></tr>
       <tr><td><b>Split touching plaques</b></td><td>Watershed segmentation to separate plaques whose edges touch.
         Helpful on crowded plates; ignored under Published.</td></tr>
+      <tr><td><b>Orient ▾</b></td><td>Rotate 90° left/right or flip the plate to match a reference orientation
+        (e.g. your <b>Fiji hand‑labelling</b>). It re‑runs detection on the re‑oriented image, so the plaque
+        coordinates and any exported labels line up. Outputs stay named/saved next to your <i>original</i> image.
+        Orient <b>before</b> hand‑labelling (re‑orienting re‑runs detection and clears manual edits).</td></tr>
       <tr><td><b>Open image…</b></td><td>Choose a photo. You can also drag‑and‑drop one anywhere on the tab. (<kbd>Ctrl</kbd>+<kbd>O</kbd>)</td></tr>
       <tr><td><b>Re‑detect</b></td><td>Re‑run detection on the current image with the options above (replaces current detections).</td></tr>
       <tr><td><b>Save results</b></td><td>Write the table + overlay + turbidity to an <code>out/</code> folder next to the image. (<kbd>Ctrl</kbd>+<kbd>S</kbd>)</td></tr>
