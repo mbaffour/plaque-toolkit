@@ -30,6 +30,36 @@ _TAG_YRESOLUTION = 283
 _TAG_RESOLUTIONUNIT = 296
 
 
+def read_mm_per_px(path):
+    """mm-per-pixel embedded in an ImageJ/Fiji-calibrated TIFF (ImageDescription
+    ``unit=mm|cm|um`` + XResolution = pixels-per-unit) — e.g. the app's own
+    ``…_plate.tif`` crop. Returns ``None`` when absent or ambiguous.
+
+    Deliberately ignores a plain DPI resolution tag: a camera JPEG/TIFF often carries a
+    meaningless XResolution (72, 300 …) that must NOT be mistaken for a plate scale, so a
+    metric ``unit=`` in the ImageDescription is required."""
+    try:
+        import re
+        from PIL import Image
+        with Image.open(path) as im:
+            tags = getattr(im, "tag_v2", None)
+            desc = tags.get(270) if tags else None   # ImageDescription
+            xres = tags.get(282) if tags else None   # XResolution (pixels per unit)
+        if not desc or xres is None:
+            return None
+        m = re.search(r"unit=([a-zµ]+)", str(desc).lower())
+        if not m:
+            return None
+        mm_per_unit = {"mm": 1.0, "cm": 10.0, "um": 1e-3, "µm": 1e-3,
+                       "micron": 1e-3, "microns": 1e-3}.get(m.group(1))
+        xr = float(xres)                              # IFDRational -> pixels per unit
+        if not mm_per_unit or xr <= 0:
+            return None
+        return mm_per_unit / xr                       # mm per pixel
+    except Exception:
+        return None
+
+
 def crop_box_from_plate(shape, plate, margin_frac=0.03):
     """Bounding box (x0, y0, x1, y1) around the detected dish, clipped to the image.
 

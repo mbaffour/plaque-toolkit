@@ -201,11 +201,15 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
     mm_per_px = pst["mm_per_px"]                 # mm per pixel
     px_per_mm = (1.0 / mm_per_px) if mm_per_px else None
     plate = pst["plate"]
-    if plate is None:
-        raise SystemExit("no dish detected for %s -- cannot calibrate" % tag)
-    cx, cy = plate["center"]
-    radius = plate["radius"]
-    lawn_r = radius * LAWN_FRAC
+    had_plate = plate is not None
+    if had_plate:
+        cx, cy = plate["center"]
+        radius = plate["radius"]
+        lawn_r = radius * LAWN_FRAC
+    else:
+        # No dish (e.g. an already-cropped plate): don't hard-fail — treat the WHOLE frame
+        # as the ROI. cx/cy/radius/lawn_r are filled below once the image size is known.
+        cx = cy = radius = lawn_r = None
 
     pst_sensitive = pst["pst_sensitive"]
     n_pst_sensitive = pst["n_pst_sensitive"]
@@ -217,6 +221,11 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
             bgr = cv2.cvtColor(np.array(Image.open(image).convert("RGB")),
                                cv2.COLOR_RGB2BGR)
     H, W = bgr.shape[:2]
+    if not had_plate:
+        # whole-frame ROI so nothing is masked away when there is no dish geometry
+        cx, cy = W / 2.0, H / 2.0
+        radius = float(math.hypot(W, H))
+        lawn_r = radius
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
     # ---- Stage 2: artifact masks ----------------------------------------- #
@@ -387,8 +396,9 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
                         ("%.4f" % pp) if pp is not None else ""])
 
     ov = bgr.copy()
-    cv2.circle(ov, (int(cx), int(cy)), int(radius), (0, 165, 255), 3)     # dish (orange)
-    cv2.circle(ov, (int(cx), int(cy)), int(lawn_r), (255, 255, 0), 3)     # lawn (cyan)
+    if had_plate:                                                         # only when a dish exists
+        cv2.circle(ov, (int(cx), int(cy)), int(radius), (0, 165, 255), 3)  # dish (orange)
+        cv2.circle(ov, (int(cx), int(cy)), int(lawn_r), (255, 255, 0), 3)  # lawn (cyan)
     rdraw = max(int(round(match_r)), 6)
     for d in final:
         if d["source"] == "plaqseg":

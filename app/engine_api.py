@@ -61,6 +61,14 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         (display_rgb, orig_bgr, proc_gray, plaques,
          ppm, candidates, lawn_gray, plate) = pgui.run_detection(
              path, plate_size, bool(small), bool(sensitive))
+    if not ppm:
+        # No dish to calibrate from (e.g. an already-cropped plate). If the image carries
+        # an embedded ImageJ/Fiji mm scale — like our own "Cropped plate for Fiji" export —
+        # use it so sizes stay in millimetres instead of falling back to pixels.
+        import plate_crop
+        emb = plate_crop.read_mm_per_px(path)
+        if emb:
+            ppm = emb
     return {
         "display_rgb": display_rgb,
         "orig_bgr": orig_bgr,

@@ -92,7 +92,17 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
     pst = pst_front.detect(image_path, str(plate_mm))
     mm_per_px = pst["mm_per_px"]
     if not mm_per_px:
-        raise RuntimeError("Precise: no dish detected (cannot calibrate) for %s" % tag)
+        # No dish to calibrate from (e.g. an already-cropped plate). Prefer an embedded
+        # ImageJ/Fiji mm scale if the image carries one (our "…_plate.tif" crop does);
+        # otherwise run UNCALIBRATED (pixel-only sizes) like Published/Current/Sensitive —
+        # never hard-fail just because there's no Petri dish in frame.
+        try:
+            import plate_crop
+            emb = plate_crop.read_mm_per_px(image_path)
+        except Exception:
+            emb = None
+        mm_per_px = emb or None
+        pst["mm_per_px"] = mm_per_px
 
     # --- Stage 3: PlaqSeg primary on the ORIGINAL image (tiled YOLO + global NMS).
     bgr = cv2.imread(image_path)
@@ -103,7 +113,7 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
                            cv2.COLOR_RGB2BGR)
     model = _load_yolo(weights)
     from _plaqseg.run_plaqseg import detect_plaqseg
-    ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=mm_per_px)
+    ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mm_per_px or 0.0))
 
     # detect_plaqseg returns the CSV schema (X,Y,AREA_PXL,...); combine expects the
     # lowercase load_plaqseg schema. Convert in-memory (no CSV round-trip).
