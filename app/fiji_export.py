@@ -31,7 +31,7 @@ def app_match_frame(plaques, orig_bgr, plate, ppm):
 
     Coordinates are millimetres when calibrated (ppm set), else crop pixels. This is the
     same frame Fiji sees when it opens the exported ``_plate.tif`` crop."""
-    mm_per_px = (1.0 / ppm) if ppm else 1.0
+    mm_per_px = ppm if ppm else 1.0        # `ppm` (det['pxl_per_mm']) is already mm-per-pixel
     x0, y0, _x1, _y1 = plate_crop.crop_box_from_plate(orig_bgr.shape, plate)
     rows = []
     for i, p in enumerate(plaques, start=1):
@@ -52,7 +52,7 @@ def save_bundle(plaques, orig_bgr, plate, ppm, lawn_gray, out_dir, base_name):
     """Write the full Fiji registration bundle. Returns a dict of output paths + metadata."""
     import cv2
     os.makedirs(out_dir, exist_ok=True)
-    mm_per_px = (1.0 / ppm) if ppm else None
+    mm_per_px = ppm if ppm else None       # `ppm` (det['pxl_per_mm']) is already mm-per-pixel
     x0, y0, x1, y1 = plate_crop.crop_box_from_plate(orig_bgr.shape, plate)
 
     # 1) calibrated crop TIFF
