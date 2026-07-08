@@ -72,6 +72,30 @@ and noisier sizes — appropriate for dense plates when followed by manual pruni
 measurements of the app's outlines agree with the app to **r = 0.9999 (sub-0.004 mm)** — the
 measurement pipeline and the Fiji bridge are internally consistent with an independent tool.
 
+### (C) Negative-control false-positive rate (blank plates)
+
+Detection was run on **17 uninfected / no-plaque plates** (`260701 No Plaque Plates for
+Calibration/`, iPhone HEIC). These have **no plaques**, so *every* detection is a false positive —
+i.e. the empirical false-positive floor of the pipeline on this imaging setup.
+
+| Engine | False positives / plate (mean ± SD) | Median | Range | Clean plates | 95% upper bound* |
+|---|---|---:|---:|---:|---:|
+| **Precise** | **3.1 ± 3.0** | 2 | 0–10 | 3 / 17 | ≈ 8.9 |
+| **Sensitive** | **12.4 ± 4.4** | 11 | 7–24 | 0 / 17 | ≈ 21.0 |
+
+<sub>*mean + 1.96·SD, a per-plate false-positive threshold.</sub>
+
+**Interpretation.** Precise has a **low but non-zero** false-positive floor (~3 per blank plate) —
+round mid-grey lawn artifacts (bubbles, condensation droplets, specular glare, dust) that pass the
+detector. **Sensitive is ~4× noisier** (~12 FP/plate, never zero) and should not be used for counting
+without manual pruning. Consequences for reporting:
+
+- **Counts:** subtract the density-matched negative-control floor (report mean ± SD), or threshold
+  each plate off the 95% upper bound. Do not report raw counts from Sensitive without correction.
+- **Sizes:** false positives are typically small artifacts; a size / circularity gate (or the
+  `OVERLAP` / `CIRCULARITY` columns and manual erase) removes most. Size agreement (§2A) is measured
+  only on matched true positives and is unaffected.
+
 ---
 
 ## 3. Quality-control finding fixed during validation
@@ -105,8 +129,9 @@ evidence that the cross-tool validation is doing real work.
 
 1. **More plates** across densities (sparse → confluent) and, ideally, a second labeller for
    inter-observer agreement.
-2. **Negative controls** — score false-positive rate on blank/no-plaque plates
-   (`260701 No Plaque Plates…`).
+2. ~~**Negative controls** — false-positive rate on blank plates.~~ **Done (§2C):** Precise
+   3.1 ± 3.0 FP/plate, Sensitive 12.4 ± 4.4. Still to do: density-match the blanks to the test
+   plates, and repeat per imaging batch (the FP floor is setup-specific).
 3. **Plate-level statistics** — report agreement per plate (Bland–Altman on median diameter, count
    correlation), not just pooled per-plaque.
 4. **A frozen validation script + data DOI** (Zenodo) so the numbers are reproducible from the
