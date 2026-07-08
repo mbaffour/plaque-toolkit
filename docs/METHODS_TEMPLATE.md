@@ -110,6 +110,14 @@ inherit any published validation, and must be validated on your own plates. Repo
 validation — the numbers below are yours to fill in from
 [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md).
 
+> **A first local validation has been recorded** in
+> [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md) (2026-07-07): against hand-labelled ground truth,
+> Precise scored **precision 1.00** with **diameter agreement r ≈ 0.99 (MAE ≤ 0.0025 mm)**, at
+> lower recall (≈ 0.3–0.4) on very dense plates; an independent cross-check in real Fiji/ImageJ gave
+> **app-vs-Fiji size agreement r = 0.9999**. Treat that as the *foundation* — it is a small sample
+> (2 GT plates + 1 Fiji plate) and still needs more plates, negative controls, and plate-level
+> statistics before publication (see VALIDATION_RESULTS §5).
+
 **"Validated" here means _your own local validation_, not an independent / peer-reviewed stamp.**
 Precise can reach high detection precision on a given setup — on the developers' own plates it scored
 **~0.95 precision** (with lower recall on faint plaques) — but that figure is *theirs*, tied to a
