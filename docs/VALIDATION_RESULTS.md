@@ -96,6 +96,27 @@ without manual pruning. Consequences for reporting:
   `OVERLAP` / `CIRCULARITY` columns and manual erase) removes most. Size agreement (§2A) is measured
   only on matched true positives and is unaffected.
 
+### (D) Size-agreement statistics — Bland–Altman + ICC
+
+Proper agreement statistics on the matched diameter pairs (bias + 95% limits of agreement + ICC(A,1)
+absolute agreement, not just correlation):
+
+| Comparison | n pairs | Mean Ø | Bias (test − ref) | 95% limits of agreement | ICC | r |
+|---|---:|---:|---:|---|---:|---:|
+| App (Precise) vs hand labels — pooled IMG_3907 + IMG_3912 | 99 | 0.50 mm | **+0.0018 mm** | **−0.034 … +0.038 mm** | **0.991** | 0.991 |
+| App vs real Fiji — same outlines, IMG_4092 | 95 | 1.42 mm | +0.0006 mm | −0.006 … +0.007 mm | 1.000 | 1.000 |
+
+**Interpretation.** Bias is negligible (≤ 0.002 mm) and the limits of agreement are tight — **±0.038 mm
+vs the hand labels** on ~0.5 mm plaques (≈ 7% of the diameter), and **±0.007 mm vs Fiji**. ICC ≈
+0.99–1.00 indicates excellent *absolute* agreement (not just correlation). i.e. **when Precise
+reports a plaque, its diameter is trustworthy to within a few percent.**
+
+**Count-level (pseudoreplication note).** Plaque counts should be analysed with the **plate** as the
+experimental unit, but only **2** ground-truth plates were available — too few for a plate-level count
+correlation. The two plates show systematic under-counting on dense plates (Precise 74 vs 185; 25 vs
+89), consistent with the recall in §2A. A defensible count-level validation needs **≥ 5–6 plates
+spanning densities** (still to do).
+
 ---
 
 ## 3. Quality-control finding fixed during validation
@@ -132,8 +153,10 @@ evidence that the cross-tool validation is doing real work.
 2. ~~**Negative controls** — false-positive rate on blank plates.~~ **Done (§2C):** Precise
    3.1 ± 3.0 FP/plate, Sensitive 12.4 ± 4.4. Still to do: density-match the blanks to the test
    plates, and repeat per imaging batch (the FP floor is setup-specific).
-3. **Plate-level statistics** — report agreement per plate (Bland–Altman on median diameter, count
-   correlation), not just pooled per-plaque.
+3. **Statistics** — size-agreement Bland–Altman + ICC is **done (§2D)**. Still to do:
+   **count** validation at the **plate** level (count correlation + Bland–Altman on per-plate median
+   Ø) once ≥ 5–6 ground-truth plates exist, and mixed-effects handling if plates are nested in
+   biological replicates.
 4. **A frozen validation script + data DOI** (Zenodo) so the numbers are reproducible from the
    archived inputs.
 
