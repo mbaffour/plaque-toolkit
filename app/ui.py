@@ -1262,7 +1262,8 @@ class MainWindow(QMainWindow):
             grp.addAction(a); ts.addAction(a)
 
         m = self.menuBar().addMenu("&Help")
-        for label, doc in (("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
+        for label, doc in (("How-to, use cases & verification", "HOWTO_AND_VERIFICATION.html"),
+                           ("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
                            ("Measuring in Fiji (tutorial)", "FIJI_TUTORIAL.html"),
                            ("User guide", "USER_GUIDE.md"),
                            ("How to validate this program", "VALIDATION_GUIDE.md"),
