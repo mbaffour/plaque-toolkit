@@ -1263,6 +1263,7 @@ class MainWindow(QMainWindow):
 
         m = self.menuBar().addMenu("&Help")
         for label, doc in (("How-to, use cases & verification", "HOWTO_AND_VERIFICATION.html"),
+                           ("Validate vs Fiji for a paper (calculator)", "FIJI_VALIDATION_PROTOCOL.html"),
                            ("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
                            ("Measuring in Fiji (tutorial)", "FIJI_TUTORIAL.html"),
                            ("User guide", "USER_GUIDE.md"),
