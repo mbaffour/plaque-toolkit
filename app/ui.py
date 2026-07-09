@@ -1043,6 +1043,7 @@ class DocViewer(QDialog):
         self.setWindowTitle("Plaque Toolkit — help — %s" % name)
         self.resize(940, 780)
         self.setObjectName("AppRoot")
+        self.setAttribute(Qt.WA_DeleteOnClose, True)   # destroy on close; _DOC_VIEWERS holds it while open
 
         self.browser = QTextBrowser()
         self.browser.setOpenExternalLinks(True)
@@ -1052,14 +1053,19 @@ class DocViewer(QDialog):
             "border-radius:8px;padding:14px 20px;font-size:15px;}")
 
         is_html = name.lower().endswith((".html", ".htm"))
+        text = None
         if self._path and os.path.exists(self._path):
-            with open(self._path, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
+            try:
+                with open(self._path, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as e:
+                self.browser.setPlainText("Could not read %s:\n%s" % (name, e))
+        if text is not None:
             if is_html:
                 self.browser.setHtml(text)
             else:
                 self.browser.setMarkdown(text)
-        else:
+        elif self._path is None:
             self.browser.setPlainText("Could not find %s. It ships in the docs/ folder." % name)
 
         cap = QLabel(name); cap.setObjectName("SummaryHeading")
@@ -1085,8 +1091,26 @@ class DocViewer(QDialog):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
 
 
+def _is_interactive_html(path):
+    """True for HTML pages that need a real browser (JavaScript/forms) — e.g. the Fiji
+    validation calculator. QTextBrowser runs no JS, so these must open externally."""
+    if not (path and path.lower().endswith((".html", ".htm"))):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            return "<script" in fh.read().lower()
+    except OSError:
+        return False
+
+
 def _open_doc(name, parent=None):
-    """Open a docs/ file IN-APP (rendered inside the tool). Signature kept for existing callers."""
+    """Open a docs/ file IN-APP (rendered inside the tool). Interactive HTML pages (with
+    JavaScript/forms) open in the system browser instead, since QTextBrowser can't run them.
+    Signature kept for existing callers."""
+    path, _docs = _resolve_doc(name)
+    if _is_interactive_html(path):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        return
     v = DocViewer(name, parent or QApplication.activeWindow())
     _DOC_VIEWERS.append(v)
     v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
