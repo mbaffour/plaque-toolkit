@@ -109,12 +109,23 @@ def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
     tool, fiji = s["tool"], s["fiji"]
     fig = Figure(figsize=(9.6, 4.5), layout="constrained")
     ax1, ax2 = fig.subplots(1, 2)
-    TEAL, AMB, BLU = "#0e7d5b", "#b45309", "#3f5b8c"
+    TEAL, AMB, BLU, OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
+    diff = s["diff"]
+    # a plaque is an "outlier" when its Toolkit−Fiji difference falls OUTSIDE the 95% limits
+    out = [d < s["loa_lo"] or d > s["loa_hi"] for d in diff]
+    keep = lambda seq, flag: [seq[i] for i in range(len(seq)) if out[i] == flag]
+    n_out = sum(out)
+
     lo, hi = min(tool + fiji), max(tool + fiji)
     pad = (hi - lo) * 0.06 or 0.1
     lim = [lo - pad, hi + pad]
     ax1.plot(lim, lim, "--", color="#9fb3ab", lw=1, zorder=1)
-    ax1.scatter(fiji, tool, s=20, color=TEAL, alpha=.72, edgecolor="white", linewidth=.4, zorder=3)
+    ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=TEAL, alpha=.72,
+                edgecolor="white", linewidth=.4, zorder=3, label="within limits")
+    if n_out:
+        ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=OUT, alpha=.95,
+                    edgecolor="white", linewidth=.5, zorder=4, label="outside 95% limits")
+        ax1.legend(loc="lower right", fontsize=7.5, framealpha=.92)
     ax1.set_xlim(lim); ax1.set_ylim(lim); ax1.set_aspect("equal", "box")
     ax1.set_xlabel("Fiji / ImageJ (%s)" % unit); ax1.set_ylabel("Plaque Toolkit (%s)" % unit)
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
@@ -125,7 +136,11 @@ def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
     ax2.axhline(s["bias"], color=TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
     ax2.axhline(s["loa_hi"], color=AMB, lw=1.3, ls="--", label="+1.96 SD  %+.3f" % s["loa_hi"])
     ax2.axhline(s["loa_lo"], color=AMB, lw=1.3, ls="--", label="−1.96 SD  %+.3f" % s["loa_lo"])
-    ax2.scatter(s["avg"], s["diff"], s=20, color=BLU, alpha=.72, edgecolor="white", linewidth=.4, zorder=3)
+    ax2.scatter(keep(s["avg"], False), keep(diff, False), s=20, color=BLU, alpha=.72,
+                edgecolor="white", linewidth=.4, zorder=3)
+    if n_out:
+        ax2.scatter(keep(s["avg"], True), keep(diff, True), s=34, color=OUT, alpha=.95,
+                    edgecolor="white", linewidth=.5, zorder=4)
     ax2.set_xlabel("Mean of the two methods (%s)" % unit)
     ax2.set_ylabel("Toolkit − Fiji (%s)" % unit)
     ax2.set_title("B  Bland–Altman", loc="left", fontsize=10, fontweight="bold")

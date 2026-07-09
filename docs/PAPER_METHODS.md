@@ -28,14 +28,17 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 > To validate the software's measurements, **100 plaques** `[spanning N plates and a range of sizes]`
 > were additionally measured **independently** in Fiji/ImageJ (Schindelin et al., 2012) by manual
 > tracing, blind to the software's boundaries, on the same calibrated images. Agreement between the two
-> methods was quantified by Bland–Altman analysis (mean bias and 95% limits of agreement), the
-> intraclass correlation coefficient (ICC; two‑way, absolute agreement), and Pearson's *r*, on both
-> area and area‑equivalent diameter.
+> methods was quantified by Bland–Altman analysis (mean bias and 95% limits of agreement; Bland &
+> Altman, 1986), the intraclass correlation coefficient (ICC; two‑way, absolute agreement, per Koo &
+> Li, 2016), and Pearson's *r*, on both area and area‑equivalent diameter.
 
 ### Statistical analysis
-> `[Software, e.g. R x.x / Python x.x / the Plaque Toolkit "Compare vs Fiji" utility]`. Agreement was
+> `[Software, e.g. R x.x / Python x.x / the Plaque Toolkit "Fiji agreement" utility]`. Agreement was
 > assessed as described above; a linear regression of the two methods' diameters was used to check for
-> proportional bias (slope = 1 indicating none).
+> proportional bias (slope = 1 indicating none). Bland–Altman analysis with limits of agreement is the
+> standard technique for comparing two measurement methods (Bland & Altman, 1986) and is the same
+> approach used to validate the original Plaque Size Tool against manual ImageJ (Trofimova & Jaschke,
+> 2021).
 
 ---
 
@@ -55,6 +58,8 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
 > **Figure X.** Agreement between Plaque Toolkit and manual Fiji/ImageJ plaque diameter measurements
 > (n = 100). **(A)** Method comparison against the line of identity (*r* = 0.98, ICC = 0.97).
 > **(B)** Bland–Altman plot; solid line = mean bias (−0.03 mm), dashed lines = 95% limits of agreement.
+> In both panels, red points mark the 8 plaques whose Toolkit − Fiji difference fell outside the 95%
+> limits of agreement (the largest disagreements); green/blue points fall within the limits.
 
 ---
 
@@ -69,8 +74,20 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
   Precise ≈ 3 per blank plate on this setup).
 - **Report the bias, don't hide it.** State the −0.03 mm (≈1.8%) offset and the 95% limits of
   agreement; a stated, size‑independent bias is normal in method comparison and reads as rigour.
+- **Report plaques *and* plates; the plate is the experimental unit.** Write "n = 100 plaques from
+  N plates," not just "n = 100." A size‑agreement claim is a *per‑plaque* measurement comparison, so
+  100 plaques already gives tight limits of agreement — a strong sample for the size question. But
+  plaques on one plate share a single calibration, focus and operator session, so they are not fully
+  independent (a pseudoreplication caveat). **Two plates is an acceptable minimum for a local size
+  validation; spanning ≥ 5 plates across your range of densities/sizes — and, ideally, a second
+  independent tracer — makes the agreement setup‑robust and pre‑empts a reviewer's objection.** Plaque
+  *count / titre* validation is separate and *requires* plate‑level replicates (one count per plate).
 
 ## References
+- Bland J.M. & Altman D.G. (1986). *Statistical methods for assessing agreement between two methods of
+  clinical measurement.* Lancet 327(8476):307–310. doi:10.1016/S0140-6736(86)90837-8
+- Koo T.K. & Li M.Y. (2016). *A guideline of selecting and reporting intraclass correlation
+  coefficients for reliability research.* J. Chiropr. Med. 15(2):155–163. doi:10.1016/j.jcm.2016.02.012
 - Trofimova E. & Jaschke P.R. (2021). *An improved and open-source method for plaque size and titer
   quantification.* Virology 561:1–5. doi:10.1016/j.virol.2021.05.011
 - Schindelin J. et al. (2012). *Fiji: an open-source platform for biological-image analysis.*
