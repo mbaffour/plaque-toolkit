@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
-    QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView)
+    QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
@@ -1217,6 +1217,177 @@ class ValidateTab(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+class AgreementTab(QWidget):
+    """Validate the tool's sizes against a reference (Fiji/ImageJ): paste the two paired
+    columns → Bland–Altman (bias + 95% limits of agreement) + ICC + r + a report sentence
+    + a method-comparison figure. Pure size-agreement stats, no image needed."""
+
+    # a clean paired DIAMETER example (both mm) so the demo shows a realistic good result
+    _EX_TOOL = "1.24\n0.98\n1.51\n0.62\n1.80\n1.11\n0.75\n1.35\n2.02\n0.90\n1.44\n1.19\n0.68\n1.60\n1.05"
+    _EX_FIJI = "1.27\n0.96\n1.55\n0.60\n1.84\n1.09\n0.79\n1.38\n2.05\n0.93\n1.41\n1.22\n0.71\n1.57\n1.02"
+
+    def __init__(self):
+        super().__init__()
+        self._last = None
+        self.canvas = None
+
+        intro = QLabel(
+            "Validate plaque size against Fiji/ImageJ. Paste the two paired columns — one value "
+            "per line, the SAME plaque on each line. It computes Bland–Altman (bias + 95% limits "
+            "of agreement), ICC and r, draws the figure, and writes the sentence for your paper.")
+        intro.setObjectName("ModeHelp"); intro.setWordWrap(True)
+
+        _ta_css = ("QPlainTextEdit{background:#ffffff;color:#1f2430;border:1px solid #c7ccd6;"
+                   "border-radius:8px;font-family:Consolas,monospace;font-size:13px;padding:6px;}")
+        self.tool_in = QPlainTextEdit(); self.tool_in.setPlaceholderText("1.24\n0.98\n1.51\n…")
+        self.fiji_in = QPlainTextEdit(); self.fiji_in.setPlaceholderText("1.23\n0.79\n1.86\n…")
+        for w in (self.tool_in, self.fiji_in):
+            w.setMaximumHeight(150); w.setStyleSheet(_ta_css)
+        tcap = QLabel("Plaque Toolkit values"); fcap = QLabel("Fiji / ImageJ values")
+        for c in (tcap, fcap):
+            c.setObjectName("SummaryHeading")
+        tb = QVBoxLayout(); tb.addWidget(tcap); tb.addWidget(self.tool_in)
+        fb = QVBoxLayout(); fb.addWidget(fcap); fb.addWidget(self.fiji_in)
+        inrow = QHBoxLayout(); inrow.addLayout(tb); inrow.addLayout(fb)
+
+        self.unit = QComboBox()
+        self.unit.addItem("Diameter (mm)", "mm")
+        self.unit.addItem("Area (mm²) — convert to diameter", "area")
+        self.unit.setToolTip("What did you paste? Fiji's default is Area (mm²); choosing it converts "
+                             "both columns to the area-equivalent diameter, matching the tool.")
+        self.compute_btn = QPushButton("  Compute agreement  "); self.compute_btn.setObjectName("Primary")
+        self.compute_btn.clicked.connect(self._compute)
+        self.example_btn = QPushButton("Load example"); self.example_btn.clicked.connect(self._example)
+        self.clear_btn = QPushButton("Clear"); self.clear_btn.clicked.connect(self._clear)
+        optrow = QHBoxLayout()
+        optrow.addWidget(QLabel("Values are:")); optrow.addWidget(self.unit); optrow.addStretch()
+        optrow.addWidget(self.example_btn); optrow.addWidget(self.clear_btn); optrow.addWidget(self.compute_btn)
+
+        self.err = QLabel(""); self.err.setWordWrap(True)
+        self.err.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["warn"])
+
+        self._metrics = {}
+        self.stats_card = self._build_stats_card()
+
+        self.fig_holder = QFrame(); self.fig_holder.setObjectName("Card")
+        self.fig_layout = QVBoxLayout(self.fig_holder); self.fig_layout.setContentsMargins(6, 6, 6, 6)
+        self.fig_placeholder = QLabel("The method-comparison + Bland–Altman plot appears here.")
+        self.fig_placeholder.setObjectName("Placeholder"); self.fig_placeholder.setAlignment(Qt.AlignCenter)
+        self.fig_placeholder.setMinimumHeight(300); self.fig_layout.addWidget(self.fig_placeholder)
+
+        rep_cap = QLabel("Report — paste into your Methods/Results"); rep_cap.setObjectName("SummaryHeading")
+        self.report = QPlainTextEdit(); self.report.setReadOnly(True); self.report.setMaximumHeight(96)
+        self.report.setStyleSheet("QPlainTextEdit{background:#ffffff;color:#1f2430;"
+                                  "border:1px solid #c7ccd6;border-radius:8px;padding:8px;}")
+        self.copy_btn = QPushButton("Copy report"); self.copy_btn.clicked.connect(self._copy)
+        self.savefig_btn = QPushButton("Save figure…"); self.savefig_btn.clicked.connect(self._save_fig)
+        self.savecsv_btn = QPushButton("Save paired CSV…"); self.savecsv_btn.clicked.connect(self._save_csv)
+        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+            b.setEnabled(False)
+        rrow = QHBoxLayout(); rrow.addWidget(self.copy_btn); rrow.addWidget(self.savefig_btn)
+        rrow.addWidget(self.savecsv_btn); rrow.addStretch()
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        lay.addWidget(intro); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
+        lay.addWidget(self.stats_card); lay.addWidget(self.fig_holder, 1)
+        lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow)
+
+    def _build_stats_card(self):
+        card = QFrame(); card.setObjectName("SummaryCard"); _shadow(card)
+        grid = QGridLayout(card); grid.setContentsMargins(16, 12, 16, 12)
+        grid.setHorizontalSpacing(22); grid.setVerticalSpacing(2)
+        for col, key, label in [(0, "n", "n PAIRS"), (1, "bias", "MEAN BIAS"),
+                                (2, "loa", "95% LIMITS"), (3, "icc", "ICC"),
+                                (4, "r", "PEARSON r"), (5, "slope", "SLOPE")]:
+            cap = QLabel(label); cap.setObjectName("SummaryHeading")
+            val = QLabel("—"); val.setStyleSheet("font-size:19px;font-weight:700;")
+            grid.addWidget(cap, 0, col); grid.addWidget(val, 1, col)
+            self._metrics[key] = val
+        return card
+
+    def _compute(self):
+        from app import agreement
+        self.err.setText("")
+        tool = agreement.parse_column(self.tool_in.toPlainText())
+        fiji = agreement.parse_column(self.fiji_in.toPlainText())
+        if len(tool) < 3 or len(fiji) < 3:
+            self.err.setText("Enter at least 3 paired values in each box."); return
+        if len(tool) != len(fiji):
+            self.err.setText("Unequal counts: %d Toolkit vs %d Fiji — using the first %d pairs; "
+                             "check the rows line up (same plaque per line)."
+                             % (len(tool), len(fiji), min(len(tool), len(fiji))))
+        unit, what = "mm", "diameters"
+        if self.unit.currentData() == "area":
+            tool, fiji = agreement.area_to_diam(tool), agreement.area_to_diam(fiji)
+            what = "diameters (area-equivalent)"
+        try:
+            s = agreement.compute(tool, fiji)
+        except Exception as e:
+            self.err.setText(str(e)); return
+        self._last = (s, unit, what)
+        m = self._metrics
+        m["n"].setText(str(s["n"]))
+        m["bias"].setText("%+.3f" % s["bias"])
+        m["loa"].setText("%+.2f…%+.2f" % (s["loa_lo"], s["loa_hi"]))
+        m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] else "—")
+        m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] else "—")
+        m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] else "—")
+        self._draw(s, unit)
+        self.report.setPlainText(agreement.report_sentence(s, unit, what))
+        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+            b.setEnabled(True)
+        self.window().statusBar().showMessage("Agreement computed on %d plaque pairs." % s["n"], 4000)
+
+    def _draw(self, s, unit):
+        from app import agreement
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        fig = agreement.make_figure(s, unit)
+        new = FigureCanvas(fig)
+        if self.canvas is not None:
+            self.fig_layout.removeWidget(self.canvas); self.canvas.setParent(None)
+        elif self.fig_placeholder is not None:
+            self.fig_layout.removeWidget(self.fig_placeholder); self.fig_placeholder.setParent(None)
+            self.fig_placeholder = None
+        self.canvas = new; self.fig_layout.addWidget(self.canvas); self.canvas.draw()
+
+    def _example(self):
+        self.tool_in.setPlainText(self._EX_TOOL); self.fiji_in.setPlaceholderText("")
+        self.fiji_in.setPlainText(self._EX_FIJI)
+        self.unit.setCurrentIndex(0); self._compute()
+
+    def _clear(self):
+        self.tool_in.clear(); self.fiji_in.clear(); self.report.clear(); self.err.setText("")
+        for v in self._metrics.values():
+            v.setText("—")
+        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+            b.setEnabled(False)
+
+    def _copy(self):
+        QApplication.clipboard().setText(self.report.toPlainText())
+        self.window().statusBar().showMessage("Report copied to the clipboard.", 3000)
+
+    def _save_fig(self):
+        if not self._last:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save figure", "PlaqueToolkit_vs_Fiji.png",
+                                              "PNG image (*.png);;PDF (*.pdf)")
+        if path:
+            from app import agreement
+            agreement.make_figure(self._last[0], self._last[1]).savefig(path, dpi=200, bbox_inches="tight")
+            self.window().statusBar().showMessage("Figure saved: %s" % path, 4000)
+
+    def _save_csv(self):
+        if not self._last:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save paired data", "app_vs_fiji_pairs.csv", "CSV (*.csv)")
+        if path:
+            s = self._last[0]
+            df = pd.DataFrame({"toolkit": s["tool"], "fiji": s["fiji"], "difference": s["diff"]})
+            df.to_csv(path, index=False)
+            self.window().statusBar().showMessage("Saved %d pairs: %s" % (s["n"], path), 4000)
+
+
+# --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1237,6 +1408,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(BatchTab(self.pool), "  Batch  ")
         self.tabs.addTab(CompareTab(self.pool), "  Compare turbidity  ")
         self.tabs.addTab(ValidateTab(self.pool), "  Validate  ")
+        self.tabs.addTab(AgreementTab(), "  Fiji agreement  ")
         self.about_tab = AboutTab()
         self.tabs.addTab(self.about_tab, "  About  ")
         rlay.addWidget(self.tabs, 1)

@@ -30,6 +30,7 @@ hiddenimports += [
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths", "app.plaque_canvas",
     "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
+    "app.agreement",
     "imutils", "pandas", "PIL.ImageOps", "PIL.ImageStat", "PIL.ImageEnhance",
     "matplotlib.backends.backend_qtagg",
 ]

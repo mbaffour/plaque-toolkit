@@ -202,6 +202,14 @@ an ImageJ ROI set (numbered to match) + a numbered map + a registration CSV; **C
 pairs your Fiji measurements to the app's plaques **by position** (any rotation/flip) and reports
 per‑plaque differences. Full walkthrough: **[FIJI_TUTORIAL.html](FIJI_TUTORIAL.html)**.
 
+**Validating size for a paper — the "Fiji agreement" tab.** Paste your tool values and your Fiji
+values (one plaque per line; Fiji Area auto‑converts to diameter) and it computes **Bland–Altman
+bias + 95% limits of agreement, ICC, Pearson r, and the regression slope**, draws the
+method‑comparison + Bland–Altman figure, and writes a ready‑to‑paste Methods/Results sentence
+(**Copy report** / **Save figure** / **Save paired CSV**). See
+[FIJI_VALIDATION_PROTOCOL.html](FIJI_VALIDATION_PROTOCOL.html) and
+[PAPER_METHODS.md](PAPER_METHODS.md).
+
 ---
 
 ## 6. Command‑line reference
