@@ -127,6 +127,11 @@ def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
                     edgecolor="white", linewidth=.5, zorder=4, label="outside 95% limits")
         ax1.legend(loc="lower right", fontsize=7.5, framealpha=.92)
     ax1.set_xlim(lim); ax1.set_ylim(lim); ax1.set_aspect("equal", "box")
+    # identity plot: force the SAME tick values on both axes so both sides read alike
+    _tk = [t for t in ax1.get_xticks() if lim[0] <= t <= lim[1]]
+    if _tk:
+        ax1.set_xticks(_tk); ax1.set_yticks(_tk)
+        ax1.set_xlim(lim); ax1.set_ylim(lim)   # re-apply (setting ticks can nudge the view)
     ax1.set_xlabel("Fiji / ImageJ (%s)" % unit); ax1.set_ylabel("Plaque Toolkit (%s)" % unit)
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
     ax1.text(.04, .96, "n=%d\nr=%.3f\nICC=%.3f" % (s["n"], s["r"], s["icc"]),
