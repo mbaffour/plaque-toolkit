@@ -207,6 +207,12 @@ class MeasureTab(QWidget):
         self.canvas_holder = QFrame(); self.canvas_holder.setObjectName("Card")
         self.canvas_layout = QVBoxLayout(self.canvas_holder)
         self.canvas_layout.setContentsMargins(6, 6, 6, 6)
+        # loaded-photo info strip (name · dimensions · camera · date · size) — filled on load
+        self.img_info = QLabel(""); self.img_info.setVisible(False)
+        self.img_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.img_info.setStyleSheet("font-family:Consolas,monospace;font-size:12px;color:#33413c;"
+                                    "background:#eef4f1;border:1px solid #d7e2dc;border-radius:7px;padding:4px 9px;")
+        self.canvas_layout.addWidget(self.img_info)
         self.placeholder = QLabel(
             "🧫\n\n"
             "Drag a plaque photo here\n"
@@ -533,6 +539,7 @@ class MeasureTab(QWidget):
         self._mount_editor()
         self._set_busy(False)
         self.refresh_table()
+        self._set_image_info()
         label = MODES[self.mode.currentIndex()][0]
         self.window().statusBar().showMessage(f"{det['n_plaques']} plaques detected · {label}")
 
@@ -542,8 +549,41 @@ class MeasureTab(QWidget):
         self._set_busy(False)
         # plaques are now the editable Precise detections -> normal table path
         self.refresh_table()
+        self._set_image_info()
         n = det["n_plaques"]
         self.window().statusBar().showMessage(f"{n} plaques (Precise · PST+PlaqSeg)")
+
+    def _set_image_info(self):
+        """Show the loaded photo's name + pixel size + camera/date + file size above the canvas."""
+        if not self.image_path:
+            self.img_info.setVisible(False)
+            return
+        parts = [os.path.basename(self.image_path)]
+        try:
+            ob = self.det.get("orig_bgr") if self.det else None
+            if ob is not None:
+                h, w = ob.shape[:2]
+                parts.append("%d×%d px" % (w, h))
+        except Exception:
+            pass
+        try:
+            from PIL import Image
+            ex = Image.open(self.image_path).getexif()
+            model = ex.get(272)                      # camera model
+            dt = ex.get(36867) or ex.get(306)        # DateTimeOriginal / DateTime
+            if model:
+                parts.append(str(model).strip())
+            if dt:
+                parts.append(str(dt).split()[0].replace(":", "-"))   # date only
+        except Exception:
+            pass
+        try:
+            parts.append("%.1f MB" % (os.path.getsize(self.image_path) / 1e6))
+        except Exception:
+            pass
+        self.img_info.setText("📷  " + "   ·   ".join(parts))
+        self.img_info.setToolTip(os.path.abspath(self.image_path))
+        self.img_info.setVisible(True)
 
     def refresh_table(self, precise=None):
         if self.det is None or self.editor is None:

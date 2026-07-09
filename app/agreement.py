@@ -107,7 +107,7 @@ def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
     """Two-panel method-comparison + Bland-Altman matplotlib Figure."""
     from matplotlib.figure import Figure
     tool, fiji = s["tool"], s["fiji"]
-    fig = Figure(figsize=(9.4, 4.1))
+    fig = Figure(figsize=(9.6, 4.5), layout="constrained")
     ax1, ax2 = fig.subplots(1, 2)
     TEAL, AMB, BLU = "#0e7d5b", "#b45309", "#3f5b8c"
     lo, hi = min(tool + fiji), max(tool + fiji)
@@ -122,17 +122,17 @@ def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
              transform=ax1.transAxes, va="top", ha="left", fontsize=8, family="monospace",
              bbox=dict(boxstyle="round,pad=0.3", fc="#f0f5f2", ec="#cfe0d8"))
     ax2.axhline(0, color="#c8d2ce", lw=.8)
-    ax2.axhline(s["bias"], color=TEAL, lw=1.6)
-    ax2.axhline(s["loa_hi"], color=AMB, lw=1.2, ls="--")
-    ax2.axhline(s["loa_lo"], color=AMB, lw=1.2, ls="--")
+    ax2.axhline(s["bias"], color=TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
+    ax2.axhline(s["loa_hi"], color=AMB, lw=1.3, ls="--", label="+1.96 SD  %+.3f" % s["loa_hi"])
+    ax2.axhline(s["loa_lo"], color=AMB, lw=1.3, ls="--", label="−1.96 SD  %+.3f" % s["loa_lo"])
     ax2.scatter(s["avg"], s["diff"], s=20, color=BLU, alpha=.72, edgecolor="white", linewidth=.4, zorder=3)
     ax2.set_xlabel("Mean of the two methods (%s)" % unit)
-    ax2.set_ylabel("Toolkit - Fiji (%s)" % unit)
-    ax2.set_title("B  Bland-Altman", loc="left", fontsize=10, fontweight="bold")
-    xr = max(s["avg"])
-    for y, txt, c in [(s["bias"], "bias %+.3f" % s["bias"], TEAL),
-                      (s["loa_hi"], "+1.96 SD %+.3f" % s["loa_hi"], AMB),
-                      (s["loa_lo"], "-1.96 SD %+.3f" % s["loa_lo"], AMB)]:
-        ax2.annotate(" " + txt, (xr, y), fontsize=7.5, va="center", color=c, family="monospace")
-    fig.tight_layout()
+    ax2.set_ylabel("Toolkit − Fiji (%s)" % unit)
+    ax2.set_title("B  Bland–Altman", loc="left", fontsize=10, fontweight="bold")
+    # give the differences vertical headroom, and label the lines in a legend BELOW the panel
+    # (so the numbers never overlap the points or the axis)
+    yspan = max(abs(s["loa_hi"]), abs(s["loa_lo"]), max(abs(d) for d in s["diff"])) * 1.15 or 0.1
+    ax2.set_ylim(-yspan, yspan)
+    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
+               fontsize=8, handlelength=1.6, columnspacing=1.4, prop={"family": "monospace"})
     return fig
