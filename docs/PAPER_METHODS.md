@@ -46,8 +46,10 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 
 > Plaque diameters measured with Plaque Toolkit agreed closely with independent manual measurements in
 > Fiji/ImageJ (n = 100 plaques; **Fig. X**): Pearson *r* = 0.98, ICC = 0.97. Bland–Altman analysis
-> showed a small mean bias of **−0.03 mm** (Plaque Toolkit − Fiji; ≈1.8%), with 95% limits of agreement
-> of **−0.15 to +0.09 mm** and no proportional bias (regression slope = 1.01). `[If you report area:
+> showed a small mean bias of **−0.03 mm** (Plaque Toolkit − Fiji; ≈1.8%; paired *t*-test p < 0.001),
+> with 95% limits of agreement of **−0.15 to +0.09 mm** and no proportional bias (the difference did not
+> vary with plaque size: regression of difference on mean, slope = +0.006, p = 0.78; equivalently the
+> Toolkit-on-Fiji slope was 0.98, not significantly different from 1). `[If you report area:
 > mean bias −0.07 mm², 95% limits of agreement −0.34 to +0.20 mm², ICC = 0.97.]` The software therefore
 > reproduces manual plaque sizing to within a few percent, with a small, size‑independent tendency to
 > read marginally smaller than hand tracing.

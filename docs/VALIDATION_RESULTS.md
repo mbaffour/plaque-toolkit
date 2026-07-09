@@ -75,13 +75,22 @@ Diameters are area-equivalent (`d = 2·√(A/π)`).
 | **95% limits of agreement** | **−0.146 … +0.089** | −0.34 … +0.20 |
 | **ICC(A,1)** | **0.974** | 0.973 |
 | Pearson r | 0.979 | 0.978 |
-| Proportional bias (slope) | 1.006 → none | — |
+| Proportional bias | none (see below) | — |
 
-Figure: `PlaqueToolkit_vs_Fiji_BlandAltman.png` (method-comparison scatter + Bland–Altman).
+*Proportional-bias tests (diameter):* Bland–Altman regression of the difference on the mean gives
+slope **+0.006, p = 0.78** (Spearman ρ = 0.03, p = 0.79) — the disagreement does **not** grow with
+plaque size. Equivalently the least-squares slope of Toolkit on Fiji is **0.98**, not significantly
+different from 1 (p = 0.46). *(The "1.006" in earlier drafts came from a different regression —
+Fiji-**area** on Toolkit-area; the app and figure use the diameter slope 0.98.)* The mean bias, though
+small, is statistically **real** (paired *t* = −4.76, **p = 6.6 × 10⁻⁶**): a consistent −1.8% offset,
+not sampling noise.
+
+Figure: `PlaqueToolkit_vs_Fiji_BlandAltman.png` (method-comparison scatter + Bland–Altman; red points
+= the 8 plaques outside the 95% limits).
 
 **Interpretation.** Strong agreement — **ICC = 0.97**, tight limits (±≈0.1 mm on ~1.5 mm plaques ≈
 6–9%). The tool reads **~1.8% smaller** than the manual traces on average: a small, *constant* offset
-(regression slope ≈ 1.0, so no size dependence). **This is the citable Toolkit‑vs‑Fiji result.**
+(no size dependence, p = 0.78). **This is the citable Toolkit‑vs‑Fiji result.**
 
 *Consistency sub-check:* measuring the tool's **own** exported outlines in Fiji (identical regions,
 IMG_4092) gave r = 0.9999, bias −0.0006 mm — confirming the calibration and area math are exact. That

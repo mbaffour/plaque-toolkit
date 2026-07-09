@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How the agreement statistics work — Plaque Toolkit</title>
+<style>html,body{margin:0;padding:0}</style>
+</head>
+<body>
+<style>
+  :root{
+    --ground:#eef3f1; --panel:#ffffff; --ink:#12211d; --muted:#5b6a65; --faint:#859590;
+    --line:#dde6e2; --line-strong:#c6d3cd;
+    --tool:#0e7d5b; --tool-deep:#0a5c43; --fiji:#3f5b8c; --fiji-deep:#2d4468;
+    --amber:#b45309; --amber-bg:#fdf5e9; --good:#15803d; --good-bg:#eef7f0;
+    --red:#d1495b; --red-bg:#fbeef0;
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"Cascadia Code","SFMono-Regular",ui-monospace,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  .wrap{background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.62;font-size:16px;-webkit-font-smoothing:antialiased}
+  .page{max-width:820px;margin:0 auto;padding:40px 26px 120px}
+  a{color:var(--tool-deep)}
+  h1,h2,h3,h4{text-wrap:balance;line-height:1.15;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--tool-deep);font-weight:600}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  .t{color:var(--tool-deep);font-weight:640}.f{color:var(--fiji-deep);font-weight:640}
+  .r{color:var(--red);font-weight:640}
+
+  .hero{border-top:3px solid var(--tool);padding-top:22px;margin-bottom:8px}
+  .hero h1{font-size:38px;font-weight:800;letter-spacing:-.02em;margin:10px 0 12px}
+  .hero p{font-size:18px;color:var(--muted);margin:0;max-width:640px}
+  .meta{margin-top:20px;display:flex;gap:24px;flex-wrap:wrap;font-family:var(--mono);
+    font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+  .meta b{color:var(--ink);font-weight:600}
+
+  h2{font-size:25px;font-weight:760;letter-spacing:-.01em;margin-top:56px}
+  h2 .k{font-family:var(--mono);color:var(--line-strong);font-weight:600;margin-right:12px;font-size:20px}
+  h3{font-size:18px;font-weight:700;margin-top:30px}
+  p{margin:14px 0}.lead{font-size:17px}
+  strong{font-weight:680}
+  ul,ol{padding-left:22px}li{margin:7px 0}
+
+  .callout{border:1px solid var(--line);border-left:3px solid var(--tool);background:var(--panel);
+    border-radius:0 10px 10px 0;padding:15px 20px;margin:20px 0}
+  .callout.warn{border-left-color:var(--amber);background:var(--amber-bg)}
+  .callout.good{border-left-color:var(--good);background:var(--good-bg)}
+  .callout.key{border-left-color:var(--fiji);background:#f3f6fb}
+  .callout .eyebrow{margin-bottom:5px;display:block}
+  .warn .eyebrow{color:var(--amber)}.good .eyebrow{color:var(--good)}.key .eyebrow{color:var(--fiji-deep)}
+
+  /* worked-math box */
+  .math{background:#0f1b18;color:#e6f0ec;border-radius:10px;padding:16px 18px;margin:18px 0;
+    font-family:var(--mono);font-size:13.5px;line-height:1.85;overflow-x:auto;
+    white-space:pre-wrap}
+  .math .c{color:#7fb5a5}.math .hl{color:#7ee3bd;font-weight:700}
+  .math .cm{color:#6c8079}
+  .math b{color:#fff}
+
+  /* KPI strip */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:22px 0}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+  .kpi .v{font-family:var(--mono);font-size:22px;font-weight:750;letter-spacing:-.01em}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.35}
+
+  table{border-collapse:collapse;width:100%;margin:20px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#e7efeb;font-weight:680;font-size:13px}
+  td.n,th.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  caption{caption-side:bottom;color:var(--muted);font-size:12.5px;margin-top:8px;text-align:left}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h4{font-size:14px;margin-bottom:8px}
+  .card.bad{border-color:#e7c0c6}.card.bad h4{color:var(--red)}
+  .card.ok{border-color:#bfe0cf}.card.ok h4{color:var(--tool-deep)}
+
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:26px 0}
+  .toc ol{margin:8px 0 0;columns:2;column-gap:28px;font-size:14.5px}
+  .toc a{text-decoration:none}.toc a:hover{text-decoration:underline}
+
+  figure{margin:22px 0}figcaption{color:var(--muted);font-size:12.5px;margin-top:8px}
+  svg{max-width:100%;height:auto;display:block}
+  .sr{font-size:13.5px;color:var(--muted)}
+  hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+  .pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600;
+    border:1px solid var(--line-strong);color:var(--muted)}
+  code{font-family:var(--mono);font-size:13px;background:#e7efeb;padding:1px 6px;border-radius:5px}
+</style>
+
+<div class="wrap"><div class="page">
+
+<div class="hero">
+  <span class="eyebrow">Plaque Toolkit · validation, explained</span>
+  <h1>How the agreement statistics actually work</h1>
+  <p>Every number in your Toolkit‑vs‑Fiji validation, from first principles — with the arithmetic
+     worked out on your real 100 plaques so you can check it by hand and never take it on faith.</p>
+  <div class="meta">
+    <span><b>Dataset:</b> 100 plaques, 2 plates</span>
+    <span><b>Measured:</b> Plaque Toolkit vs manual Fiji/ImageJ</span>
+    <span><b>Quantity:</b> area‑equivalent diameter (mm)</span>
+    <span><b>Numbers verified:</b> 3 independent ways, agree to 1e‑9</span>
+  </div>
+</div>
+
+<div class="callout key">
+  <span class="eyebrow">The whole point, in one line</span>
+  You measured the <b>same 100 plaques twice</b> — once with the Toolkit, once by hand in Fiji. These
+  statistics answer a single question: <b>can you trust the Toolkit's number as if you'd measured it
+  yourself?</b> Everything below is a different, honest way of putting a number on "how close are the two?"
+</div>
+
+<div class="toc">
+  <span class="eyebrow">What's on this page</span>
+  <ol>
+    <li><a href="#s1">Pairs &amp; differences (the raw material)</a></li>
+    <li><a href="#s2">Bias — the average difference</a></li>
+    <li><a href="#s3">Spread — SD of the differences</a></li>
+    <li><a href="#s4">95% Limits of Agreement (the headline)</a></li>
+    <li><a href="#s5">Reading the Bland–Altman plot</a></li>
+    <li><a href="#s6">Proportional bias — does the gap grow?</a></li>
+    <li><a href="#s7">ICC — one number for "do they agree?"</a></li>
+    <li><a href="#s8">Pearson r and its famous trap</a></li>
+    <li><a href="#s9">RMSE &amp; MAE — the typical miss</a></li>
+    <li><a href="#s10">Why 2 plates is the soft spot</a></li>
+    <li><a href="#s11">Report it · reproduce it yourself</a></li>
+  </ol>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="v">−0.028</div><div class="l">bias, mm (Toolkit reads slightly smaller)</div></div>
+  <div class="kpi"><div class="v">±0.12</div><div class="l">95% limits, mm (−0.15 … +0.09)</div></div>
+  <div class="kpi"><div class="v">0.974</div><div class="l">ICC — agreement (excellent)</div></div>
+  <div class="kpi"><div class="v">0.979</div><div class="l">Pearson r — correlation</div></div>
+  <div class="kpi"><div class="v">0.05</div><div class="l">typical miss, mm (MAE)</div></div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="s1"><span class="k">01</span>Pairs and differences — the raw material</h2>
+<p class="lead">Everything starts from one idea: for each plaque you have <b>two numbers that should be
+the same</b> — the Toolkit's diameter and Fiji's diameter — and the single most useful thing you can do
+is <b>subtract them</b>.</p>
+<p>The <b>difference</b> for a plaque is <span class="num">tool − fiji</span>. A difference of 0 means
+perfect agreement. A <span class="t">positive</span> difference means the Toolkit read bigger; a
+<span class="f">negative</span> one means Fiji read bigger. Three real plaques from your set:</p>
+
+<div class="math">
+<span class="cm"># diameter d = 2·√(area/π);  difference = tool − fiji</span>
+plaque #1  : tool <b>1.9149</b>  fiji <b>1.9136</b>  →  diff = <span class="hl">+0.0013 mm</span>  <span class="cm">(they basically agreed)</span>
+plaque #11 : tool <b>2.0342</b>  fiji <b>2.1982</b>  →  diff = <span class="hl">−0.1640 mm</span>  <span class="cm">(Toolkit smaller — a red outlier)</span>
+plaque #92 : tool <b>0.6482</b>  fiji <b>0.8361</b>  →  diff = <span class="hl">−0.1879 mm</span>  <span class="cm">(smallest plaque, hardest to trace)</span>
+</div>
+<p>You now have <b>100 differences</b>. Every statistic on this page is just a different summary of
+those 100 numbers. If you understand the differences, you understand all of it.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s2"><span class="k">02</span>Bias — the average difference</h2>
+<p><b>Bias</b> is simply the average of your 100 differences. Add them all up, divide by 100:</p>
+<div class="math">
+bias = (diff₁ + diff₂ + … + diff₁₀₀) / 100 = <span class="hl">−0.0285 mm</span>
+     = −1.8% of the average plaque diameter (≈1.56 mm)
+</div>
+<p><b>What it means:</b> across all your plaques, the Toolkit reads on average <b>0.0285 mm smaller</b>
+than your hand tracing — about <b>1.8% low</b>. Bias is about <em>direction and average size</em> of the
+disagreement. A bias near zero means neither method is systematically bigger.</p>
+
+<div class="callout warn">
+  <span class="eyebrow">Real vs. important — an honest nuance</span>
+  Is that −1.8% just luck of the draw? A <b>paired t‑test</b> says no: <span class="num">p = 6.6×10⁻⁶</span>
+  — the offset is <b>statistically real</b> and consistent. <b>But</b> "statistically real" is not the same
+  as "big enough to care about." With 100 plaques you can <em>detect</em> a 0.03 mm shift that is far
+  smaller than you could reliably re‑place a caliper by hand. So the honest reading is: <b>there is a
+  small, genuine tendency to read ~1.8% low</b> — tiny for most plaque biology, and if it ever matters you
+  can simply subtract it.
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="s3"><span class="k">03</span>Spread — the SD of the differences</h2>
+<p>Bias is the <em>average</em> difference, but individual plaques scatter around that average. Plaque #1
+was +0.001; plaque #92 was −0.188. The <b>standard deviation (SD) of the differences</b> measures that
+scatter — the typical wobble around the bias.</p>
+<div class="math">
+<span class="cm"># for each plaque: (its diff − bias)²; sum them; divide by n−1 = 99; take the √</span>
+<span class="cm"># (n−1, not n — this is the "sample" SD, which is what limits of agreement use)</span>
+SD of the 100 differences = <span class="hl">0.0598 mm</span>
+</div>
+<p>On its own the SD is just an ingredient — but it's the ingredient that turns the average bias into a
+statement about <b>any single plaque</b>, which is what you actually care about. That's the next section.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s4"><span class="k">04</span>95% Limits of Agreement — the headline number</h2>
+<p class="lead">This is the number to quote in a paper, because it answers the practical question:
+<b>“if I measure one plaque with the Toolkit instead of by hand, how far off could I be?”</b></p>
+<p>Take the bias and step out <b>1.96 standard deviations</b> either side of it:</p>
+<div class="math">
+lower limit = bias − 1.96 × SD = −0.0285 − 1.96 × 0.0598 = <span class="hl">−0.146 mm</span>
+upper limit = bias + 1.96 × SD = −0.0285 + 1.96 × 0.0598 = <span class="hl">+0.089 mm</span>
+</div>
+<div class="callout good">
+  <span class="eyebrow">Say it in words</span>
+  For any single plaque, the Toolkit's diameter lands <b>within −0.15 to +0.09 mm</b> of the hand
+  measurement <b>95% of the time</b>. On a typical ~1.5 mm plaque that band is about <b>−10% to +6%</b>.
+</div>
+<p><b>Where does 1.96 come from?</b> When the differences are <em>approximately</em> bell‑shaped, 95% of
+them fall within 1.96 SD of the mean — the standard "95%" multiplier from the normal distribution (2 is
+the round‑number version). The limits are a normal‑based <em>approximation</em> (here 92 of your 100
+differences land inside them, close to the expected 95%); the <b>bias itself needs no such assumption</b>.
+That's the whole idea behind Bland &amp; Altman's method: <b>bias tells you the systematic shift, the
+limits tell you the random scatter</b>, and together they describe a single future measurement.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s5"><span class="k">05</span>Reading the Bland–Altman plot</h2>
+<p>The Bland–Altman plot is just those differences, drawn. For each plaque:</p>
+<ul>
+  <li><b>x‑axis</b> = the <em>average</em> of the two methods <span class="num">(tool + fiji)/2</span> —
+      your best guess of the plaque's true size.</li>
+  <li><b>y‑axis</b> = the <em>difference</em> <span class="num">tool − fiji</span> — how much they disagreed.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 620 300" role="img" aria-label="Schematic Bland-Altman plot">
+  <rect x="0" y="0" width="620" height="300" fill="#ffffff" stroke="#dde6e2"/>
+  <!-- axes -->
+  <line x1="70" y1="20" x2="70" y2="260" stroke="#c6d3cd"/>
+  <line x1="70" y1="260" x2="600" y2="260" stroke="#c6d3cd"/>
+  <!-- zero line -->
+  <line x1="70" y1="150" x2="600" y2="150" stroke="#c8d2ce" stroke-width="1"/>
+  <!-- bias -->
+  <line x1="70" y1="165" x2="600" y2="165" stroke="#0e7d5b" stroke-width="2"/>
+  <!-- LoA -->
+  <line x1="70" y1="70" x2="600" y2="70" stroke="#b45309" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <line x1="70" y1="235" x2="600" y2="235" stroke="#b45309" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <!-- cloud of blue points -->
+  <g fill="#3f5b8c" opacity="0.72">
+    <circle cx="120" cy="158" r="4"/><circle cx="150" cy="172" r="4"/><circle cx="180" cy="150" r="4"/>
+    <circle cx="205" cy="168" r="4"/><circle cx="235" cy="160" r="4"/><circle cx="260" cy="178" r="4"/>
+    <circle cx="290" cy="152" r="4"/><circle cx="315" cy="170" r="4"/><circle cx="345" cy="163" r="4"/>
+    <circle cx="375" cy="156" r="4"/><circle cx="400" cy="174" r="4"/><circle cx="430" cy="159" r="4"/>
+    <circle cx="460" cy="167" r="4"/><circle cx="490" cy="153" r="4"/><circle cx="520" cy="171" r="4"/>
+    <circle cx="550" cy="162" r="4"/><circle cx="335" cy="180" r="4"/><circle cx="270" cy="146" r="4"/>
+  </g>
+  <!-- red outliers -->
+  <g fill="#d1495b">
+    <circle cx="250" cy="52" r="5"/><circle cx="470" cy="60" r="5"/>
+    <circle cx="180" cy="246" r="5"/><circle cx="540" cy="242" r="5"/>
+  </g>
+  <!-- labels -->
+  <text x="608" y="168" font-family="monospace" font-size="11" fill="#0e7d5b" text-anchor="end">bias −0.028</text>
+  <text x="608" y="66" font-family="monospace" font-size="11" fill="#b45309" text-anchor="end">+0.089</text>
+  <text x="608" y="248" font-family="monospace" font-size="11" fill="#b45309" text-anchor="end">−0.146</text>
+  <text x="335" y="285" font-family="sans-serif" font-size="12" fill="#5b6a65" text-anchor="middle">mean of the two methods (mm)  →  plaque size</text>
+  <text x="20" y="140" font-family="sans-serif" font-size="12" fill="#5b6a65" transform="rotate(-90 20 140)" text-anchor="middle">Toolkit − Fiji (mm)</text>
+  <text x="250" y="42" font-family="monospace" font-size="10" fill="#d1495b" text-anchor="middle">outside the band</text>
+</svg>
+<figcaption>A <b>schematic</b> (not your data): "good" looks like a <b>flat cloud</b> hugging a
+near‑zero bias line, with ~95% of points inside the dashed limits and just a few
+(<span class="r">red</span>) outside — shown here for illustration. In your <em>real</em> figure,
+<b>8 of the 100</b> plaques fell outside the limits; those are the ones worth eyeballing.</figcaption>
+</figure>
+
+<p><b>Why plot difference‑vs‑mean instead of tool‑vs‑fiji?</b> Because a tool‑vs‑fiji scatter squashes
+everything onto the identity line and hides the disagreement. Plotting the <em>difference</em> blows the
+disagreement up to full height so you can see (a) is it centred on zero, and (b) does it fan out with size.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s6"><span class="k">06</span>Proportional bias — does the gap grow with plaque size?</h2>
+<p>A single "limits of agreement" band is only fair if the disagreement is the <b>same size for small and
+large plaques</b>. If big plaques disagreed more, the band would be too wide for small ones and too narrow
+for big ones. So we test it: fit a straight line through the Bland–Altman cloud (difference vs mean) and
+look at its <b>slope</b>.</p>
+<div class="math">
+slope of (difference vs mean) = <span class="hl">+0.006 mm per mm</span>   <span class="cm">p = 0.78 → not different from flat</span>
+Spearman ρ (difference vs size) = +0.03   <span class="cm">p = 0.79</span>
+</div>
+<p>The slope is essentially <b>zero</b> and nowhere near significant — <b>no proportional bias</b>. The
+Toolkit's small −1.8% offset is the same whether a plaque is 0.6 mm or 3 mm, so one set of limits is valid
+across your whole range.</p>
+<div class="callout">
+  <span class="eyebrow">A note on "slope 0.98 vs 1.006"</span>
+  You may see a second slope quoted: the ordinary regression of <b>Toolkit on Fiji</b> gives
+  <span class="num">0.98</span> (statistically indistinguishable from a perfect 1.0; p = 0.46). An earlier
+  draft quoted <span class="num">1.006</span> — that was a <em>different</em> regression (Fiji‑<b>area</b>
+  on Toolkit‑area). Both say the same thing (no size dependence); the app and figure use the diameter
+  value 0.98. They differ only because ordinary regression depends on which variable you call "x" and
+  whether you use area or diameter — which is exactly why the difference‑vs‑mean test above is the cleaner,
+  direction‑free check.
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="s7"><span class="k">07</span>ICC — one number for "do they agree?"</h2>
+<p class="lead">The <b>Intraclass Correlation Coefficient</b> rolls agreement into a single 0–1 score.
+Yours is <span class="num">0.974</span>. Here's what it's really measuring and why it's stricter (and
+more honest) than a plain correlation.</p>
+<p>ICC asks: <b>of all the variation in your measurements, how much is real plaque‑to‑plaque difference
+versus measurement disagreement?</b> If plaques genuinely differ a lot in size and the two methods barely
+disagree, ICC is near 1. Written as variance:</p>
+<div class="math">
+        (between‑plaque variance) − (error)
+ICC =  ───────────────────────────────────────────────
+        (between‑plaque) + (error) + (method‑bias)
+</div>
+<p>The pieces come from a two‑way ANOVA of your data (plaques × method). Your actual numbers:</p>
+<table>
+  <caption>Mean squares from the two‑way ANOVA (targets = 100 plaques, raters = 2 methods). ICC(A,1) =
+    absolute agreement, single measure — the correct variant when you want the two methods to give the
+    <em>same value</em>, not just track each other.</caption>
+  <tr><th>Component</th><th class="n">Mean square</th><th>Plain meaning</th></tr>
+  <tr><td>Between plaques (MSR)</td><td class="n">0.16696</td><td>Real spread of plaque sizes — <b>big</b>, good.</td></tr>
+  <tr><td>Between methods (MSC)</td><td class="n">0.04049</td><td>The systematic Toolkit‑vs‑Fiji offset (the −1.8% bias).</td></tr>
+  <tr><td>Error (MSE)</td><td class="n">0.00179</td><td>Left‑over disagreement — <b>tiny</b>, good.</td></tr>
+</table>
+<div class="math">
+ICC = (0.16696 − 0.00179) / (0.16696 + 0.00179 + 2·(0.04049 − 0.00179)/100) = <span class="hl">0.974</span>
+</div>
+<p>Because the real spread between plaques (0.167) dwarfs the measurement error (0.0018), the ratio sits
+right up near 1. <b>Interpreting the score</b> (Koo &amp; Li 2016, the standard guide):</p>
+<table>
+  <tr><th>ICC</th><td class="n">&lt; 0.50</td><td class="n">0.50–0.75</td><td class="n">0.75–0.90</td><td class="n">&gt; 0.90</td></tr>
+  <tr><th>Agreement</th><td>poor</td><td>moderate</td><td>good</td><td><b>excellent ← you (0.974)</b></td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h2 id="s8"><span class="k">08</span>Pearson r and its famous trap</h2>
+<p>Pearson's <b>r</b> (yours = <span class="num">0.979</span>) measures whether the two methods <b>move
+together</b> — when Fiji says a plaque is bigger, does the Toolkit too? It's a fine correlation number,
+but on its own it can badly mislead about <em>agreement</em>:</p>
+<div class="twocol">
+  <div class="card bad">
+    <h4>The trap</h4>
+    <p class="sr">Imagine the Toolkit read <b>exactly double</b> every plaque. Pearson r would be a
+    <b>perfect 1.00</b> — they move together flawlessly — yet the tool is <b>100% too big</b> and totally
+    useless. r cannot see a constant offset or scaling.</p>
+  </div>
+  <div class="card ok">
+    <h4>The fix</h4>
+    <p class="sr">Bland–Altman (bias + limits) and <b>ICC</b> <em>do</em> penalise offsets and scaling. In
+    the ×2 case ICC would drop dramatically to a poor value even though Pearson r stays a perfect 1.00.
+    That's exactly why a proper validation reports r <b>and</b> Bland–Altman <b>and</b> ICC — not r alone.</p>
+  </div>
+</div>
+<p>So r = 0.979 tells you the two methods track each other tightly; the ICC and limits then confirm they
+also land on the <em>same value</em>. All three pointing the same way is what makes the result solid.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s9"><span class="k">09</span>RMSE &amp; MAE — the typical miss, in millimetres</h2>
+<p>These two put the disagreement back into plain millimetres:</p>
+<ul>
+  <li><b>MAE</b> (mean absolute error) = <span class="num">0.049 mm</span> — the average size of a
+      disagreement, ignoring direction. "A typical plaque is off by about 0.05 mm."</li>
+  <li><b>RMSE</b> (root‑mean‑square error) = <span class="num">0.066 mm</span> — similar, but squares the
+      differences first so it <b>punishes the occasional big miss</b> more. RMSE ≥ MAE always (equal only
+      if every plaque missed by the same amount); the gap between them tells you a few plaques (your red
+      ones) miss by more than the rest.</li>
+</ul>
+<p>On ~1.5 mm plaques, a 0.05 mm typical miss is about <b>3%</b> — the same story the limits told, in a
+single headline number.</p>
+
+<!-- ===================================================================== -->
+<h2 id="s10"><span class="k">10</span>Why 2 plates is the soft spot (pseudoreplication)</h2>
+<p>Everything above uses <b>n = 100 plaques</b>, which is a strong sample — it makes all these numbers
+tight and trustworthy <em>for the size question</em>. The caveat is not the plaque count; it's that those
+100 plaques sit on only <b>2 plates</b>.</p>
+<p>Plaques on the same plate share one calibration, one focus, one lighting, one operator session — so
+they aren't 100 fully independent draws. Statisticians call leaning on that
+<b>pseudoreplication</b>. Two consequences:</p>
+<ul>
+  <li><b>For size agreement</b> (this page): it matters <em>less</em>, because both methods measure the
+      <b>same pixels on the same image</b> — you're comparing two rulers on identical objects, so a
+      shared plate can't fake agreement.</li>
+  <li><b>For generalisation and for plaque counts</b>: it matters <em>more</em> — 2 plates can't show the
+      result holds across the range of conditions you'll actually meet.</li>
+</ul>
+<div class="callout good">
+  <span class="eyebrow">Recommendation</span>
+  Report it honestly as <b>“n = 100 plaques from 2 plates”</b> — that's a legitimate local size
+  validation. To make it bulletproof for a reviewer, spread a similar total across <b>≥ 5 plates</b>
+  covering your real range (sparse→crowded, small→large), and ideally have a <b>second person</b> trace
+  some in Fiji. The <b>plate</b> is the experimental unit; plaque <b>counts</b> need plate‑level replicates
+  regardless.
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="s11"><span class="k">11</span>Report it · reproduce it yourself</h2>
+<h3>The one‑sentence result for your paper</h3>
+<div class="callout">
+  Plaque diameters from Plaque Toolkit agreed with independent manual Fiji/ImageJ tracing
+  (<span class="num">n = 100</span> plaques from 2 plates): Pearson <span class="num">r = 0.98</span>,
+  <span class="num">ICC = 0.97</span>; Bland–Altman mean bias <span class="num">−0.03 mm (≈1.8%)</span>,
+  95% limits of agreement <span class="num">−0.15 to +0.09 mm</span>, with no proportional bias
+  (difference‑vs‑mean slope +0.006, p = 0.78).
+</div>
+
+<h3>Do the whole thing by hand in four steps</h3>
+<p>You never have to take these on trust. With your two columns of numbers:</p>
+<ol>
+  <li><b>Differences:</b> subtract, plaque by plaque (tool − fiji).</li>
+  <li><b>Bias:</b> average the differences → −0.028.</li>
+  <li><b>SD:</b> standard deviation of the differences → 0.060.</li>
+  <li><b>Limits:</b> bias ± 1.96 × SD → −0.146 and +0.089. Done.</li>
+</ol>
+<p>ICC and r need a couple more lines of arithmetic (shown in §7 and available in any spreadsheet or the
+app), but bias and the limits — the numbers you'll actually quote — are four steps you can check on paper.</p>
+
+<h3>Or let the app do it</h3>
+<p>In Plaque Toolkit → <b>Fiji agreement</b> tab: paste your Toolkit column and your Fiji column, pick
+diameter or area, and press <b>Compute</b>. It prints the bias, limits, ICC, r and slope, draws the exact
+plot above (with the red outliers), and writes the paste‑ready sentence — the same maths as this page.</p>
+
+<div class="callout good">
+  <span class="eyebrow">Provenance — why you can trust these specific numbers</span>
+  Every figure on this page was computed <b>three independent ways</b> — by hand in plain Python, by the
+  app's own <code>agreement.py</code>, and by <code>numpy</code>/<code>scipy</code> — and they agree to
+  <b>nine decimal places</b>. The ICC was additionally cross‑checked against the textbook two‑way ANOVA
+  formula. Nothing here rests on trusting one implementation.
+</div>
+
+<hr>
+<p class="sr"><b>References.</b> Bland JM &amp; Altman DG (1986) <i>Statistical methods for assessing agreement
+between two methods of clinical measurement.</i> Lancet 327:307–310. · Koo TK &amp; Li MY (2016) <i>A
+guideline of selecting and reporting intraclass correlation coefficients for reliability research.</i>
+J Chiropr Med 15:155–163. · Trofimova E &amp; Jaschke PR (2021) <i>An improved and open‑source method for
+plaque size and titer quantification.</i> Virology 561:1–5.</p>
+<p class="sr">Plaque Toolkit · validation companion · numbers from your n=100, 2‑plate dataset.</p>
+
+</div></div>
+</body>
+</html>

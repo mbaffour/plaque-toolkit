@@ -1277,6 +1277,14 @@ class AgreementTab(QWidget):
             "of agreement), ICC and r, draws the figure, and writes the sentence for your paper.")
         intro.setObjectName("ModeHelp"); intro.setWordWrap(True)
 
+        learn = QLabel('<a href="STATS_EXPLAINED.html" style="color:#0a5c43;font-weight:600;'
+                       'text-decoration:none;">&#128218; New to these numbers? Read '
+                       '&ldquo;Understanding the agreement statistics&rdquo; &rarr;</a>')
+        learn.setTextFormat(Qt.RichText); learn.setOpenExternalLinks(False)
+        learn.setToolTip("Opens a plain-language guide that explains bias, limits of agreement, "
+                         "ICC and r — with the maths worked out on real numbers.")
+        learn.linkActivated.connect(lambda _=None: _open_doc("STATS_EXPLAINED.html"))
+
         _ta_css = ("QPlainTextEdit{background:#ffffff;color:#1f2430;border:1px solid #c7ccd6;"
                    "border-radius:8px;font-family:Consolas,monospace;font-size:13px;padding:6px;}")
         self.tool_in = QPlainTextEdit(); self.tool_in.setPlaceholderText("1.24\n0.98\n1.51\n…")
@@ -1328,7 +1336,7 @@ class AgreementTab(QWidget):
         rrow.addWidget(self.savecsv_btn); rrow.addStretch()
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
-        lay.addWidget(intro); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
+        lay.addWidget(intro); lay.addWidget(learn); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
         lay.addWidget(self.stats_card); lay.addWidget(self.fig_holder, 1)
         lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow)
 
@@ -1475,6 +1483,7 @@ class MainWindow(QMainWindow):
 
         m = self.menuBar().addMenu("&Help")
         for label, doc in (("How-to, use cases & verification", "HOWTO_AND_VERIFICATION.html"),
+                           ("Understanding the agreement statistics", "STATS_EXPLAINED.html"),
                            ("Validate vs Fiji for a paper (calculator)", "FIJI_VALIDATION_PROTOCOL.html"),
                            ("Tool atlas (screenshots)", "TOOL_ATLAS.html"),
                            ("Measuring in Fiji (tutorial)", "FIJI_TUTORIAL.html"),

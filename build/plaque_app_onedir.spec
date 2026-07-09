@@ -11,6 +11,8 @@ datas += collect_data_files("cv2")
 datas += collect_data_files("pillow_heif")
 datas += collect_data_files("matplotlib")
 datas += [(os.path.join(ROOT, "app", "resources"), "app/resources")]
+# docs/ powers the Help menu (app/ui.py _open_doc opens these from sys._MEIPASS/docs at runtime)
+datas += [(os.path.join(ROOT, "docs"), "docs")]
 
 # NOTE on Precise in the frozen build:
 # The packaged .exe is for users WITHOUT Python and intentionally does NOT support the
