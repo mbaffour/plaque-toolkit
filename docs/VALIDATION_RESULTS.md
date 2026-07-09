@@ -5,7 +5,7 @@
 > Supplementary of a future publication. This is **not** an independent or peer-reviewed
 > validation, and the sample is small — see *Limitations* and *What's still needed*.
 
-- **Date:** 2026-07-07
+- **Date:** 2026-07-07 · updated 2026-07-08 with the **n = 100 independent Fiji method comparison** (§2B)
 - **Operator:** in-house (JRR Micro Lab)
 - **App:** Plaque Toolkit (repo tag `v1.0.2`), engines Published / Current / Sensitive / Precise
   (PST + PlaqSeg YOLO + ResNet gate). Only **Published** is the peer-reviewed algorithm
@@ -30,12 +30,13 @@ the app (auto-detect → hand-corrected) and exported as `labels_<img>.json` (sc
 
 Scorer: `app/validate.py` (also reachable from the app's **Validate** tab). Match fraction 0.5.
 
-**(B) Cross-check vs Fiji/ImageJ.** The app exported a calibrated crop + an ImageJ ROI set
-(`Export ▸ Fiji registration bundle`). In **headless Fiji** the crop was opened and each of the
-app's ROIs measured (`List.setMeasurements` per ROI); Fiji's areas were converted to diameters and
-compared to the app's for the identical outlines. This checks (i) that the exported crop carries
-the correct millimetre calibration into Fiji, and (ii) that the two tools agree on size for the
-same region.
+**(B) Independent method comparison vs Fiji/ImageJ.** A sample of **100 plaques** was traced
+**independently** in Fiji (the operator's own outlines, blind to the tool's boundaries; scale set from
+a ruler / dish reference in the same plane), and Fiji's area for each was compared to Plaque Toolkit's
+for the *same plaque*, paired by plaque. Agreement was assessed by Bland–Altman (bias + 95% limits of
+agreement), ICC(A,1) absolute agreement, and Pearson *r*, on area and on the area-equivalent diameter.
+A separate *consistency* check re-measured the tool's **own** exported outlines in headless Fiji
+(`List.setMeasurements` per ROI) to confirm the calibration and area math carry into Fiji exactly.
 
 ---
 
@@ -60,17 +61,31 @@ It is **conservative on very dense plates** (recall ≈ 0.3–0.4 at 89–185 pl
 under-counts rather than guessing. **Sensitive** lifts recall (≈ 0.44–0.52) at the cost of precision
 and noisier sizes — appropriate for dense plates when followed by manual pruning.
 
-### (B) vs real Fiji (IMG_4092, calibration plate)
+### (B) vs independent manual Fiji measurement — method comparison (n = 100)
 
-| Check | Result |
-|---|---|
-| Crop pixel size read by Fiji | **0.03929 mm/px** (matches the app exactly) |
-| App ROIs measured in Fiji | **95 / 95** |
-| Diameter agreement (app vs Fiji, same outlines) | **r = 0.9999**, RMSE 0.0035 mm, bias −0.0006 mm |
+The primary size validation. **100 plaques were traced independently in Fiji/ImageJ** (the operator's
+own outlines, not the tool's) and compared to Plaque Toolkit's measurement of the same plaques.
+Diameters are area-equivalent (`d = 2·√(A/π)`).
 
-**Interpretation.** The exported crop opens in Fiji at the correct millimetre scale and Fiji's
-measurements of the app's outlines agree with the app to **r = 0.9999 (sub-0.004 mm)** — the
-measurement pipeline and the Fiji bridge are internally consistent with an independent tool.
+| Metric | Diameter (mm) | Area (mm²) |
+|---|---|---|
+| n plaques | 100 | 100 |
+| Mean (Toolkit / Fiji) | 1.55 / 1.57 | 1.94 / 2.01 |
+| **Mean bias (Toolkit − Fiji)** | **−0.028** (≈ −1.8%) | −0.069 |
+| **95% limits of agreement** | **−0.146 … +0.089** | −0.34 … +0.20 |
+| **ICC(A,1)** | **0.974** | 0.973 |
+| Pearson r | 0.979 | 0.978 |
+| Proportional bias (slope) | 1.006 → none | — |
+
+Figure: `PlaqueToolkit_vs_Fiji_BlandAltman.png` (method-comparison scatter + Bland–Altman).
+
+**Interpretation.** Strong agreement — **ICC = 0.97**, tight limits (±≈0.1 mm on ~1.5 mm plaques ≈
+6–9%). The tool reads **~1.8% smaller** than the manual traces on average: a small, *constant* offset
+(regression slope ≈ 1.0, so no size dependence). **This is the citable Toolkit‑vs‑Fiji result.**
+
+*Consistency sub-check:* measuring the tool's **own** exported outlines in Fiji (identical regions,
+IMG_4092) gave r = 0.9999, bias −0.0006 mm — confirming the calibration and area math are exact. That
+is an internal check; the **n = 100 independent comparison above** is the one to report.
 
 ### (C) Negative-control false-positive rate (blank plates)
 
@@ -101,15 +116,18 @@ without manual pruning. Consequences for reporting:
 Proper agreement statistics on the matched diameter pairs (bias + 95% limits of agreement + ICC(A,1)
 absolute agreement, not just correlation):
 
-| Comparison | n pairs | Mean Ø | Bias (test − ref) | 95% limits of agreement | ICC | r |
+| Comparison | n | Mean Ø | Bias (Toolkit − ref) | 95% limits of agreement | ICC | r |
 |---|---:|---:|---:|---|---:|---:|
-| App (Precise) vs hand labels — pooled IMG_3907 + IMG_3912 | 99 | 0.50 mm | **+0.0018 mm** | **−0.034 … +0.038 mm** | **0.991** | 0.991 |
-| App vs real Fiji — same outlines, IMG_4092 | 95 | 1.42 mm | +0.0006 mm | −0.006 … +0.007 mm | 1.000 | 1.000 |
+| **Toolkit vs independent Fiji traces** *(primary — §2B)* | 100 | 1.55 mm | **−0.028 mm** (−1.8%) | **−0.146 … +0.089 mm** | **0.974** | 0.979 |
+| Toolkit vs hand labels — pooled IMG_3907+3912 | 99 | 0.50 mm | +0.0018 mm | −0.034 … +0.038 mm | 0.991 | 0.991 |
+| Toolkit vs Fiji, *same* outlines *(consistency)* | 95 | 1.42 mm | +0.0006 mm | −0.006 … +0.007 mm | 1.000 | 1.000 |
 
-**Interpretation.** Bias is negligible (≤ 0.002 mm) and the limits of agreement are tight — **±0.038 mm
-vs the hand labels** on ~0.5 mm plaques (≈ 7% of the diameter), and **±0.007 mm vs Fiji**. ICC ≈
-0.99–1.00 indicates excellent *absolute* agreement (not just correlation). i.e. **when Precise
-reports a plaque, its diameter is trustworthy to within a few percent.**
+**Interpretation.** The **independent n = 100 comparison** (ICC 0.97, LoA ≈ ±0.1 mm) is the headline for
+the paper. The two supporting checks isolate *where* the small offset comes from: measuring the tool's
+*own* outlines in Fiji is essentially exact (ICC 1.00 — the calibration + area math are right), and the
+tool's boundaries match careful hand labels closely (ICC 0.99). So the **~1.8% Toolkit−Fiji difference**
+in the primary comparison reflects the honest gap between an *auto-detected* boundary and a *human's
+manual trace*, not a calibration error — and it is small and size-independent (slope ≈ 1.0).
 
 **Count-level (pseudoreplication note).** Plaque counts should be analysed with the **plate** as the
 experimental unit, but only **2** ground-truth plates were available — too few for a plate-level count
@@ -148,8 +166,9 @@ evidence that the cross-tool validation is doing real work.
 
 (see `docs/PUBLISHING_CHECKLIST.md`)
 
-1. **More plates** across densities (sparse → confluent) and, ideally, a second labeller for
-   inter-observer agreement.
+1. **Size validation vs Fiji** — **done (§2B, n = 100 independent plaques; ICC 0.97).** Strong
+   enough to cite. Optional strengthening: a **second labeller** on a subset for inter-observer
+   agreement, and reporting how many plates the 100 plaques came from.
 2. ~~**Negative controls** — false-positive rate on blank plates.~~ **Done (§2C):** Precise
    3.1 ± 3.0 FP/plate, Sensitive 12.4 ± 4.4. Still to do: density-match the blanks to the test
    plates, and repeat per imaging batch (the FP floor is setup-specific).
