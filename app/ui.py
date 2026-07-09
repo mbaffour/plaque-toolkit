@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
-    QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit)
+    QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit,
+    QDialog, QTextBrowser)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
@@ -1005,19 +1006,91 @@ class AboutTab(QWidget):
         outer.addWidget(scroll)
 
 
-def _open_doc(name):
-    """Open a docs/ file with the system default viewer (works from source and frozen)."""
+def _scrollable(w):
+    """Wrap a tab in a scroll area so nothing is ever hidden on smaller screens. With
+    setWidgetResizable, form tabs scroll only when their content is genuinely taller/wider
+    than the viewport; splitter/canvas tabs fill the space normally (no scrollbars)."""
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.NoFrame)
+    sa.setWidget(w)
+    return sa
+
+
+def _resolve_doc(name):
+    """Return (abs_path_or_None, docs_dir) for a docs/ file (works from source and frozen)."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if getattr(sys, "frozen", False):
         root = getattr(sys, "_MEIPASS", root)
-    path = os.path.join(root, "docs", name)
+    docs_dir = os.path.join(root, "docs")
+    path = os.path.join(docs_dir, name)
     if not os.path.exists(path):
-        path = os.path.join(root, name)
-    if os.path.exists(path):
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-    else:
-        QMessageBox.information(None, "Document not found",
-                                f"Could not find {name}. It ships in the docs/ folder.")
+        alt = os.path.join(root, name)
+        path = alt if os.path.exists(alt) else None
+    return path, docs_dir
+
+
+_DOC_VIEWERS = []   # hold references so non-modal viewers aren't garbage-collected
+
+
+class DocViewer(QDialog):
+    """In-app documentation viewer: renders Markdown natively and HTML best-effort INSIDE
+    the tool (no external editor), with a button to open the full-fidelity page in a browser."""
+
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self._path, docs_dir = _resolve_doc(name)
+        self.setWindowTitle("Plaque Toolkit — help — %s" % name)
+        self.resize(940, 780)
+        self.setObjectName("AppRoot")
+
+        self.browser = QTextBrowser()
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setSearchPaths([docs_dir])   # resolve relative images/links
+        self.browser.setStyleSheet(
+            "QTextBrowser{background:#ffffff;color:#1f2430;border:1px solid #dde6e2;"
+            "border-radius:8px;padding:14px 20px;font-size:15px;}")
+
+        is_html = name.lower().endswith((".html", ".htm"))
+        if self._path and os.path.exists(self._path):
+            with open(self._path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            if is_html:
+                self.browser.setHtml(text)
+            else:
+                self.browser.setMarkdown(text)
+        else:
+            self.browser.setPlainText("Could not find %s. It ships in the docs/ folder." % name)
+
+        cap = QLabel(name); cap.setObjectName("SummaryHeading")
+        top = QHBoxLayout(); top.addWidget(cap); top.addStretch()
+        if is_html:
+            hint = QLabel("Rich page — click for full layout & figures:")
+            hint.setStyleSheet("color:#5b6a65;font-size:12px")
+            top.addWidget(hint)
+        self.ext_btn = QPushButton("Open in web browser")
+        self.ext_btn.setToolTip("Open this page in your default web browser (full CSS layout, "
+                                "figures and any interactive parts).")
+        self.ext_btn.clicked.connect(self._open_external)
+        self.ext_btn.setEnabled(bool(self._path))
+        top.addWidget(self.ext_btn)
+        close = QPushButton("Close"); close.clicked.connect(self.close)
+        top.addWidget(close)
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(10)
+        lay.addLayout(top); lay.addWidget(self.browser, 1)
+
+    def _open_external(self):
+        if self._path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
+
+
+def _open_doc(name, parent=None):
+    """Open a docs/ file IN-APP (rendered inside the tool). Signature kept for existing callers."""
+    v = DocViewer(name, parent or QApplication.activeWindow())
+    _DOC_VIEWERS.append(v)
+    v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
+    v.show(); v.raise_(); v.activateWindow()
 
 
 # --------------------------------------------------------------------------- #
@@ -1329,6 +1402,8 @@ class AgreementTab(QWidget):
                                   "border:1px solid #c7ccd6;border-radius:8px;padding:8px;}")
         self.copy_btn = QPushButton("Copy report"); self.copy_btn.clicked.connect(self._copy)
         self.savefig_btn = QPushButton("Save figure…"); self.savefig_btn.clicked.connect(self._save_fig)
+        self.savefig_btn.setToolTip("Save the figure as PNG/TIFF (high-res raster) or SVG/PDF/EPS "
+                                    "(vector — open and edit in Illustrator, Inkscape or PowerPoint).")
         self.savecsv_btn = QPushButton("Save paired CSV…"); self.savecsv_btn.clicked.connect(self._save_csv)
         for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
             b.setEnabled(False)
@@ -1417,12 +1492,40 @@ class AgreementTab(QWidget):
     def _save_fig(self):
         if not self._last:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save figure", "PlaqueToolkit_vs_Fiji.png",
-                                              "PNG image (*.png);;PDF (*.pdf)")
-        if path:
-            from app import agreement
-            agreement.make_figure(self._last[0], self._last[1]).savefig(path, dpi=200, bbox_inches="tight")
-            self.window().statusBar().showMessage("Figure saved: %s" % path, 4000)
+        path, sel = QFileDialog.getSaveFileName(
+            self, "Save figure", "PlaqueToolkit_vs_Fiji.png",
+            "PNG image — 300 dpi (*.png);;"
+            "SVG — vector, editable in Illustrator/Inkscape (*.svg);;"
+            "PDF — vector, editable (*.pdf);;"
+            "TIFF — 600 dpi for journals (*.tiff);;"
+            "EPS — vector (*.eps)")
+        if not path:
+            return
+        # the format filter the user chose is the source of truth — set the extension to match
+        ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
+        want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
+        if want:
+            path = os.path.splitext(path)[0] + want
+        ext = os.path.splitext(path)[1].lower()
+        from app import agreement
+        import matplotlib as mpl
+        mpl.rcParams["svg.fonttype"] = "none"   # keep SVG text as real text (editable), not outlines
+        mpl.rcParams["pdf.fonttype"] = 42        # embed TrueType so PDF/EPS text stays editable
+        mpl.rcParams["ps.fonttype"] = 42
+        dpi = 600 if ext in (".tif", ".tiff") else 300
+        save_kw = {"dpi": dpi, "bbox_inches": "tight", "facecolor": "white"}
+        if ext in (".tif", ".tiff"):
+            save_kw["pil_kwargs"] = {"compression": "tiff_lzw"}   # lossless, ~10x smaller file
+        fig = agreement.make_figure(self._last[0], self._last[1])
+        try:
+            fig.savefig(path, **save_kw)
+        except Exception as e:
+            QMessageBox.warning(self, "Could not save figure", "Saving %s failed:\n%s" % (ext, e))
+            return
+        vec = ext in (".svg", ".pdf", ".eps")
+        self.window().statusBar().showMessage(
+            "Figure saved (%s%s): %s" % (ext.lstrip("."),
+                                         ", vector/editable" if vec else ", %d dpi" % dpi, path), 6000)
 
     def _save_csv(self):
         if not self._last:
@@ -1443,7 +1546,8 @@ class MainWindow(QMainWindow):
         _icon_path = engine_api.resource_path("icon.png")
         if os.path.exists(_icon_path):
             self.setWindowIcon(QIcon(_icon_path))
-        self.resize(1240, 800)
+        self.resize(1320, 860)
+        self.setMinimumSize(900, 620)
         self.pool = QThreadPool(); self.pool.setMaxThreadCount(1)  # engine flags are global
 
         root = QWidget(); root.setObjectName("AppRoot")
@@ -1451,14 +1555,17 @@ class MainWindow(QMainWindow):
         rlay.addWidget(self._build_header())
 
         self.tabs = QTabWidget()
+        # Measure keeps its own canvas + drag-drop (unwrapped); the form tabs get a scroll
+        # area so their content is reachable on smaller screens (see _scrollable).
         self.measure_tab = MeasureTab(self.pool)
         self.tabs.addTab(self.measure_tab, "  Measure  ")
-        self.tabs.addTab(BatchTab(self.pool), "  Batch  ")
-        self.tabs.addTab(CompareTab(self.pool), "  Compare turbidity  ")
-        self.tabs.addTab(ValidateTab(self.pool), "  Validate  ")
-        self.tabs.addTab(AgreementTab(), "  Fiji agreement  ")
+        self.tabs.addTab(_scrollable(BatchTab(self.pool)), "  Batch  ")
+        self.tabs.addTab(_scrollable(CompareTab(self.pool)), "  Compare turbidity  ")
+        self.tabs.addTab(_scrollable(ValidateTab(self.pool)), "  Validate  ")
+        self.tabs.addTab(_scrollable(AgreementTab()), "  Fiji agreement  ")
         self.about_tab = AboutTab()
-        self.tabs.addTab(self.about_tab, "  About  ")
+        self._about_scroll = _scrollable(self.about_tab)
+        self.tabs.addTab(self._about_scroll, "  About  ")
         rlay.addWidget(self.tabs, 1)
         self.setCentralWidget(root)
         self._build_menu()
@@ -1497,7 +1604,7 @@ class MainWindow(QMainWindow):
             m.addAction(a)
         m.addSeparator()
         about = QAction("About Plaque Toolkit", self)
-        about.triggered.connect(lambda: self.tabs.setCurrentWidget(self.about_tab))
+        about.triggered.connect(lambda: self.tabs.setCurrentWidget(self._about_scroll))
         m.addAction(about)
 
     def _set_text_scale(self, scale):
