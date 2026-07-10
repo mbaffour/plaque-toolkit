@@ -1,0 +1,4 @@
+group,replicate,diameter_mm,area_mm2,turbidity
+SampleA,plate1,2.3,4.15,0.2
+SampleA,plate1,2.55,5.11,0.15
+SampleB,plate1,1.8,2.54,0.62

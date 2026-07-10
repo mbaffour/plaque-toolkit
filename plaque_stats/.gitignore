@@ -1,0 +1,5 @@
+# generated output folders
+*_out/
+results/
+__pycache__/
+.Rhistory
