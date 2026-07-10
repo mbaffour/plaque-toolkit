@@ -444,8 +444,8 @@ def plot_violin(df, order, opts, metric_name, posthoc):
             ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
             ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
 
-    ax.set_xticks(pos); ax.set_xticklabels(order)
-    ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13)
+    ax.set_xticks(pos); ax.set_xticklabels(order, fontweight="bold")
+    ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13, fontweight="bold")
     if opts["xlabel"]:
         ax.set_xlabel(opts["xlabel"], fontsize=13)
     if opts["title"]:
@@ -483,8 +483,8 @@ def plot_violin(df, order, opts, metric_name, posthoc):
         ax.set_ylim(top=y1 + (y1 - y0) * 0.06)          # headroom so labels sit above the data
         tr = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
         for i in range(len(order)):
-            ax.text(pos[i], 0.983, "n = %d" % len(data[i]), transform=tr, ha="center",
-                    va="top", fontsize=8.5, color="#5b6a65")
+            ax.text(pos[i], 0.985, "n = %d" % len(data[i]), transform=tr, ha="center",
+                    va="top", fontsize=9.5, fontweight="bold", color="#33413c")
 
     fig.tight_layout()
     return fig
@@ -624,6 +624,9 @@ def save_stats_table(summ, path, metric, unit):
                     "Median", "IQR", "CV %"]
     for c in ["Mean", "SD", "SEM", "CI95 lo", "CI95 hi", "Median", "IQR", "CV %"]:
         disp[c] = disp[c].map(lambda x: ("%.3g" % x) if pd.notna(x) else "")
+    # a presentation-ready combined column (mean ± SD)
+    disp.insert(3, "Mean ± SD", ["%.3g ± %.2g" % (m, s) if pd.notna(m) and pd.notna(s) else ""
+                                 for m, s in zip(summ["mean"], summ["sd"])])
     nrow = len(disp)
     fig, ax = plt.subplots(figsize=(min(13, 2.0 + 0.92 * len(disp.columns)), 0.55 + 0.34 * (nrow + 1)))
     ax.axis("off")

@@ -320,6 +320,7 @@ server <- function(input, output, session) {
            x = if (nchar(input$xlab)) input$xlab else NULL) +
       theme_classic(base_size = 14) +
       theme(plot.title = element_text(face = "bold"),
+            axis.text.x = element_text(face = "bold"), axis.title = element_text(face = "bold"),
             legend.position = if (superplot) "right" else "none",
             plot.margin = margin(t = 16, r = 12, b = 6, l = 6),
             panel.border = if (isTRUE(input$frame))
@@ -330,7 +331,8 @@ server <- function(input, output, session) {
     if (isTRUE(input$show_n)) {
       ns <- dplyr::count(d, group)
       g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = paste0("n = ", n)),
-                         vjust = 1.4, size = 3.1, color = "#5b6a65", inherit.aes = FALSE) +
+                         vjust = 1.4, size = 3.3, fontface = "bold", color = "#33413c",
+                         inherit.aes = FALSE) +
         coord_cartesian(clip = "off")
     }
     if (input$log_y) g <- g + scale_y_log10()
@@ -373,9 +375,12 @@ server <- function(input, output, session) {
     st <- stat_test(); if (is.null(st)) return(NULL)
     st <- as.data.frame(st)
     d <- test_dat(); gm <- tapply(d$value, d$group, mean)
-    if (all(c("group1", "group2") %in% names(st)))
-      st$mean_diff <- round(as.numeric(gm[st$group1]) - as.numeric(gm[st$group2]), 4)
-    keep <- intersect(c("group1", "group2", "mean_diff", "estimate", "p", "p.adj",
+    if (all(c("group1", "group2") %in% names(st))) {
+      st$mean_a <- round(as.numeric(gm[st$group1]), 4)
+      st$mean_b <- round(as.numeric(gm[st$group2]), 4)
+      st$mean_diff <- round(st$mean_a - st$mean_b, 4)
+    }
+    keep <- intersect(c("group1", "group2", "mean_a", "mean_b", "mean_diff", "p", "p.adj",
                         "p.adj.signif", "statistic"), names(st))
     datatable(st[, keep, drop = FALSE], options = list(dom = "t"))
   })
