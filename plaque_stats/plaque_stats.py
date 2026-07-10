@@ -51,6 +51,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import PathPatch
 
+# keep text EDITABLE in vector exports (Illustrator / Inkscape) — for every figure and table
+matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+
 import scipy
 from scipy import stats as st
 
@@ -615,8 +618,8 @@ def make_example(folder):
     print("wrote example_data_long.csv, example_data_wide.csv, TEMPLATE.csv ->", os.path.abspath(folder))
 
 
-def save_stats_table(summ, path, metric, unit):
-    """Render the descriptive-statistics table as a clean PNG (for slides / figure panels)."""
+def save_stats_table(summ, base, metric, unit, formats=("png",)):
+    """Render the descriptive-statistics table in each requested format (PNG + editable SVG/PDF)."""
     cols = ["group", "n", "n_replicates", "mean", "sd", "sem", "ci95_lo", "ci95_hi",
             "median", "iqr", "cv_pct"]
     disp = summ[cols].copy()
@@ -644,12 +647,21 @@ def save_stats_table(summ, path, metric, unit):
             cell.set_facecolor("#f6f9f7")
         if c == 0 and r > 0:
             cell.set_text_props(fontweight="bold")
-    fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
+    _save_all(fig, base, formats)
+
+
+def _save_all(fig, base, formats):
+    """Save a figure to every requested format (SVG/PDF keep text editable for Inkscape)."""
+    for fmt in formats:
+        kw = {"dpi": 200, "bbox_inches": "tight", "facecolor": "white"}
+        if fmt in ("tif", "tiff"):
+            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+        fig.savefig(f"{base}.{fmt}", **kw)
     plt.close(fig)
 
 
-def save_pairwise_table(unit_means, posthoc, path, metric, unit):
-    """Render the pairwise comparison table (Δ magnitude + adjusted p) as a PNG."""
+def save_pairwise_table(unit_means, posthoc, base, metric, unit, formats=("png",)):
+    """Render the pairwise comparison table (Δ magnitude + adjusted p) in each requested format."""
     rows = []
     for (a, b), p in posthoc.items():
         da, db = unit_means.get(a, float("nan")), unit_means.get(b, float("nan"))
@@ -679,8 +691,7 @@ def save_pairwise_table(unit_means, posthoc, path, metric, unit):
             cell.set_facecolor("#f6f9f7")
         if r > 0 and c == sigc and disp.iloc[r - 1]["signif"] != "ns":
             cell.set_text_props(fontweight="bold", color="#0a5c43")
-    fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+    _save_all(fig, base, formats)
 
 
 # --------------------------------------------------------------------------- main
@@ -725,10 +736,10 @@ def run(args):
 
     write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
     if args.get("stats_table", True):
-        save_stats_table(summ, os.path.join(out, f"stats_table_{mt}.png"), metric, unit)
+        save_stats_table(summ, os.path.join(out, f"stats_table_{mt}"), metric, unit, args["formats"])
         if posthoc:
-            save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}.png"),
-                                metric, unit)
+            save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}"),
+                                metric, unit, args["formats"])
     prov = {k: v for k, v in args.items() if not k.startswith("_")}
     prov.update({"metric": metric, "groups": order, "unit": unit,
                  "versions": {"plaque_stats": __version__, "numpy": np.__version__,

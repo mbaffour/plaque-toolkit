@@ -72,10 +72,14 @@ For each run (both tools produce the same things):
 - **`summary_by_group.csv`** — n plaques, n plates, mean, SD, SEM, 95% CI, median, Q1/Q3, IQR,
   min/max, CV%.
 - **`summary_by_replicate.csv`** — the per‑plate means (what the stats use).
-- **`stats_table_<metric>.png`** — a rendered, slide‑ready **descriptive‑statistics table** (n, plates,
-  mean, SD, SEM, 95% CI, median, IQR, CV%).
-- **`pairwise_table_<metric>.png`** + **`pairwise_tests_<metric>.csv`** — every pairwise comparison with
-  the **magnitude** (Δ of the group means) and the **adjusted p‑value** + significance stars.
+- **`stats_table_<metric>.{png,svg,pdf}`** — a rendered, slide‑ready **descriptive‑statistics table**
+  (n, plates, Mean ± SD, mean, SD, SEM, 95% CI, median, IQR, CV%).
+- **`pairwise_table_<metric>.{png,svg,pdf}`** + **`pairwise_tests_<metric>.csv`** — every pairwise
+  comparison with the **magnitude** (Δ of the group means) and the **adjusted p‑value** + significance.
+
+**Everything — the violin *and* both tables — is written in every format you pass to `--formats`
+(default `png,svg,pdf`). SVG and PDF keep text as real, editable text**, so in **Inkscape / Illustrator**
+you can select and change any colour, label, number or font. (Add `tiff` for a 300‑dpi LZW raster.)
 - **Statistics** — an omnibus test + pairwise post‑hoc (see §4), with effect sizes.
 - **`report.md`** — a plain‑language summary **and a paste‑ready Methods/Results sentence**.
 - **`run_config.json`** — every setting + package versions, for reproducibility.
