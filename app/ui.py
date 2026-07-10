@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use("QtAgg")   # set before any pyplot/canvas use (frozen-app safe)
 
 import pandas as pd
-from PySide6.QtCore import Qt, QThreadPool, QTimer, QItemSelectionModel
+from PySide6.QtCore import Qt, QThreadPool, QTimer, QItemSelectionModel, QRect, QPoint, QSize
 from PySide6.QtGui import (QPixmap, QIcon, QKeySequence, QShortcut, QAction, QDesktopServices,
                            QFont, QActionGroup)
 from PySide6.QtCore import QUrl
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
     QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit,
-    QDialog, QTextBrowser)
+    QDialog, QTextBrowser, QLayout)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.workers import Worker
@@ -28,6 +28,73 @@ from app.plaque_canvas import PlaqueCanvas
 
 IMG_FILTER = "Images (*.tif *.tiff *.jpg *.jpeg *.png *.heic *.heif)"
 IMG_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
+
+
+class FlowLayout(QLayout):
+    """Lays widgets left-to-right and wraps to the next line when it runs out of width — so a
+    wide toolbar reflows to fit narrow windows instead of overflowing / needing a scrollbar."""
+
+    def __init__(self, parent=None, margin=0, hspacing=8, vspacing=6):
+        super().__init__(parent)
+        self._items = []
+        self._hspace = hspacing
+        self._vspace = vspacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return s + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _layout(self, rect, test_only):
+        m = self.contentsMargins()
+        x = rect.x() + m.left()
+        y = rect.y() + m.top()
+        line_h = 0
+        right = rect.right() - m.right()
+        for it in self._items:
+            sz = it.sizeHint()
+            nx = x + sz.width()
+            if nx - 1 > right and line_h > 0:          # wrap to next line
+                x = rect.x() + m.left()
+                y = y + line_h + self._vspace
+                nx = x + sz.width()
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), sz))
+            x = nx + self._hspace
+            line_h = max(line_h, sz.height())
+        return y + line_h - rect.y() + m.bottom()
 
 # Engine/mode catalogue: label -> (kwargs/flag, helper text).
 MODES = [
@@ -181,17 +248,13 @@ class MeasureTab(QWidget):
                                  "folder next to the image (Ctrl+S).")
 
         params_box = QGroupBox("Parameters")
-        pl = QHBoxLayout(params_box); pl.setSpacing(10)
+        # FlowLayout so the toolbar WRAPS onto more rows on narrow windows instead of overflowing
+        pl = FlowLayout(params_box, margin=4, hspacing=10, vspacing=6)
         pl.addWidget(QLabel("Dish")); pl.addWidget(self.plate)
         pl.addWidget(self.plate_85); pl.addWidget(self.plate_100)
-        sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setStyleSheet("color:#d6dbe5")
-        pl.addSpacing(4); pl.addWidget(sep); pl.addSpacing(4)
         pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
         pl.addWidget(self.watershed); pl.addWidget(self.exclude_overlaps)
-        sep2 = QFrame(); sep2.setFrameShape(QFrame.VLine); sep2.setStyleSheet("color:#d6dbe5")
-        pl.addSpacing(4); pl.addWidget(sep2); pl.addSpacing(4)
         pl.addWidget(self.orient_btn)
-        pl.addStretch()
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
 
         # mode helper + progress strip
@@ -222,6 +285,7 @@ class MeasureTab(QWidget):
             "Then set your dish size and pick an engine. Numbering runs 1→N from the top.")
         self.placeholder.setObjectName("Placeholder")
         self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setWordWrap(True)   # don't force the canvas panel wide on a small screen
         self.placeholder.setMinimumHeight(360)
         self.placeholder.setStyleSheet(
             "border:2px dashed #c2c9d6; border-radius:14px; color:#6b7484; "
@@ -232,6 +296,7 @@ class MeasureTab(QWidget):
         self.summary_card = self._build_summary_card()
 
         self.table = CopyableTableView()
+        self.table.setMinimumWidth(150)   # let the right panel shrink; the table scrolls its columns
         self.model = PandasTableModel()
         self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
         self.table.setModel(self.proxy)
@@ -1006,19 +1071,21 @@ class AboutTab(QWidget):
         outer.addWidget(scroll)
 
 
-def _scrollable(w):
-    """Wrap a tab in a scroll area so nothing is ever hidden. We pin the tab's PREFERRED size as
-    its minimum, so when the window is smaller than the content the scroll area shows real
-    scrollbars (both directions) and you can reach everything — instead of squashing it to fit.
-    On a large window the tab still fills the space (setWidgetResizable)."""
+def _scrollable(w, grow=True):
+    """Wrap a tab in a scroll area so nothing is ever hidden. With grow=True we pin the tab's
+    PREFERRED size as its minimum, so when the window is smaller than the content the scroll area
+    shows real scrollbars (both directions) instead of squashing it — right for form tabs. With
+    grow=False (canvas/splitter tabs like Measure) we let the content compress naturally (the
+    splitter shrinks, the table scrolls internally) and only scroll below its true minimum."""
     sa = QScrollArea()
     sa.setWidgetResizable(True)
     sa.setFrameShape(QFrame.NoFrame)
     sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     sa.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    hint = w.sizeHint()
-    if hint.width() > 0 and hint.height() > 0:
-        w.setMinimumSize(hint)
+    if grow:
+        hint = w.sizeHint()
+        if hint.width() > 0 and hint.height() > 0:
+            w.setMinimumSize(hint)
     sa.setWidget(w)
     return sa
 
@@ -1611,7 +1678,7 @@ class MainWindow(QMainWindow):
         # every tab is wrapped in a scroll area so its content is always reachable, both
         # vertically and horizontally, on screens smaller than the content (see _scrollable).
         self.measure_tab = MeasureTab(self.pool)
-        self.tabs.addTab(_scrollable(self.measure_tab), "  Measure  ")
+        self.tabs.addTab(_scrollable(self.measure_tab, grow=False), "  Measure  ")
         self.tabs.addTab(_scrollable(BatchTab(self.pool)), "  Batch  ")
         self.tabs.addTab(_scrollable(CompareTab(self.pool)), "  Compare turbidity  ")
         self.tabs.addTab(_scrollable(ValidateTab(self.pool)), "  Validate  ")
