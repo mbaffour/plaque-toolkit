@@ -75,6 +75,10 @@ For each run (both tools produce the same things):
 - **Statistics** — an omnibus test + pairwise post‑hoc (see §4), with effect sizes.
 - **`report.md`** — a plain‑language summary **and a paste‑ready Methods/Results sentence**.
 - **`run_config.json`** — every setting + package versions, for reproducibility.
+
+*(All output files are suffixed by the metric — e.g. `report_diameter_mm.md`,
+`violin_diameter_mm.png` — so analysing several metrics into one folder never overwrites. Reading
+`.xlsx` needs `openpyxl`; `.csv` needs nothing extra.)*
 - Figures export as **PNG (300 dpi), SVG and PDF** — SVG/PDF keep text **editable** in
   Illustrator / Inkscape.
 

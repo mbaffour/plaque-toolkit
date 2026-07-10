@@ -124,10 +124,16 @@ def normalize(df, group, value, replicate, metric):
                 raise SystemExit(f"[error] value column {value!r} not found. Columns: {sorted(cols)}")
             vcol = value
 
-    out = pd.DataFrame({"group": df[group].astype(str).str.strip()})
-    out["replicate"] = df[replicate].astype(str).str.strip() if replicate in cols else np.nan
-    out["value"] = pd.to_numeric(df[vcol], errors="coerce")
-    out = out.dropna(subset=["value"]).reset_index(drop=True)
+    def _clean(series):
+        # NaN -> real NaN (not the string "nan"); tidy "1.0" -> "1" for integer-like labels
+        s = series.astype(str).str.strip()
+        s = s.str.replace(r"\.0$", "", regex=True)
+        return s.where(~s.str.lower().isin(["nan", "none", "nat", ""]), np.nan)
+
+    out = pd.DataFrame({"group": _clean(df[group])})
+    out["replicate"] = _clean(df[replicate]).values if replicate in cols else np.nan
+    out["value"] = pd.to_numeric(df[vcol], errors="coerce").values
+    out = out.dropna(subset=["group", "value"]).reset_index(drop=True)   # group + value are required
     if out.empty:
         raise SystemExit("[error] no numeric values after parsing — check your columns.")
     return out, (value or vcol)
@@ -577,25 +583,27 @@ def run(args):
                            args["replicate"], args["metric"])
     order = args["order"] or list(dict.fromkeys(df["group"]))
     order = [g for g in order if g in set(df["group"])]
+    df = df[df["group"].isin(order)].reset_index(drop=True)   # analyse only the selected groups
     out = args["out"]; os.makedirs(out, exist_ok=True)
 
+    mt = _safe(metric)                        # suffix outputs by metric so runs don't overwrite
     summ = group_summary(df, order)
     rep = replicate_means(df)
-    summ.to_csv(os.path.join(out, "summary_by_group.csv"), index=False)
+    summ.to_csv(os.path.join(out, f"summary_by_group_{mt}.csv"), index=False)
     if rep is not None:
-        rep.to_csv(os.path.join(out, "summary_by_replicate.csv"), index=False)
+        rep.to_csv(os.path.join(out, f"summary_by_replicate_{mt}.csv"), index=False)
 
     omni, posthoc, unit, have_rep = run_stats(df, order, args["unit"], args["parametric"])
     tests = pd.DataFrame([{"test": omni["test"], "unit": unit, "p": omni["p"],
                            "parametric": omni["parametric_used"], "levene_p": omni["levene_p"]}])
-    tests.to_csv(os.path.join(out, "omnibus_test.csv"), index=False)
+    tests.to_csv(os.path.join(out, f"omnibus_test_{mt}.csv"), index=False)
     if posthoc:
         pd.DataFrame([{"group_a": a, "group_b": b, "p_adj": p, "signif": stars(p)}
                       for (a, b), p in posthoc.items()]).to_csv(
-            os.path.join(out, "pairwise_tests.csv"), index=False)
+            os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
 
     fig = plot_violin(df, order, args, metric, posthoc)
-    base = os.path.join(out, f"violin_{_safe(metric)}")
+    base = os.path.join(out, f"violin_{mt}")
     for fmt in args["formats"]:
         kw = {"dpi": args["dpi"], "bbox_inches": "tight", "facecolor": "white"}
         if fmt in ("tif", "tiff"):
@@ -603,12 +611,12 @@ def run(args):
         fig.savefig(f"{base}.{fmt}", **kw)
     plt.close(fig)
 
-    write_report(os.path.join(out, "report.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
+    write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
     prov = {k: v for k, v in args.items() if not k.startswith("_")}
     prov.update({"metric": metric, "groups": order, "unit": unit,
                  "versions": {"plaque_stats": __version__, "numpy": np.__version__,
                               "pandas": pd.__version__, "scipy": scipy.__version__}})
-    with open(os.path.join(out, "run_config.json"), "w") as fh:
+    with open(os.path.join(out, f"run_config_{mt}.json"), "w") as fh:
         json.dump(prov, fh, indent=2)
     for w in omni.get("warnings", []):
         print("[warn] " + w)

@@ -157,6 +157,11 @@ server <- function(input, output, session) {
       d$value <- suppressWarnings(as.numeric(df[[input$value]]))
     }
     d <- d[is.finite(d$value), ]
+    # drop blank/NA groups; treat blank/"nan" replicate labels as missing (robust to Excel gaps)
+    d$group <- trimws(d$group)
+    d <- d[!is.na(d$group) & !(tolower(d$group) %in% c("", "na", "nan", "nat")), ]
+    d$replicate <- sub("\\.0$", "", trimws(as.character(d$replicate)))
+    d$replicate[tolower(d$replicate) %in% c("", "na", "nan", "nat")] <- NA
     ord <- trimws(strsplit(input$order, ",")[[1]])
     ord <- ord[ord != "" & ord %in% unique(d$group)]
     lev <- if (length(ord)) ord else unique(d$group)
