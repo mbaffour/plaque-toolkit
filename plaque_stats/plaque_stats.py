@@ -85,6 +85,7 @@ DEFAULTS = {
     "log_y": False, "width": 8.0, "height": 5.2, "dpi": 300,
     "point_size": 16.0, "jitter": 0.08, "violin_alpha": 0.55, "seed": 7,
     "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
+    "show_n": True, "center": "mean", "frame": False, "stats_table": True,
 }
 
 
@@ -344,12 +345,23 @@ def run_stats(df, order, unit, parametric):
 
 
 # ----------------------------------------------------------------------- plotting
+def _center_spread(vals, kind):
+    """Return (centre, low, high) for the group-summary marker: mean±SEM or median+IQR."""
+    v = np.asarray(vals, float)
+    if kind == "median":
+        return float(np.median(v)), float(np.percentile(v, 25)), float(np.percentile(v, 75))
+    c = float(np.mean(v))
+    sem = float(st.sem(v)) if len(v) > 1 else 0.0
+    return c, c - sem, c + sem
+
+
 def _style_axes(ax, opts):
-    """Minimal, journal-style axes: only left + bottom spines, thin, tidy ticks."""
+    """Journal-style axes: left+bottom spines by default, or a full frame/box when frame=True."""
+    frame = bool(opts.get("frame"))
     for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-    for s in ("left", "bottom"):
-        ax.spines[s].set_linewidth(0.9); ax.spines[s].set_color("#33413c")
+        ax.spines[s].set_visible(frame)
+    for s in ax.spines.values():
+        s.set_linewidth(0.9); s.set_color("#33413c")
     ax.tick_params(width=0.9, color="#33413c", length=4, labelsize=11)
     if opts.get("theme") == "grid":
         ax.yaxis.grid(True, color="#ececec", lw=0.8); ax.set_axisbelow(True)
@@ -401,26 +413,32 @@ def plot_violin(df, order, opts, metric_name, posthoc):
             ax.scatter(jx, gm["value"].values, s=opts["point_size"] * 5.5,
                        c=[rcol[r] for r in gm["replicate"]], edgecolor="#12211d",
                        linewidth=0.9, zorder=6)
-            m = float(gm["value"].mean())
-            sem = float(gm["value"].sem()) if len(gm) > 1 else 0.0
-            ax.plot([x0 - 0.19, x0 + 0.19], [m, m], color="#12211d", lw=2.0,
+            cen, lo, hi = _center_spread(gm["value"].values, opts.get("center", "mean"))
+            ax.plot([x0 - 0.19, x0 + 0.19], [cen, cen], color="#12211d", lw=2.0,
                     solid_capstyle="round", zorder=7)
-            if sem:
-                ax.plot([x0, x0], [m - sem, m + sem], color="#12211d", lw=1.1, zorder=7)
+            if hi > lo:
+                ax.plot([x0, x0], [lo, hi], color="#12211d", lw=1.1, zorder=7)
         else:                                             # -------- no replicates: median/IQR --------
             if opts["show_points"]:
                 jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
                 ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3)
-            q1, med, q3 = np.percentile(v, [25, 50, 75])
-            ax.plot([x0, x0], [q1, q3], color="#33413c", lw=1.4, zorder=5)
-            ax.plot([x0 - 0.10, x0 + 0.10], [med, med], color="#12211d", lw=2.2, zorder=6)
+            cen, lo, hi = _center_spread(v, opts.get("center", "mean"))
+            ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
+            ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
 
     ax.set_xticks(pos); ax.set_xticklabels(order)
+    if opts.get("show_n", True):                       # n plaques on top of each group
+        import matplotlib.transforms as mtransforms
+        tr = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+        for i, g in enumerate(order):
+            ax.text(pos[i], 1.008, "n = %d" % len(data[i]), transform=tr, ha="center",
+                    va="bottom", fontsize=8.5, color="#5b6a65")
     ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13)
     if opts["xlabel"]:
         ax.set_xlabel(opts["xlabel"], fontsize=13)
     if opts["title"]:
-        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left")
+        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left",
+                     pad=22 if opts.get("show_n", True) else 8)   # clear the n = … row
     if opts["log_y"]:
         ax.set_yscale("log")
     _style_axes(ax, opts)
@@ -577,6 +595,36 @@ def make_example(folder):
     print("wrote example_data_long.csv, example_data_wide.csv, TEMPLATE.csv ->", os.path.abspath(folder))
 
 
+def save_stats_table(summ, path, metric, unit):
+    """Render the descriptive-statistics table as a clean PNG (for slides / figure panels)."""
+    cols = ["group", "n", "n_replicates", "mean", "sd", "sem", "ci95_lo", "ci95_hi",
+            "median", "iqr", "cv_pct"]
+    disp = summ[cols].copy()
+    disp.columns = ["Sample", "n", "plates", "Mean", "SD", "SEM", "CI95 lo", "CI95 hi",
+                    "Median", "IQR", "CV %"]
+    for c in ["Mean", "SD", "SEM", "CI95 lo", "CI95 hi", "Median", "IQR", "CV %"]:
+        disp[c] = disp[c].map(lambda x: ("%.3g" % x) if pd.notna(x) else "")
+    nrow = len(disp)
+    fig, ax = plt.subplots(figsize=(min(13, 2.0 + 0.92 * len(disp.columns)), 0.55 + 0.34 * (nrow + 1)))
+    ax.axis("off")
+    ax.set_title("Descriptive statistics — %s  (unit: %s)" % (metric, unit),
+                 fontsize=11, fontweight="bold", loc="left", pad=12)
+    tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
+                   loc="center", cellLoc="center")
+    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.35)
+    tbl.auto_set_column_width(range(len(disp.columns)))
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
+        if r == 0:
+            cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
+        elif r % 2 == 0:
+            cell.set_facecolor("#f6f9f7")
+        if c == 0 and r > 0:
+            cell.set_text_props(fontweight="bold")
+    fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
 # --------------------------------------------------------------------------- main
 def run(args):
     df, metric = normalize(read_table(args["data"]), args["group"], args["value"],
@@ -612,6 +660,8 @@ def run(args):
     plt.close(fig)
 
     write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
+    if args.get("stats_table", True):
+        save_stats_table(summ, os.path.join(out, f"stats_table_{mt}.png"), metric, unit)
     prov = {k: v for k, v in args.items() if not k.startswith("_")}
     prov.update({"metric": metric, "groups": order, "unit": unit,
                  "versions": {"plaque_stats": __version__, "numpy": np.__version__,
@@ -648,6 +698,11 @@ def build_args():
     p.add_argument("--no-points", dest="show_points", action="store_false")
     p.add_argument("--no-box", dest="show_box", action="store_false")
     p.add_argument("--theme", choices=["clean", "grid"])
+    p.add_argument("--center", choices=["mean", "median"], help="group summary marker (default mean)")
+    p.add_argument("--no-n", dest="show_n", action="store_false", help="hide the n-plaques labels")
+    p.add_argument("--frame", dest="frame", action="store_true", help="box the plot (all 4 spines)")
+    p.add_argument("--no-stats-table", dest="stats_table", action="store_false",
+                   help="skip the descriptive-stats table PNG")
     return p
 
 

@@ -72,6 +72,8 @@ For each run (both tools produce the same things):
 - **`summary_by_group.csv`** — n plaques, n plates, mean, SD, SEM, 95% CI, median, Q1/Q3, IQR,
   min/max, CV%.
 - **`summary_by_replicate.csv`** — the per‑plate means (what the stats use).
+- **`stats_table_<metric>.png`** — a rendered, slide‑ready **descriptive‑statistics table** (n, plates,
+  mean, SD, SEM, 95% CI, median, IQR, CV%).
 - **Statistics** — an omnibus test + pairwise post‑hoc (see §4), with effect sizes.
 - **`report.md`** — a plain‑language summary **and a paste‑ready Methods/Results sentence**.
 - **`run_config.json`** — every setting + package versions, for reproducibility.
@@ -111,7 +113,11 @@ Common options (everything is also settable from a JSON `--config`):
 | `--order T4,T7,lambda` | x‑axis order |
 | `--palette "#0072B2,#E69F00,#009E73"` | custom colours |
 | `--annotate auto\|all\|adjacent\|none` | which pairs get significance brackets |
-| `--violin-fill auto\|neutral\|group` | violin fill (default `auto`: neutral grey in SuperPlot mode) |
+| `--violin-fill auto\|neutral\|group` | violin fill (default `auto`: neutral grey in SuperPlot mode; use `group` + `--palette` to colour each sample differently) |
+| `--center mean\|median` | group centre marker: mean ± SEM (default) or median + IQR of the plate means |
+| `--frame` | draw a full box/frame around the plot (all four spines) |
+| `--no-n` | hide the `n = …` plaque‑count labels on top of each group |
+| `--no-stats-table` | skip the rendered descriptive‑stats table PNG |
 | `--formats png,svg,pdf,tiff` | which figure formats to write |
 | `--title / --ylabel / --xlabel / --width / --height / --dpi / --log-y / --no-points / --no-box / --theme` | figure customization |
 

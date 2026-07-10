@@ -30,6 +30,8 @@ OKABE_ITO <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9",
 # muted palette for REPLICATES (plates): points + plate means are coloured by plate (SuperPlot)
 REP_PALETTE <- c("#4C6E9C", "#E0A458", "#6AAA64", "#B65C5C", "#8A78B0",
                  "#4FA3A5", "#C77CB5", "#9A8C6B", "#6C6C6C")
+med_iqr <- function(x) data.frame(y = median(x), ymin = quantile(x, .25, names = FALSE),
+                                  ymax = quantile(x, .75, names = FALSE))
 
 format_help <- function() {
   HTML(paste0(
@@ -63,7 +65,10 @@ ui <- fluidPage(
       checkboxInput("show_points", "Show plaque points", TRUE),
       selectInput("vfill", "Violin fill",
                   c("auto (grey when plates)" = "auto", "neutral grey" = "neutral",
-                    "coloured by group" = "group")),
+                    "coloured by sample" = "group")),
+      selectInput("center", "Centre marker", c("mean ± SEM" = "mean", "median + IQR" = "median")),
+      checkboxInput("show_n", "Show n on top", TRUE),
+      checkboxInput("frame", "Box the plot (frame)", FALSE),
       checkboxInput("show_sig", "Significance brackets", TRUE),
       checkboxInput("log_y", "Log y-axis", FALSE),
       tags$hr(),
@@ -265,10 +270,12 @@ server <- function(input, output, session) {
     }
     if (superplot) {
       rm <- rep_means()
+      fdata <- if (input$center == "median") med_iqr else mean_se
+      cfun  <- if (input$center == "median") stats::median else base::mean
       g <- g +
-        stat_summary(data = rm, aes(group, value), fun.data = mean_se, geom = "errorbar",
+        stat_summary(data = rm, aes(group, value), fun.data = fdata, geom = "errorbar",
                      width = 0, linewidth = 0.7, color = "#12211d") +
-        stat_summary(data = rm, aes(group, value), fun = mean, geom = "crossbar",
+        stat_summary(data = rm, aes(group, value), fun = cfun, geom = "crossbar",
                      width = 0.34, linewidth = 0.7, color = "#12211d", fatten = 0) +
         geom_point(data = rm, aes(group, value, fill = replicate), shape = 21,
                    size = 4.2, color = "#12211d", stroke = 0.9) +
@@ -286,8 +293,18 @@ server <- function(input, output, session) {
       theme_classic(base_size = 14) +
       theme(plot.title = element_text(face = "bold"),
             legend.position = if (superplot) "right" else "none",
-            axis.line = element_line(linewidth = 0.6, color = "#33413c"),
+            plot.margin = margin(t = 16, r = 12, b = 6, l = 6),
+            panel.border = if (isTRUE(input$frame))
+              element_rect(fill = NA, color = "#33413c", linewidth = 0.7) else element_blank(),
+            axis.line = if (isTRUE(input$frame)) element_blank()
+                        else element_line(linewidth = 0.6, color = "#33413c"),
             axis.ticks = element_line(linewidth = 0.6, color = "#33413c"))
+    if (isTRUE(input$show_n)) {
+      ns <- dplyr::count(d, group)
+      g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = paste0("n = ", n)),
+                         vjust = -0.5, size = 3.1, color = "#5b6a65", inherit.aes = FALSE) +
+        coord_cartesian(clip = "off")
+    }
     if (input$log_y) g <- g + scale_y_log10()
     if (input$show_sig) {
       st <- stat_test()
