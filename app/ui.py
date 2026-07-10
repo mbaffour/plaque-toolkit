@@ -1007,12 +1007,18 @@ class AboutTab(QWidget):
 
 
 def _scrollable(w):
-    """Wrap a tab in a scroll area so nothing is ever hidden on smaller screens. With
-    setWidgetResizable, form tabs scroll only when their content is genuinely taller/wider
-    than the viewport; splitter/canvas tabs fill the space normally (no scrollbars)."""
+    """Wrap a tab in a scroll area so nothing is ever hidden. We pin the tab's PREFERRED size as
+    its minimum, so when the window is smaller than the content the scroll area shows real
+    scrollbars (both directions) and you can reach everything — instead of squashing it to fit.
+    On a large window the tab still fills the space (setWidgetResizable)."""
     sa = QScrollArea()
     sa.setWidgetResizable(True)
     sa.setFrameShape(QFrame.NoFrame)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    sa.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    hint = w.sizeHint()
+    if hint.width() > 0 and hint.height() > 0:
+        w.setMinimumSize(hint)
     sa.setWidget(w)
     return sa
 
@@ -1040,14 +1046,17 @@ class DocViewer(QDialog):
     def __init__(self, name, parent=None):
         super().__init__(parent)
         self._path, docs_dir = _resolve_doc(name)
+        self._interactive = _is_interactive_html(self._path)
         self.setWindowTitle("Plaque Toolkit — help — %s" % name)
-        self.resize(940, 780)
+        _av = QApplication.primaryScreen().availableGeometry()   # never open bigger than the screen
+        self.resize(min(960, _av.width() - 60), min(800, _av.height() - 100))
         self.setObjectName("AppRoot")
         self.setAttribute(Qt.WA_DeleteOnClose, True)   # destroy on close; _DOC_VIEWERS holds it while open
 
         self.browser = QTextBrowser()
-        self.browser.setOpenExternalLinks(True)
-        self.browser.setSearchPaths([docs_dir])   # resolve relative images/links
+        self.browser.setOpenLinks(False)               # we handle links ourselves (ask before a browser)
+        self.browser.anchorClicked.connect(self._on_anchor)
+        self.browser.setSearchPaths([docs_dir])        # resolve relative images/links
         self.browser.setStyleSheet(
             "QTextBrowser{background:#ffffff;color:#1f2430;border:1px solid #dde6e2;"
             "border-radius:8px;padding:14px 20px;font-size:15px;}")
@@ -1070,10 +1079,6 @@ class DocViewer(QDialog):
 
         cap = QLabel(name); cap.setObjectName("SummaryHeading")
         top = QHBoxLayout(); top.addWidget(cap); top.addStretch()
-        if is_html:
-            hint = QLabel("Rich page — click for full layout & figures:")
-            hint.setStyleSheet("color:#5b6a65;font-size:12px")
-            top.addWidget(hint)
         self.ext_btn = QPushButton("Open in web browser")
         self.ext_btn.setToolTip("Open this page in your default web browser (full CSS layout, "
                                 "figures and any interactive parts).")
@@ -1084,16 +1089,43 @@ class DocViewer(QDialog):
         top.addWidget(close)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(10)
-        lay.addLayout(top); lay.addWidget(self.browser, 1)
+        lay.addLayout(top)
+        if self._interactive:
+            banner = QLabel("⚠  This page is interactive (calculator / input boxes). Those "
+                            "controls won’t work here — click “Open in web browser” "
+                            "above for the working version.")
+            banner.setWordWrap(True)
+            banner.setStyleSheet("background:#fdf5e9;color:#7a4a08;border:1px solid #f0c987;"
+                                 "border-radius:8px;padding:8px 12px;")
+            lay.addWidget(banner)
+        elif is_html:
+            hint = QLabel("Tip: click “Open in web browser” above for the full-fidelity "
+                          "layout & figures.")
+            hint.setStyleSheet("color:#5b6a65;font-size:12px;padding:0 2px")
+            lay.addWidget(hint)
+        lay.addWidget(self.browser, 1)
 
     def _open_external(self):
         if self._path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
 
+    def _on_anchor(self, url):
+        """Internal #anchors scroll within the doc; an external http(s) link ASKS before opening
+        a web browser (per user request — nothing goes to the browser silently)."""
+        if url.scheme() in ("http", "https"):
+            ret = QMessageBox.question(
+                self, "Open link in web browser?",
+                "Open this link in your web browser?\n\n%s" % url.toString(),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret == QMessageBox.Yes:
+                QDesktopServices.openUrl(url)
+        elif url.fragment():
+            self.browser.scrollToAnchor(url.fragment())
+
 
 def _is_interactive_html(path):
     """True for HTML pages that need a real browser (JavaScript/forms) — e.g. the Fiji
-    validation calculator. QTextBrowser runs no JS, so these must open externally."""
+    validation calculator. QTextBrowser runs no JS, so these get a 'use a browser' banner."""
     if not (path and path.lower().endswith((".html", ".htm"))):
         return False
     try:
@@ -1104,13 +1136,9 @@ def _is_interactive_html(path):
 
 
 def _open_doc(name, parent=None):
-    """Open a docs/ file IN-APP (rendered inside the tool). Interactive HTML pages (with
-    JavaScript/forms) open in the system browser instead, since QTextBrowser can't run them.
-    Signature kept for existing callers."""
-    path, _docs = _resolve_doc(name)
-    if _is_interactive_html(path):
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-        return
+    """Open a docs/ file IN-APP (rendered inside the tool). Interactive HTML still renders in the
+    viewer, which shows a notice + an 'Open in web browser' button — nothing opens a browser
+    without an explicit click. Signature kept for existing callers."""
     v = DocViewer(name, parent or QApplication.activeWindow())
     _DOC_VIEWERS.append(v)
     v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
@@ -1570,8 +1598,9 @@ class MainWindow(QMainWindow):
         _icon_path = engine_api.resource_path("icon.png")
         if os.path.exists(_icon_path):
             self.setWindowIcon(QIcon(_icon_path))
-        self.resize(1320, 860)
-        self.setMinimumSize(900, 620)
+        _av = QApplication.primaryScreen().availableGeometry()   # never open bigger than the screen
+        self.resize(min(1320, _av.width() - 40), min(880, _av.height() - 60))
+        self.setMinimumSize(min(760, _av.width() - 20), min(520, _av.height() - 40))
         self.pool = QThreadPool(); self.pool.setMaxThreadCount(1)  # engine flags are global
 
         root = QWidget(); root.setObjectName("AppRoot")
@@ -1579,10 +1608,10 @@ class MainWindow(QMainWindow):
         rlay.addWidget(self._build_header())
 
         self.tabs = QTabWidget()
-        # Measure keeps its own canvas + drag-drop (unwrapped); the form tabs get a scroll
-        # area so their content is reachable on smaller screens (see _scrollable).
+        # every tab is wrapped in a scroll area so its content is always reachable, both
+        # vertically and horizontally, on screens smaller than the content (see _scrollable).
         self.measure_tab = MeasureTab(self.pool)
-        self.tabs.addTab(self.measure_tab, "  Measure  ")
+        self.tabs.addTab(_scrollable(self.measure_tab), "  Measure  ")
         self.tabs.addTab(_scrollable(BatchTab(self.pool)), "  Batch  ")
         self.tabs.addTab(_scrollable(CompareTab(self.pool)), "  Compare turbidity  ")
         self.tabs.addTab(_scrollable(ValidateTab(self.pool)), "  Validate  ")

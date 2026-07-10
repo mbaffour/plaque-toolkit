@@ -20,7 +20,9 @@ class FijiCompareDialog(QDialog):
         self.app_df = app_df
         self.result = None
         self.setWindowTitle("Compare app vs Fiji — the same plaques, by position")
-        self.resize(740, 580)
+        from PySide6.QtWidgets import QApplication
+        _av = QApplication.primaryScreen().availableGeometry()   # never exceed the screen
+        self.resize(min(760, _av.width() - 60), min(600, _av.height() - 100))
         lay = QVBoxLayout(self)
 
         intro = QLabel(
