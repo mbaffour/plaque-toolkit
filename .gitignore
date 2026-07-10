@@ -60,3 +60,7 @@ Plaques to measure/
 
 # PyInstaller work dirs (keep build/*.spec and *.iss only)
 build/*/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

@@ -90,8 +90,9 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
   clinical measurement.* Lancet 327(8476):307–310. doi:10.1016/S0140-6736(86)90837-8
 - Koo T.K. & Li M.Y. (2016). *A guideline of selecting and reporting intraclass correlation
   coefficients for reliability research.* J. Chiropr. Med. 15(2):155–163. doi:10.1016/j.jcm.2016.02.012
-- Trofimova E. & Jaschke P.R. (2021). *An improved and open-source method for plaque size and titer
-  quantification.* Virology 561:1–5. doi:10.1016/j.virol.2021.05.011
+- Trofimova E. & Jaschke P.R. (2021). *Plaque Size Tool: an automated plaque analysis tool for
+  simplifying and standardising bacteriophage plaque morphology measurements.* Virology 561:1–5.
+  doi:10.1016/j.virol.2021.05.011
 - Schindelin J. et al. (2012). *Fiji: an open-source platform for biological-image analysis.*
   Nat. Methods 9:676–682. doi:10.1038/nmeth.2019
 - Schneider C.A. et al. (2012). *NIH Image to ImageJ: 25 years of image analysis.* Nat. Methods

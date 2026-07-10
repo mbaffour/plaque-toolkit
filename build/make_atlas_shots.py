@@ -1,4 +1,5 @@
-"""Capture clean screenshots for docs/TOOL_ATLAS.html (real fonts, cropped widgets).
+"""Capture clean screenshots for the docs (real fonts, cropped widgets) — used by
+docs/USER_GUIDE.md, docs/TOOL_ATLAS.html and the visual how-to.
 
 Run:  conda run -n plaqueapp python build/make_atlas_shots.py
 Writes PNGs into docs/atlas_img/.  Uses the real 'windows' Qt platform (brief window flashes)
@@ -11,7 +12,7 @@ sys.path.insert(0, os.path.abspath("."))
 from PySide6.QtWidgets import QApplication          # noqa: E402
 from PySide6.QtGui import QFontDatabase, QFont      # noqa: E402
 from app import engine_api, style                   # noqa: E402
-from app.ui import MainWindow                        # noqa: E402
+from app.ui import MainWindow, AgreementTab          # noqa: E402
 
 OUT = os.path.join("docs", "atlas_img")
 os.makedirs(OUT, exist_ok=True)
@@ -26,7 +27,8 @@ for fp in ("C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf"):
             break
 app.setStyleSheet(style.get_stylesheet("light"))
 
-win = MainWindow(); win.resize(1340, 880)
+# tall window so tab content (incl. the Bland-Altman figure) fits without scrollbars in the grab
+win = MainWindow(); win.resize(1400, 1180)
 m = win.measure_tab
 
 
@@ -48,11 +50,24 @@ save(m.summary_card, "summary_card.png")
 save(m.table, "results_table.png")
 save(m.editor, "editor.png")
 
-# other tabs (0 Measure, 1 Batch, 2 Compare turbidity, 3 Validate, 4 About)
-for idx, name in ((1, "batch.png"), (2, "compare.png"), (3, "validate.png"), (4, "about.png")):
+# tab order now: 0 Measure, 1 Batch, 2 Compare turbidity, 3 Validate, 4 Fiji agreement, 5 About
+for idx, name in ((1, "batch.png"), (2, "compare.png"), (3, "validate.png"), (5, "about.png")):
     win.tabs.setCurrentIndex(idx)
     app.processEvents()
     save(win, name)
+
+# Fiji agreement — load the built-in example, compute, and capture the tab WITH its figure
+agr = win.findChild(AgreementTab)
+if agr is not None:
+    win.tabs.setCurrentIndex(4)
+    app.processEvents()
+    try:
+        agr._example()          # loads the paired example and computes -> draws the figure
+    except Exception as e:
+        print("agreement example failed:", e)
+    for _ in range(6):
+        app.processEvents()
+    save(win, "fiji_agreement.png")
 
 print("platform:", app.platformName())
 print("done ->", os.path.abspath(OUT))

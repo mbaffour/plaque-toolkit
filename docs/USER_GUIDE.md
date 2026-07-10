@@ -25,6 +25,7 @@ iPhone/HEIC support, overlap (watershed) segmentation, and quality control — a
 
 ## Table of contents
 1. [The 30‑second version](#1-the-30-second-version)
+1b. [Visual walkthrough — the desktop app](#1b-visual-walkthrough--the-desktop-app)
 2. [What it measures](#2-what-it-measures)
 3. [Which tool should I use?](#3-which-tool-should-i-use)
 4. [Setup (one time)](#4-setup-one-time)
@@ -71,6 +72,82 @@ iPhone **HEIC works directly**. (Rebuilding the installers is covered in
 > answer the prompts → read `out_turbidity\per_phage.csv` and the figures.
 
 iPhone **HEIC images work directly** — no conversion needed.
+
+---
+
+## 1b. Visual walkthrough — the desktop app
+
+The fastest way to learn the app is to watch it work. The screenshots below render inline on
+GitHub and inside the app's own **Help → User guide** viewer.
+
+### Step 1 — Open the app; you land on the Measure tab
+Drag a plaque photo onto the drop‑zone (or click **Open image…**), set the **Dish** size
+(85 mm = agar base, 100 mm = lid), and pick an **Engine** — **Precise** is the best all‑round
+detector. The toolbar wraps to fit your window, so every control stays reachable.
+
+![The Measure tab before an image is loaded](atlas_img/measure_empty.png)
+
+### Step 2 — Detect
+The app outlines every plaque, **numbers them 1→N from the top**, and fills the results table and
+the summary card (plaque count, median/mean diameter, and the **mm/px calibration** — green ✓ when
+the dish scale is set). The loaded photo's name, dimensions and camera appear just above the image.
+
+![A detected plate — numbered outlines, the live per‑plaque table, and the calibration readout](atlas_img/measure_full.png)
+
+### Step 3 — Correct by hand (optional)
+The editor toolbar lets you fix anything the detector missed or over‑called:
+
+- **Add** — click a missed plaque and it *auto‑traces* the true outline (the **Trace tol** box tunes sensitivity); or drag to draw a circle.
+- **Draw shape** — freehand around an irregular / comet / fused plaque; it's measured by its *true area*, not a circle fit.
+- **Detect area** — drag a box to re‑scan just inside it.
+- **Set plate** — click 3 points on the dish rim and type its mm diameter to set the scale.
+- **Erase** or right‑click — remove a detection.
+
+Click a plaque on the image and its **table row highlights** (and vice‑versa), so a plaque and its
+measurement stay linked.
+
+![The hand‑correction editor with the plaque canvas](atlas_img/editor.png)
+
+### Step 4 — Read the numbers
+The summary card is the at‑a‑glance result; the table is one row per plaque (area & diameter in
+px and mm), sortable, and **Ctrl+C / Copy** puts it on the clipboard as Excel‑ready columns.
+
+![The summary card](atlas_img/summary_card.png)
+
+![The per‑plaque measurements table](atlas_img/results_table.png)
+
+### Step 5 — Export
+The green **Export all** button writes a CSV + an annotated figure to an `out/` folder in one
+click (the **More ▾** menu has individual items: figure, side‑by‑side, ground‑truth labels, plate
+crop, and the **Fiji registration bundle**).
+
+### Step 6 — Validate against Fiji, for a paper (the *Fiji agreement* tab)
+Measure the same plaques in the tool and by hand in Fiji/ImageJ, then paste the two columns here.
+It computes **Bland–Altman bias + 95% limits of agreement, ICC, Pearson r and the regression
+slope**, draws the method‑comparison + Bland–Altman figure (plaques outside the 95% limits turn
+red), and writes a ready‑to‑paste Methods sentence. New to the statistics? The green
+**“Understanding the agreement statistics”** link opens a plain‑language explainer. (See also
+[STATS_EXPLAINED.html](STATS_EXPLAINED.html) and [PAPER_METHODS.md](PAPER_METHODS.md).)
+
+![The Fiji agreement tab — paste two columns, get Bland–Altman + ICC + a figure](atlas_img/fiji_agreement.png)
+
+### The other tabs
+- **Batch** — run a whole folder of plates at once → per‑plate CSVs + a summary.
+
+  ![Batch tab](atlas_img/batch.png)
+
+- **Compare turbidity** — cross‑phage optical density, clarity class, count/PFU titer, per‑phage
+  stats and box/histogram figures (the publishable turbidity comparison).
+
+  ![Compare turbidity tab](atlas_img/compare.png)
+
+- **Validate** — score the tool against your *own* ground‑truth labels (precision/recall + size agreement).
+
+  ![Validate tab](atlas_img/validate.png)
+
+- **About** — versions, engine list, and the honesty notes on what is and isn't peer‑reviewed.
+
+  ![About tab](atlas_img/about.png)
 
 ---
 

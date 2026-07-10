@@ -1718,7 +1718,9 @@ class MainWindow(QMainWindow):
                            ("How to validate this program", "VALIDATION_GUIDE.md"),
                            ("How it was built", "HOW_IT_WAS_BUILT.md"),
                            ("Engine reference", "ENGINES.md"),
-                           ("Publication notes", "PUBLICATION.md")):
+                           ("Publication notes", "PUBLICATION.md"),
+                           ("Credits & lineage", "CREDITS_AND_LINEAGE.md"),
+                           ("Licensing", "LICENSING.md")):
             a = QAction(label, self)
             a.triggered.connect(lambda _=False, d=doc: _open_doc(d))
             m.addAction(a)

@@ -88,7 +88,10 @@ top-lit iPhone plates: [**docs/ENGINES.md**](docs/ENGINES.md).
 | [**docs/DEVELOPER.md**](docs/DEVELOPER.md) | File map, the two-env vs unified-env design, the ML classifier, and how to rebuild the installers. |
 | [**docs/STRUCTURE.md**](docs/STRUCTURE.md) | Every top-level file/folder mapped to its purpose. |
 | [**docs/PLAQUE_SIZE_TOOL.md**](docs/PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
-| `docs/guide.html`, `docs/setup_and_run.html` | The interactive HTML guides (open in a browser). |
+| [**docs/CREDITS_AND_LINEAGE.md**](docs/CREDITS_AND_LINEAGE.md) | Every upstream tool/model/dataset/library, its licence, and what's original here. |
+| [**docs/VALIDATION_RESULTS.md**](docs/VALIDATION_RESULTS.md) · [**docs/PAPER_METHODS.md**](docs/PAPER_METHODS.md) | The local validation numbers, and paste‑ready Methods/Results text. |
+| [**LICENSING.md**](LICENSING.md) · [**THIRD_PARTY_LICENSES.md**](THIRD_PARTY_LICENSES.md) | Per‑build licensing and every bundled component's licence. |
+| `docs/STATS_EXPLAINED.html`, `docs/TOOL_ATLAS.html`, `docs/guide.html`, `docs/setup_and_run.html` | Interactive/visual HTML guides. |
 
 The original upstream Plaque Size Tool manual (install via pip, Colab link, original CLI
 options) is preserved at [**docs/UPSTREAM_README.md**](docs/UPSTREAM_README.md).
@@ -123,6 +126,12 @@ in-house extensions you used (and your own validation of them) in your Methods �
 
 The upstream source is at <https://github.com/ellinium/plaque_size_tool>.
 
+If you use the **Precise** engine (Full build), also cite **OnePetri**, whose dataset/model lineage
+it derives from:
+
+> Shamash M, Maurice CF. *OnePetri: accelerating common bacteriophage Petri dish assays with
+> computer vision.* PHAGE. 2021. doi:10.1089/phage.2021.0012
+
 ## Large files (contributors)
 
 This repo already contains some large binaries (test-plate `.tif` images and model
@@ -141,4 +150,19 @@ files stay as they are — this only changes how *future* large files are stored
 
 ## License
 
-See [LICENSE](LICENSE).
+**Free and open for everyone** — see **[LICENSING.md](LICENSING.md)** for the details, and
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for every bundled component.
+
+- Our own source code is **Apache‑2.0** ([LICENSE](LICENSE)), building on the peer‑reviewed
+  **Plaque Size Tool** (also Apache‑2.0).
+- The **Light** installer (`PlaqueToolkitSetup.exe`) is entirely permissive — **Apache‑2.0, free for
+  any use including commercial.**
+- The **Full** installer (`PlaqueToolkitFullSetup.exe`) adds the **Precise** engine, which is built on
+  **Ultralytics YOLO (AGPL‑3.0)** and **PlaqSeg/classifier weights trained on the OnePetri dataset
+  (CC BY‑NC‑SA 4.0, NonCommercial)**. It is therefore **free for non‑commercial research use** under
+  AGPL‑3.0 with the model weights under CC BY‑NC‑SA 4.0. For commercial use, use the Light build (or
+  see [LICENSING.md](LICENSING.md)).
+
+Attribution: Plaque Size Tool (Trofimova & Jaschke 2021), OnePetri (Shamash & Maurice 2021),
+Ultralytics YOLO, Qt/PySide6, and the libraries listed in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

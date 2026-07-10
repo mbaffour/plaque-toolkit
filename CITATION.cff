@@ -9,9 +9,10 @@ abstract: >-
   a fused PST + PlaqSeg detector, a manual-correction editor, millimetre calibration,
   batch processing, count/PFU, and optical-density turbidity comparison.
 type: software
-version: 1.0.0
-date-released: '2026-07-07'
+version: 1.0.5
+date-released: '2026-07-09'
 license: Apache-2.0
+license-url: 'https://github.com/mbaffour/plaque-toolkit/blob/main/LICENSING.md'
 repository-code: 'https://github.com/mbaffour/plaque-toolkit'
 # TODO before you cite it in a paper:
 #   1. Confirm the author list, add affiliations + ORCID iDs.
@@ -38,3 +39,15 @@ references:
     start: 1
     end: 5
     doi: 10.1016/j.virol.2021.05.011
+  # The Precise engine (Full build) derives from OnePetri (dataset CC BY-NC-SA 4.0; code GPL-3.0).
+  # Cite it too if you use Precise:
+  - type: article
+    title: 'OnePetri: accelerating common bacteriophage Petri dish assays with computer vision'
+    authors:
+      - family-names: Shamash
+        given-names: Michael
+      - family-names: Maurice
+        given-names: Corinne F.
+    journal: PHAGE
+    year: 2021
+    doi: 10.1089/phage.2021.0012

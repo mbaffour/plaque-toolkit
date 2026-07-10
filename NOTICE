@@ -1,0 +1,32 @@
+Plaque Toolkit
+Copyright 2026 Michael Baffour Awuah
+
+This product includes software developed as the Plaque Size Tool
+(Copyright Ellina Trofimova and Ilya Trofimov; Apache License 2.0):
+    Trofimova E, Jaschke PR. Plaque Size Tool: an automated plaque analysis
+    tool for simplifying and standardising bacteriophage plaque morphology
+    measurements. Virology 2021;561:1-5.
+    https://github.com/ellinium/plaque_size_tool
+
+MODIFICATIONS (Apache-2.0 section 4b): the upstream Plaque Size Tool source in
+plaque_size_tool.py has been modified by this project. Changes include:
+  - two numerical-precision corrections (un-truncated millimetre values and a
+    fixed concentric-duplicate rule) exposed as the "Current" engine; the
+    original behaviour is preserved verbatim under the "Published" engine and
+    the --published flag;
+  - a "Sensitive" engine (lowered size/roundness gates);
+  - optional distance-transform watershed splitting of touching plaques;
+  - HEIC/HEIF input, millimetre calibration from a user-set dish diameter, and
+    within-plate turbidity output.
+
+The optional "Precise" engine (Full build only) additionally incorporates:
+  - Ultralytics YOLO (AGPL-3.0) running the PlaqSeg segmentation model;
+  - PlaqSeg detector weights and a ResNet-18 classifier trained on the OnePetri
+    dataset (Shamash & Maurice 2021; OnePetri code GPL-3.0, dataset
+    CC BY-NC-SA 4.0). Weights derived from that data are NonCommercial.
+
+Bundled third-party libraries (OpenCV, NumPy, pandas, SciPy, scikit-image,
+matplotlib, Pillow, pillow-heif, imutils, PyTorch, torchvision, PySide6/Qt)
+retain their own copyrights and licences.
+
+See LICENSING.md and THIRD_PARTY_LICENSES.md for full details.

@@ -88,8 +88,9 @@ Python needed to run it). Then either:
   `Output/PlaqueToolkitSetup.exe`.
 
 The installer intentionally does **not** bundle PyTorch/ultralytics, so it stays light
-(~150 MB). Precise mode in the packaged app still works *if* the user has a local
-`plaqseg` conda env (see below).
+(~85 MB installer). Precise mode in the packaged app still works *if* the user has a local
+`plaqseg` conda env (see below). Keeping PyTorch/ultralytics out is also what keeps this build
+fully **Apache-2.0** — see [LICENSING.md](../LICENSING.md).
 
 ---
 

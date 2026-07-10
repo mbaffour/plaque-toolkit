@@ -46,6 +46,9 @@ datas += [(os.path.join(ROOT, "_research", "clf", "infer.py"), "_research/clf")]
 # runtime (USER_GUIDE / VALIDATION_GUIDE / HOW_IT_WAS_BUILT / ENGINES / PUBLICATION +
 # the interactive guide.html), so the whole folder must ship as data.
 datas += [(os.path.join(ROOT, "docs"), "docs")]
+# licence texts must ship WITH the binary (Apache-2.0 sec.4 / AGPL-3.0 / LGPL-3.0 conveyance)
+datas += [(os.path.join(ROOT, f), ".")
+          for f in ("LICENSE", "LICENSING.md", "THIRD_PARTY_LICENSES.md", "NOTICE")]
 
 # ---- explicit hidden imports the analyzer can miss ------------------------- #
 hiddenimports += [

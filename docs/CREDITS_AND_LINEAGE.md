@@ -137,8 +137,13 @@ in `environment.yml` / `requirements.txt`, `environment-precise.yml`, and
 - **Inno Setup** — the Windows installers (`PlaqueToolkitSetup.exe` and
   `PlaqueToolkitFullSetup.exe`).
 
-Each of these carries its own upstream licence; consult the respective projects for the exact
-terms.
+**Licences (SPDX).** OpenCV `Apache-2.0`; NumPy / pandas / SciPy / roifile `BSD-3-Clause`;
+scikit-image `BSD-3-Clause`; matplotlib `matplotlib/PSF`; Pillow `HPND`; pillow-heif `BSD-3-Clause`
+(wraps LGPL libheif/libde265); imutils `MIT`; **PyTorch / torchvision `BSD-3-Clause`**;
+**ultralytics `AGPL-3.0`** (copyleft — governs the whole **Full** build; see §7); **PySide6 / Qt
+`LGPL-3.0`** (dynamically linked, relinkable). The full per-component table with copyright notices is
+in the repo root at [`THIRD_PARTY_LICENSES.md`](../THIRD_PARTY_LICENSES.md); the overall per-build
+licensing is in [`LICENSING.md`](../LICENSING.md).
 
 ---
 
@@ -178,9 +183,16 @@ lowered size gates).
 - **Published engine** — reproduces the peer-reviewed Trofimova & Jaschke 2021 method; the
   only citable mode. Credit the paper.
 - **PlaqSeg** — **not peer-reviewed.** Best available detector, not a citable method.
-- **OnePetri dataset** — **CC BY-NC-SA 4.0 (non-commercial, share-alike, attribution).**
-  Everything trained on it inherits those terms.
-- **Classifier** — trained on detector output + OnePetri patches; **not human-validated**.
+- **OnePetri** — **dataset** is **CC BY-NC-SA 4.0 (non-commercial, share-alike, attribution)**;
+  **code** is **GPL-3.0** (Shamash & Maurice 2021, doi:10.1089/phage.2021.0012). Everything trained
+  on the dataset inherits the CC BY-NC-SA terms.
+- **Software licences.** The **Full** build runs on **Ultralytics YOLO (AGPL-3.0, copyleft)** → the
+  Full installer as a whole is **AGPL-3.0**, with its deep-model weights **CC BY-NC-SA 4.0
+  (non-commercial)**; free for non-commercial research, full source public. The **Light** build has
+  no YOLO/weights and is **Apache-2.0 (free for any use)**. Qt/PySide6 is **LGPL-3.0** in both.
+  Details: [`LICENSING.md`](../LICENSING.md), [`THIRD_PARTY_LICENSES.md`](../THIRD_PARTY_LICENSES.md).
+- **Classifier** — trained on detector output + OnePetri patches; **not human-validated**, and
+  **CC BY-NC-SA 4.0 (non-commercial)** by inheritance.
 - **Current / Sensitive / Precise / classifier / turbidity** — in-house; **do not inherit the
   published validation.** Validate on your own plates before publishing.
 
