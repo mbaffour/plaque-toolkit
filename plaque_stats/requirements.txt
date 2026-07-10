@@ -7,6 +7,7 @@ scipy>=1.11          # needs scipy.stats.tukey_hsd (>=1.11)
 # --- optional ---
 tabulate             # nicer Markdown tables in report.md (falls back to plain text if absent)
 openpyxl             # only if you read .xlsx input
+shiny                # only for the browser app_py.py (Shiny for Python):  shiny run app_py.py
 
 # R-Shiny app (app.R) uses, install from R:
 #   install.packages(c("shiny","ggplot2","dplyr","tidyr","readr","DT","rstatix","ggpubr","scales","svglite"))

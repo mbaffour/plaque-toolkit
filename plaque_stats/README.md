@@ -143,6 +143,21 @@ Upload your CSV (or click **Load example data**), pick the `group` / `replicate`
 toggle the options, and **download** the figure (PNG/SVG/PDF) and the summary/stats tables. The
 **Data format** tab restates the format above.
 
+### Python Shiny — the browser app (`app_py.py`)
+
+A **web app (HTML in your browser)** that **imports `plaque_stats.py` directly** — the same
+`plot_violin` / `group_summary` / `run_stats` functions the CLI uses — so the figure and every
+statistic are **identical** (no re‑implementation). Same controls as the R app, plus the descriptive
++ pairwise tables and PNG/SVG/PDF downloads.
+
+```bash
+pip install shiny openpyxl                 # once (plus the requirements above)
+shiny run --reload plaque_stats/app_py.py  # opens http://127.0.0.1:8000 in your browser
+```
+
+Use whichever you prefer — **CLI** (batch/scriptable), **R‑Shiny** (`app.R`), or **Python‑Shiny**
+(`app_py.py`); all three read the same data format and give the same numbers.
+
 ---
 
 ## 4. The statistics (and why plate‑level)
