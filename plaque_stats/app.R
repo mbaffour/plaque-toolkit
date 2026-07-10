@@ -27,6 +27,9 @@ library(ggpubr)
 
 OKABE_ITO <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9",
                "#D55E00", "#F0E442", "#999999", "#000000")
+# muted palette for REPLICATES (plates): points + plate means are coloured by plate (SuperPlot)
+REP_PALETTE <- c("#4C6E9C", "#E0A458", "#6AAA64", "#B65C5C", "#8A78B0",
+                 "#4FA3A5", "#C77CB5", "#9A8C6B", "#6C6C6C")
 
 format_help <- function() {
   HTML(paste0(
@@ -58,9 +61,9 @@ ui <- fluidPage(
                   c("auto (from normality)" = "auto", "parametric" = "parametric",
                     "non-parametric" = "nonparametric")),
       checkboxInput("show_points", "Show plaque points", TRUE),
-      checkboxInput("show_box", "Show box (IQR + median)", TRUE),
-      checkboxInput("show_mean", "Show group mean", TRUE),
-      checkboxInput("show_reps", "Emphasise plate means (diamonds)", TRUE),
+      selectInput("vfill", "Violin fill",
+                  c("auto (grey when plates)" = "auto", "neutral grey" = "neutral",
+                    "coloured by group" = "group")),
       checkboxInput("show_sig", "Significance brackets", TRUE),
       checkboxInput("log_y", "Log y-axis", FALSE),
       tags$hr(),
@@ -232,26 +235,50 @@ server <- function(input, output, session) {
 
   build_plot <- reactive({
     d <- dat(); req(nrow(d) > 0)
-    pal <- rep(palette_vec(), length.out = nlevels(d$group))
-    g <- ggplot(d, aes(group, value, fill = group)) +
-      geom_violin(alpha = 0.55, color = "#33413c", width = 0.85, trim = TRUE, linewidth = 0.5)
-    if (input$show_points)
-      g <- g + geom_jitter(aes(color = group), width = 0.09, height = 0, size = 1.4, alpha = 0.5)
-    if (input$show_box)
-      g <- g + geom_boxplot(width = 0.12, outlier.shape = NA, fill = "white",
-                            color = "#33413c", linewidth = 0.5, alpha = 0.9)
-    if (input$show_reps && has_rep())
-      g <- g + geom_point(data = rep_means(), aes(group, value, fill = group),
-                          shape = 23, size = 3.4, color = "#12211d", stroke = 0.8)
-    if (input$show_mean)
-      g <- g + stat_summary(fun = mean, geom = "crossbar", width = 0.35,
-                            color = "#c0392b", linewidth = 0.6)
-    g <- g + scale_fill_manual(values = pal) + scale_color_manual(values = pal) +
+    gpal <- rep(palette_vec(), length.out = nlevels(d$group))
+    superplot <- isTRUE(has_rep())      # Violin SuperPlot when we have >=2 plates per group
+    # neutral grey violin when plate colours carry the hue (forced in SuperPlot mode to keep one
+    # fill scale for the plate legend); group-coloured only when there are no plate points
+    neutral_violin <- superplot || input$vfill == "neutral"
+    g <- ggplot(d, aes(group, value))
+    if (neutral_violin) {
+      g <- g + geom_violin(fill = "#b9c2bd", color = "#6f7b74", alpha = 0.38,
+                           width = 0.85, trim = TRUE, linewidth = 0.5)
+    } else {
+      g <- g + geom_violin(aes(fill = group), color = NA, alpha = 0.25, width = 0.85, trim = TRUE) +
+        scale_fill_manual(values = gpal, guide = "none")
+    }
+    if (input$show_points) {
+      if (superplot)
+        g <- g + geom_jitter(aes(color = replicate), width = 0.09, height = 0, size = 1.5, alpha = 0.5)
+      else
+        g <- g + geom_jitter(color = gpal[1], width = 0.09, height = 0, size = 1.5, alpha = 0.45)
+    }
+    if (superplot) {
+      rm <- rep_means()
+      g <- g +
+        stat_summary(data = rm, aes(group, value), fun.data = mean_se, geom = "errorbar",
+                     width = 0, linewidth = 0.7, color = "#12211d") +
+        stat_summary(data = rm, aes(group, value), fun = mean, geom = "crossbar",
+                     width = 0.34, linewidth = 0.7, color = "#12211d", fatten = 0) +
+        geom_point(data = rm, aes(group, value, fill = replicate), shape = 21,
+                   size = 4.2, color = "#12211d", stroke = 0.9) +
+        scale_fill_manual(values = REP_PALETTE, name = "plate") +
+        scale_color_manual(values = REP_PALETTE, name = "plate")
+    } else {
+      # no replicates: a THIN, unfilled box (median + IQR) — lines only, not a filled rectangle
+      g <- g + geom_boxplot(width = 0.12, outlier.shape = NA, fill = NA,
+                            color = "#33413c", linewidth = 0.5)
+    }
+    g <- g +
       labs(title = if (nchar(input$title)) input$title else NULL,
            y = if (nchar(input$ylab)) input$ylab else metric_name(),
            x = if (nchar(input$xlab)) input$xlab else NULL) +
       theme_classic(base_size = 14) +
-      theme(legend.position = "none", plot.title = element_text(face = "bold"))
+      theme(plot.title = element_text(face = "bold"),
+            legend.position = if (superplot) "right" else "none",
+            axis.line = element_line(linewidth = 0.6, color = "#33413c"),
+            axis.ticks = element_line(linewidth = 0.6, color = "#33413c"))
     if (input$log_y) g <- g + scale_y_log10()
     if (input$show_sig) {
       st <- stat_test()

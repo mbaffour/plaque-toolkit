@@ -63,9 +63,12 @@ A ready‑to‑copy **`TEMPLATE.csv`** and two worked **`example_data_*.csv`** f
 
 For each run (both tools produce the same things):
 
-- **A violin plot** — density violin + IQR box + median, individual **plaque points**, the **plate
-  means as large diamonds** (so the real experimental unit is visible), the group **mean**, and
-  **significance brackets**. Colour‑blind‑safe (Okabe–Ito) by default and fully customizable.
+- **A violin plot in the _Violin SuperPlot_ style** (Lord *et al.* 2020, *J Cell Biol*; Kenny &
+  Schoen 2021, *Mol Biol Cell*) — the convention used in current top‑journal papers: a soft,
+  **neutral‑grey violin** for the distribution, individual **plaque points coloured by plate**, the
+  **plate means as large outlined markers**, and the summary drawn as **mean ± SEM of the plate
+  means** (the value the statistics actually use). **No boxes.** Colour‑blind‑safe, minimal
+  Nature‑style axes (only left/bottom spines), and fully customizable.
 - **`summary_by_group.csv`** — n plaques, n plates, mean, SD, SEM, 95% CI, median, Q1/Q3, IQR,
   min/max, CV%.
 - **`summary_by_replicate.csv`** — the per‑plate means (what the stats use).
@@ -104,6 +107,7 @@ Common options (everything is also settable from a JSON `--config`):
 | `--order T4,T7,lambda` | x‑axis order |
 | `--palette "#0072B2,#E69F00,#009E73"` | custom colours |
 | `--annotate auto\|all\|adjacent\|none` | which pairs get significance brackets |
+| `--violin-fill auto\|neutral\|group` | violin fill (default `auto`: neutral grey in SuperPlot mode) |
 | `--formats png,svg,pdf,tiff` | which figure formats to write |
 | `--title / --ylabel / --xlabel / --width / --height / --dpi / --log-y / --no-points / --no-box / --theme` | figure customization |
 
@@ -152,6 +156,16 @@ non‑parametric family if either fails. Significance stars: `*** p<0.001, ** p<
 - **Customizable:** palette, group order, labels/title, show/hide points·box·mean·brackets, log axis,
   figure size and dpi, statistical unit and test family — all exposed in both tools.
 - **Editable output:** SVG/PDF keep text as text for final tweaks in a vector editor.
+
+---
+
+## References (the visual scheme & stats)
+
+- Lord SJ, Velle KB, Mullins RD, Fritz‑Laylin LK. **SuperPlots: Communicating reproducibility and
+  variability in cell biology.** *J Cell Biol* 2020;219(6):e202001064. doi:10.1083/jcb.202001064
+- Kenny M, Schoen I. **Violin SuperPlots: visualizing replicate heterogeneity in large data sets.**
+  *Mol Biol Cell* 2021;32(15):1333–1334. doi:10.1091/mbc.E21‑03‑0130
+- Okabe M, Ito K. *Color Universal Design* (the colour‑blind‑safe qualitative palette).
 
 ---
 

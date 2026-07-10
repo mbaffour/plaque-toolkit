@@ -56,9 +56,22 @@ from scipy import stats as st
 
 __version__ = "1.0.0"
 
-# Okabe–Ito colour-blind-safe qualitative palette (the publication default)
+# Okabe–Ito colour-blind-safe qualitative palette (the publication default, for the group violins)
 OKABE_ITO = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9",
              "#D55E00", "#F0E442", "#999999", "#000000"]
+
+# muted qualitative palette for REPLICATES (plates): SuperPlot points + plate-mean markers are
+# coloured by plate, so plate-to-plate structure is visible (Lord et al. 2020; Kenny & Schoen 2021)
+REP_PALETTE = ["#4C6E9C", "#E0A458", "#6AAA64", "#B65C5C", "#8A78B0",
+               "#4FA3A5", "#C77CB5", "#9A8C6B", "#6C6C6C"]
+
+
+def _darken(hexc, f=0.62):
+    hexc = str(hexc).lstrip("#")
+    if len(hexc) != 6:
+        return "#33413c"
+    r, g, b = (int(hexc[i:i + 2], 16) for i in (0, 2, 4))
+    return "#%02x%02x%02x" % (int(r * f), int(g * f), int(b * f))
 
 DEFAULTS = {
     "group": "group", "value": None, "replicate": "replicate", "metric": "metric",
@@ -71,7 +84,7 @@ DEFAULTS = {
     "show_points": True, "show_box": True, "show_mean": True,
     "log_y": False, "width": 8.0, "height": 5.2, "dpi": 300,
     "point_size": 16.0, "jitter": 0.08, "violin_alpha": 0.55, "seed": 7,
-    "formats": ["png", "svg", "pdf"], "theme": "clean",
+    "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
 }
 
 
@@ -294,51 +307,78 @@ def run_stats(df, order, unit, parametric):
 
 
 # ----------------------------------------------------------------------- plotting
-def _theme(ax, opts):
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.tick_params(labelsize=11)
-    if opts["theme"] == "grid":
-        ax.yaxis.grid(True, color="#e6e6e6", lw=0.9)
-        ax.set_axisbelow(True)
+def _style_axes(ax, opts):
+    """Minimal, journal-style axes: only left + bottom spines, thin, tidy ticks."""
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_linewidth(0.9); ax.spines[s].set_color("#33413c")
+    ax.tick_params(width=0.9, color="#33413c", length=4, labelsize=11)
+    if opts.get("theme") == "grid":
+        ax.yaxis.grid(True, color="#ececec", lw=0.8); ax.set_axisbelow(True)
 
 
 def plot_violin(df, order, opts, metric_name, posthoc):
+    """Violin SuperPlot (Lord et al. 2020; Kenny & Schoen 2021): soft group-coloured violins,
+    plaque points and plate means coloured by plate, summary = mean ± SEM of the plate means.
+    No boxes — the plate means ARE the summary. Falls back to violin + median/IQR with no replicates."""
     plt.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42,
-                         "font.size": 12, "font.family": "sans-serif"})
+                         "font.size": 12, "font.family": "sans-serif", "axes.linewidth": 0.9})
     rng = np.random.default_rng(opts["seed"])
     fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
-    pal = opts["palette"]
+    gpal = opts["palette"]
     rm = replicate_means(df)
+    reps = sorted(df["replicate"].dropna().unique().tolist()) if rm is not None else []
+    rcol = {r: REP_PALETTE[i % len(REP_PALETTE)] for i, r in enumerate(reps)}
 
     data = [df.loc[df["group"] == g, "value"].values for g in order]
     pos = np.arange(1, len(order) + 1)
 
-    parts = ax.violinplot(data, positions=pos, showextrema=False, widths=0.82)
+    vfill = opts.get("violin_fill", "auto")
+    neutral = (vfill == "neutral") or (vfill == "auto" and rm is not None)  # grey when points carry plate colour
+    parts = ax.violinplot(data, positions=pos, showextrema=False, widths=0.80)
     for i, b in enumerate(parts["bodies"]):
-        b.set_facecolor(pal[i % len(pal)]); b.set_edgecolor("#33413c")
-        b.set_alpha(opts["violin_alpha"]); b.set_linewidth(1.0)
+        if neutral:
+            b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(0.38)
+        else:
+            c = gpal[i % len(gpal)]
+            b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(0.22)
+        b.set_linewidth(0.9)
+        verts = b.get_paths()[0].vertices                 # trim the violin to the data range
+        verts[:, 1] = np.clip(verts[:, 1], float(np.min(data[i])), float(np.max(data[i])))
 
     for i, g in enumerate(order):
-        v = data[i]; x0 = pos[i]; col = pal[i % len(pal)]
-        if opts["show_box"]:
+        v = data[i]; x0 = pos[i]; c = gpal[i % len(gpal)]
+        sub = df[df["group"] == g]
+        if rm is not None:                                # ---------- Violin SuperPlot ----------
+            if opts["show_points"]:
+                for r in reps:
+                    vv = sub.loc[sub["replicate"] == r, "value"].values
+                    if not len(vv):
+                        continue
+                    jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(vv))
+                    ax.scatter(jx, vv, s=opts["point_size"], color=rcol[r], alpha=0.45,
+                               edgecolor="none", zorder=3)
+            gm = rm[rm["group"] == g]
+            jx = (x0 + np.linspace(-0.05, 0.05, len(gm))) if len(gm) > 1 else np.array([float(x0)])
+            ax.scatter(jx, gm["value"].values, s=opts["point_size"] * 5.5,
+                       c=[rcol[r] for r in gm["replicate"]], edgecolor="#12211d",
+                       linewidth=0.9, zorder=6)
+            m = float(gm["value"].mean())
+            sem = float(gm["value"].sem()) if len(gm) > 1 else 0.0
+            ax.plot([x0 - 0.19, x0 + 0.19], [m, m], color="#12211d", lw=2.0,
+                    solid_capstyle="round", zorder=7)
+            if sem:
+                ax.plot([x0, x0], [m - sem, m + sem], color="#12211d", lw=1.1, zorder=7)
+        else:                                             # -------- no replicates: median/IQR --------
+            if opts["show_points"]:
+                jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
+                ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3)
             q1, med, q3 = np.percentile(v, [25, 50, 75])
-            ax.add_patch(plt.Rectangle((x0 - 0.055, q1), 0.11, q3 - q1,
-                         fill=True, fc="white", ec="#33413c", lw=1.1, zorder=4, alpha=0.9))
-            ax.plot([x0 - 0.055, x0 + 0.055], [med, med], color="#33413c", lw=1.6, zorder=5)
-        if opts["show_points"]:
-            jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
-            ax.scatter(jx, v, s=opts["point_size"], color=col, edgecolor="white",
-                       linewidth=0.4, alpha=0.55, zorder=3)
-        if rm is not None:                                # emphasise per-plate (replicate) means
-            mv = rm.loc[rm["group"] == g, "value"].values
-            jx = x0 + rng.uniform(-0.05, 0.05, size=len(mv))
-            ax.scatter(jx, mv, s=opts["point_size"] * 3.2, marker="D", color=col,
-                       edgecolor="#12211d", linewidth=1.0, zorder=6)
-        if opts["show_mean"]:
-            ax.plot([x0 - 0.11, x0 + 0.11], [np.mean(v)] * 2, color="#c0392b", lw=2.0, zorder=7)
+            ax.plot([x0, x0], [q1, q3], color="#33413c", lw=1.4, zorder=5)
+            ax.plot([x0 - 0.10, x0 + 0.10], [med, med], color="#12211d", lw=2.2, zorder=6)
 
-    ax.set_xticks(pos); ax.set_xticklabels(order, fontsize=12)
+    ax.set_xticks(pos); ax.set_xticklabels(order)
     ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13)
     if opts["xlabel"]:
         ax.set_xlabel(opts["xlabel"], fontsize=13)
@@ -346,23 +386,28 @@ def plot_violin(df, order, opts, metric_name, posthoc):
         ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left")
     if opts["log_y"]:
         ax.set_yscale("log")
-    _theme(ax, opts)
+    _style_axes(ax, opts)
 
-    # significance brackets
+    if rm is not None and opts.get("legend", True) and reps:
+        from matplotlib.lines import Line2D
+        handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=rcol[r],
+                          markeredgecolor="#12211d", markersize=7, label=str(r)) for r in reps]
+        ax.legend(handles=handles, title="plate", frameon=False, fontsize=9, title_fontsize=9,
+                  loc="upper left", bbox_to_anchor=(1.005, 1.0), handletextpad=0.3, borderaxespad=0.2)
+
     pairs = _pairs_to_annotate(order, posthoc, opts["annotate"])
     if pairs:
-        ymax = max(np.max(v) for v in data)
-        ymin = min(np.min(v) for v in data)
-        span = (ymax - ymin) or 1.0
-        step = span * 0.09
-        lvl = ymax + step * 0.6
+        ymax = max(np.max(v) for v in data); ymin = min(np.min(v) for v in data)
+        span = (ymax - ymin) or 1.0; step = span * 0.085
+        lvl = ymax + step * 0.7
         for (a, b) in pairs:
             i, j = order.index(a), order.index(b)
             x1, x2 = pos[i], pos[j]
-            ax.plot([x1, x1, x2, x2], [lvl, lvl + step * 0.25, lvl + step * 0.25, lvl],
-                    lw=1.2, color="#33413c")
-            ax.text((x1 + x2) / 2, lvl + step * 0.28, stars(posthoc.get((a, b), posthoc.get((b, a)))),
-                    ha="center", va="bottom", fontsize=12)
+            ax.plot([x1, x1, x2, x2], [lvl, lvl + step * 0.22, lvl + step * 0.22, lvl],
+                    lw=1.0, color="#33413c")
+            ax.text((x1 + x2) / 2, lvl + step * 0.24,
+                    stars(posthoc.get((a, b), posthoc.get((b, a)))),
+                    ha="center", va="bottom", fontsize=11)
             lvl += step
         ax.set_ylim(top=lvl + step)
 
@@ -528,6 +573,7 @@ def build_args():
     p.add_argument("--unit", choices=["auto", "replicate", "plaque"])
     p.add_argument("--parametric", choices=["auto", "parametric", "nonparametric"])
     p.add_argument("--annotate", choices=["auto", "all", "adjacent", "none"])
+    p.add_argument("--violin-fill", dest="violin_fill", choices=["auto", "group", "neutral"])
     p.add_argument("--order", help="comma-separated group order")
     p.add_argument("--palette", help="comma-separated hex colours")
     p.add_argument("--title"); p.add_argument("--ylabel"); p.add_argument("--xlabel")
