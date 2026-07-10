@@ -200,6 +200,15 @@ def cohens_d(a, b):
     return float((np.mean(a) - np.mean(b)) / sp) if sp else np.nan
 
 
+def _eta_squared(groups_values):
+    """eta^2 effect size for one-way ANOVA = SS_between / SS_total."""
+    allv = np.concatenate([np.asarray(g, float) for g in groups_values])
+    grand = float(allv.mean())
+    ssb = sum(len(g) * (float(np.mean(g)) - grand) ** 2 for g in groups_values)
+    sst = float(np.sum((allv - grand) ** 2))
+    return float(ssb / sst) if sst else float("nan")
+
+
 def dunn(groups):
     """Dunn's post-hoc after Kruskal–Wallis, with tie correction; returns {(i,j): p_holm}."""
     labels = list(groups)
@@ -273,14 +282,31 @@ def run_stats(df, order, unit, parametric):
     vals = [v for v in groups.values() if len(v) >= 2]
     levene_p = float(st.levene(*vals).pvalue) if len(vals) >= 2 else np.nan
     all_normal = all((p != p) or p > 0.05 for p in normal.values())
+    min_n = min(ns.values()) if ns else 0
     if parametric == "auto":
-        use_param = bool(all_normal and (levene_p != levene_p or levene_p > 0.05))
+        # At small replicate n (the usual case: ~3 plates) Shapiro–Wilk is uninformative AND
+        # non-parametric tests are underpowered — Mann–Whitney cannot reach p<0.05 at 3 vs 3, and
+        # Kruskal–Wallis p is floored/approximate at small N. So default to PARAMETRIC on the plate
+        # means, as SuperPlots recommend (Lord et al. 2020; Kenny & Schoen 2021); only let the
+        # Shapiro/Levene checks pick non-parametric once there are enough replicates for them to mean
+        # something (>=8 per group).
+        use_param = True if min_n < 8 else bool(all_normal and (levene_p != levene_p or levene_p > 0.05))
     else:
         use_param = (parametric == "parametric")
 
+    warns = []
+    if unit == "plaque":
+        warns.append("Statistical unit is the PLAQUE, not the plate: plaques from the same plate are not "
+                     "independent (pseudoreplication), so p-values are anti-conservative. Add a "
+                     "'replicate' (plate) column and use --unit replicate.")
+    if not use_param and min_n < 4:
+        warns.append("Non-parametric test with <4 per group: significance can be UNREACHABLE "
+                     "(Mann–Whitney floor p=0.10 at 3 vs 3) or floored/approximate (Kruskal–Wallis at "
+                     "small N). With few plates prefer a parametric test on the plate means.")
+
     k = len(order)
-    omni = {"unit": unit, "n_per_group": ns, "levene_p": levene_p,
-            "normality_p": normal, "parametric_used": use_param}
+    omni = {"unit": unit, "n_per_group": ns, "min_n": min_n, "levene_p": levene_p,
+            "normality_p": normal, "parametric_used": use_param, "warnings": warns}
     if k == 2:
         a, b = groups[order[0]], groups[order[1]]
         omni["test"] = "Welch t-test" if use_param else "Mann–Whitney U"
@@ -296,10 +322,15 @@ def run_stats(df, order, unit, parametric):
         if use_param:
             omni["test"] = "one-way ANOVA"
             omni["p"] = float(st.f_oneway(*gv).pvalue)
+            omni["effect"] = {"eta_squared": _eta_squared(gv)}
             posthoc = tukey(groups)
         else:
+            hres = st.kruskal(*gv)
+            N = sum(len(x) for x in gv)
             omni["test"] = "Kruskal–Wallis"
-            omni["p"] = float(st.kruskal(*gv).pvalue)
+            omni["p"] = float(hres.pvalue)
+            omni["effect"] = {"epsilon_squared": float((hres.statistic - k + 1) / (N - k))
+                              if N > k else float("nan")}
             posthoc = dunn(groups)
     else:
         omni["test"] = "n/a (need ≥2 groups)"; omni["p"] = np.nan; posthoc = {}
@@ -445,8 +476,16 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
              + ("  _(per-plate means — avoids pseudoreplication)_" if unit == "replicate"
                 else "  _(per-plaque — no replicate column, so plates are pooled;"
                      " treat with caution)_") + "\n")
-    L.append(f"- **Omnibus test:** {omni['test']}, p = {_fmt_p(omni['p'])}"
-             f" (parametric={omni['parametric_used']}, Levene p={_fmt_p(omni['levene_p'])})\n")
+    L.append("- **Omnibus test:** %s, p = %s (parametric=%s, unit n = %d per group, Levene p=%s)\n"
+             % (omni["test"], _fmt_p(omni["p"]), omni["parametric_used"],
+                omni.get("min_n", 0), _fmt_p(omni["levene_p"])))
+    eff = omni.get("effect", {})
+    if eff:
+        ek, ev = next(iter(eff.items()))
+        if ev == ev:
+            L.append("- **Effect size:** %s = %.3f\n" % (ek.replace("_", " "), ev))
+    for w in omni.get("warnings", []):
+        L.append("- ⚠️ **%s**\n" % w)
     if posthoc:
         L.append("\n**Pairwise (adjusted p):**\n")
         rows = [{"pair": f"{a} vs {b}", "p_adj": _fmt_p(p), "signif": stars(p)}
@@ -470,9 +509,24 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
                     g2["group"], g2["mean"], g2["sd"], _n(g2),
                     omni["test"], _fmt_p(omni["p"]), d_txt))
     else:
+        unit_note = ("the plate is the experimental unit" if unit == "replicate"
+                     else "NOTE: unit = plaque — pseudoreplication, add plate replicates")
         L.append("> %s across %d groups: p = %s (statistical unit: %s; pairwise adjusted with "
-                 "Holm/Tukey). Values are mean ± SD; the plate is the experimental unit."
-                 % (omni["test"], len(summ), _fmt_p(omni["p"]), unit))
+                 "Holm/Tukey). Values are mean ± SD; %s."
+                 % (omni["test"], len(summ), _fmt_p(omni["p"]), unit, unit_note))
+
+    L.append("\n## Assumptions & limitations\n")
+    L.append("- **Experimental unit:** %s — %s." % (
+        unit, "per-plate means, the biological replicate (correct)" if unit == "replicate"
+        else "per plaque; plaques on a plate are NOT independent — add a replicate/plate column"))
+    L.append("- **Test choice:** %s. With **< 8 replicates per group** the tool uses a *parametric* test "
+             "on the plate means — Shapiro–Wilk is unreliable and non-parametric tests are underpowered at "
+             "small n (Mann–Whitney cannot reach p<0.05 at 3 vs 3); this follows SuperPlots (Lord et al. "
+             "2020). Override with `--parametric`." % omni["test"])
+    L.append("- **Replicates per group:** min = %d. Aim for ≥ 3 plates; more plates = more power."
+             % omni.get("min_n", 0))
+    for w in omni.get("warnings", []):
+        L.append("- ⚠️ %s" % w)
     open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
 
 
@@ -556,6 +610,8 @@ def run(args):
                               "pandas": pd.__version__, "scipy": scipy.__version__}})
     with open(os.path.join(out, "run_config.json"), "w") as fh:
         json.dump(prov, fh, indent=2)
+    for w in omni.get("warnings", []):
+        print("[warn] " + w)
     print(f"[done] {metric}: {omni['test']} p={_fmt_p(omni['p'])} (unit={unit}) -> {os.path.abspath(out)}")
 
 

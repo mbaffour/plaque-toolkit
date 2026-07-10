@@ -193,12 +193,16 @@ server <- function(input, output, session) {
 
   use_param <- reactive({
     d <- test_dat()
+    min_n <- suppressWarnings(min(table(droplevels(factor(d$group)))))
     sh <- d %>% group_by(group) %>%
       summarise(p = tryCatch(shapiro.test(value)$p.value, error = function(e) NA_real_), .groups = "drop")
     lev <- tryCatch(rstatix::levene_test(d, value ~ group)$p, error = function(e) NA_real_)
     normal <- all(is.na(sh$p) | sh$p > 0.05)
-    if (input$param == "auto") normal && (is.na(lev) || lev > 0.05)
-    else input$param == "parametric"
+    if (input$param == "auto") {
+      # small replicate n -> parametric on plate means (Shapiro unreliable + non-parametric underpowered;
+      # Mann-Whitney can't reach p<0.05 at 3 vs 3). SuperPlots (Lord 2020; Kenny & Schoen 2021).
+      if (is.finite(min_n) && min_n < 8) TRUE else (normal && (is.na(lev) || lev > 0.05))
+    } else input$param == "parametric"
   })
 
   stat_test <- reactive({
@@ -321,10 +325,18 @@ server <- function(input, output, session) {
     datatable(as.data.frame(st)[, keep, drop = FALSE], options = list(dom = "t"))
   })
   output$omni <- renderText({
-    o <- omni_test()
-    sprintf("%s: p = %s  (unit: %s, parametric = %s)",
-            o$name, ifelse(is.na(o$p), "n/a", ifelse(o$p < 1e-3, "< 0.001", formatC(o$p, format = "f", digits = 3))),
-            use_unit(), isTRUE(o$param))
+    o <- omni_test(); u <- use_unit()
+    d <- test_dat(); min_n <- suppressWarnings(min(table(droplevels(factor(d$group)))))
+    msg <- sprintf("%s: p = %s  (unit: %s, parametric = %s, min n = %d/group)",
+                   o$name, ifelse(is.na(o$p), "n/a", ifelse(o$p < 1e-3, "< 0.001", formatC(o$p, format = "f", digits = 3))),
+                   u, isTRUE(o$param), ifelse(is.finite(min_n), min_n, 0))
+    warns <- character(0)
+    if (u == "plaque")
+      warns <- c(warns, "unit = plaque: pseudoreplication — add a plate/replicate column for a valid test.")
+    if (!isTRUE(o$param) && is.finite(min_n) && min_n < 4)
+      warns <- c(warns, "non-parametric with <4/group: p<0.05 may be unreachable (Mann-Whitney) or floored (Kruskal-Wallis).")
+    if (length(warns)) msg <- paste0(msg, "\n\nWARNINGS:\n- ", paste(warns, collapse = "\n- "))
+    msg
   })
   output$sentence <- renderText({
     d <- dat(); o <- omni_test(); s <- summ_group()
