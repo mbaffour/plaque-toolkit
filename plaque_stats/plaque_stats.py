@@ -650,16 +650,19 @@ def save_pairwise_table(unit_means, posthoc, path, metric, unit):
     rows = []
     for (a, b), p in posthoc.items():
         da, db = unit_means.get(a, float("nan")), unit_means.get(b, float("nan"))
-        rows.append([f"{a} vs {b}", "%.3g" % da, "%.3g" % db, "%+.3g" % (da - db),
+        rows.append([str(a), str(b), "%.3g" % da, "%.3g" % db, "%+.3g" % (da - db),
                      _fmt_p(p), stars(p)])
     if not rows:
         return
-    disp = pd.DataFrame(rows, columns=["Comparison", "mean A", "mean B", "Δ (A−B)", "p (adj)", "signif"])
+    disp = pd.DataFrame(rows, columns=["Sample A", "Sample B", "mean A", "mean B",
+                                       "Δ (A−B)", "p (adj)", "signif"])
     nrow = len(disp)
-    fig, ax = plt.subplots(figsize=(min(11, 2.2 + 0.95 * len(disp.columns)), 0.55 + 0.32 * (nrow + 1)))
+    fig, ax = plt.subplots(figsize=(min(12, 2.2 + 0.95 * len(disp.columns)), 0.75 + 0.32 * (nrow + 1)))
     ax.axis("off")
     ax.set_title("Pairwise comparisons — %s  (unit: %s)" % (metric, unit),
                  fontsize=11, fontweight="bold", loc="left", pad=12)
+    fig.text(0.5, 0.008, "Each row compares two SAMPLES (A vs B); every mean is averaged across all "
+             "plate replicates.  Δ = mean A − mean B.", ha="center", fontsize=8, color="#5b6a65")
     tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
                    loc="center", cellLoc="center")
     tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.3)
