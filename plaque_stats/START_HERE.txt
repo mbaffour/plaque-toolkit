@@ -1,0 +1,65 @@
+================================================================
+  Plaque Stats & Violins  -  Analysis Workspace
+================================================================
+
+Welcome! Drop your plaque measurements in, get publication-ready
+violin plots + statistics out. Everything runs on your own PC.
+
+----------------------------------------------------------------
+THE 3-STEP VERSION
+----------------------------------------------------------------
+1. Put your data file in the  data\  folder
+   (.csv / .tsv / .xlsx -- see data\README.txt for the format).
+2. Double-click  "Run Analysis App.bat"
+   -> your browser opens at  http://127.0.0.1:8000
+   -> upload your file (or click "Load example data"), pick the
+      group / plate / measurement columns, tweak options, download.
+3. Your figures + tables are saved in the  results\  folder.
+
+----------------------------------------------------------------
+THE LAUNCHERS  (just double-click)
+----------------------------------------------------------------
+Run Analysis App.bat
+    The friendly browser app (recommended). Opens
+    http://127.0.0.1:8000. Keep the black window open while you
+    work; close it (or press Ctrl+C) to stop the app.
+
+Make Example + Template Data.bat
+    Writes TEMPLATE.csv + two worked example CSVs into this folder
+    so you can see the exact data format the tools expect.
+
+Run CLI (example).bat
+    Runs a full analysis on the example data from the command line
+    and then opens the results\ folder. The window prints the exact
+    command so you can copy and adapt it for your own file.
+
+Run R App.bat
+    The same analysis, R version of the app (needs R + a few R
+    packages). If R isn't installed it just prints a friendly hint
+    -- the Python app above needs no R at all.
+
+----------------------------------------------------------------
+THE DATA FORMAT  (one row per plaque)
+----------------------------------------------------------------
+  group,replicate,diameter_mm,area_mm2,turbidity
+  T4,plate1,2.34,4.30,0.12
+  T7,plate1,1.80,2.54,0.62
+
+  group      = the sample / phage / condition (the x-axis groups)
+  replicate  = the plate (the experimental unit; stats run per-plate)
+  the rest   = your measurement columns; you choose which to plot
+
+A "long" shape (group,replicate,metric,value) works too -- both are
+auto-detected. Full details: data\README.txt and README.md.
+
+----------------------------------------------------------------
+WHERE PYTHON LIVES
+----------------------------------------------------------------
+The launchers use the Python inside the conda environment named
+'plaqueapp'. They find it automatically (with a conda / PATH
+fallback) -- you do NOT need to activate anything by hand, just
+double-click. If a launcher can't find Python, it tells you how to
+fix it (in short: the 'plaqueapp' env needs 'shiny' and 'openpyxl').
+
+Questions about options and statistics: see README.md.
+Happy plaque-measuring!

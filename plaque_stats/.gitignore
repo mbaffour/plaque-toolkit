@@ -1,5 +1,42 @@
 # generated output folders
+
 *_out/
-results/
+
 __pycache__/
+
+*.pyc
+
 .Rhistory
+
+
+
+# --- Friendly analysis workspace ---------------------------------------------
+
+# Ignore the CONTENTS of the drop folders, but KEEP the folders + their READMEs
+
+# (note: use data/* and results/* here, not the bare dir names, otherwise git
+
+#  cannot re-include the README.txt files below).
+
+data/*
+
+results/*
+
+!data/README.txt
+
+!results/README.txt
+
+
+
+# --- Build / packaging artifacts ---------------------------------------------
+
+build/
+
+dist/
+
+build_exe/build/
+
+build_exe/dist/
+
+*.egg-info/
+

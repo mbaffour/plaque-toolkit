@@ -1,0 +1,67 @@
+# pyproject.toml — makes the flat-layout Plaque Stats tool pip-installable
+# without moving or renaming any module. FLAT py-modules layout keeps
+#   import plaque_stats / import app_py
+# working byte-for-byte as before.
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plaque-stats"
+version = "1.0.0"
+description = "Publication-ready violin plots + statistics for grouped plaque measurements (CLI + Shiny web app)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Michael Baffour Awuah", email = "jrrmicrolab@gmail.com" }]
+keywords = ["plaque", "phage", "virology", "violin-plot", "statistics", "microbiology"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "pandas>=1.3",
+    "numpy>=1.21",
+    "matplotlib>=3.5",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+# Browser (Shiny for Python) app:  pip install plaque-stats[app]
+app = ["shiny>=1.0", "openpyxl"]
+# Read .xlsx/.xls input files:      pip install plaque-stats[excel]
+excel = ["openpyxl"]
+# Prettier Markdown tables in report.md
+tables = ["tabulate"]
+
+[project.scripts]
+# Command-line stats/plot tool  ->  plaque_stats.main()
+plaque-stats = "plaque_stats:main"
+# One-command launcher for the browser app  ->  plaque_stats_launch.main()
+plaque-stats-app = "plaque_stats_launch:main"
+
+# ---------------------------------------------------------------------------
+# FLAT layout: the three top-level modules are shipped as-is. No package dir,
+# no rename, no move — so every existing invocation keeps working.
+# ---------------------------------------------------------------------------
+[tool.setuptools]
+py-modules = ["plaque_stats", "app_py", "plaque_stats_launch"]
+include-package-data = true
+
+# Ship the data files inside the wheel. With a flat py-modules layout there is
+# no package to attach package-data to, so we install them as data-files under
+# the install prefix's share/ tree. plaque_stats_launch and app_py ALSO fall
+# back to regenerating them on the fly with plaque_stats.make_example(), so the
+# app's "Load example data" works even if this copy is absent (e.g. a minimal
+# or frozen install). The data-files entry is belt-and-suspenders, not required
+# for correctness.
+[tool.setuptools.data-files]
+"share/plaque_stats" = [
+    "TEMPLATE.csv",
+    "example_data_wide.csv",
+    "example_data_long.csv",
+    "app.R",
+]

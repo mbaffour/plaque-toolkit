@@ -158,6 +158,55 @@ shiny run --reload plaque_stats/app_py.py  # opens http://127.0.0.1:8000 in your
 Use whichever you prefer — **CLI** (batch/scriptable), **R‑Shiny** (`app.R`), or **Python‑Shiny**
 (`app_py.py`); all three read the same data format and give the same numbers.
 
+### A self‑contained analysis workspace (double‑click launchers)
+
+This folder is also a **stand‑alone analysis workspace** — drop data in, get figures out, no command
+line needed. Double‑click a launcher (each finds the `plaqueapp` conda Python automatically):
+
+| launcher | what it does |
+|---|---|
+| **`Run Analysis App.bat`** | opens the browser app at `http://127.0.0.1:8000` (recommended) |
+| **`Make Example + Template Data.bat`** | writes `TEMPLATE.csv` + the worked examples so you can see the format |
+| **`Run CLI (example).bat`** | runs a full analysis on the example data into `results\` and opens it |
+| **`Run R App.bat`** | launches the R‑Shiny version (needs R + its packages) |
+
+Put your file in **`data\`**, run the app, and your figures/tables land in **`results\`**.
+`START_HERE.txt` is the 3‑step quick‑start. Read `data\README.txt` for the format.
+
+### Install it as a command (pip)
+
+```bash
+pip install .            # from this folder;  add [app] for the browser app, [excel] for .xlsx
+plaque-stats --help                          # the CLI, from anywhere
+plaque-stats data.csv --value diameter_mm --replicate replicate --out results
+plaque-stats-app                             # launches the browser app + opens it
+```
+
+This keeps the flat layout, so `import plaque_stats`, `python plaque_stats.py …` and
+`shiny run app_py.py` all still work exactly as before.
+
+### Stand‑alone `.exe` (no Python needed)
+
+For a collaborator with **no Python at all**, freeze the browser app into a Windows executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build_exe\build_app.ps1
+# -> build_exe\dist\Plaque Stats App\Plaque Stats App.exe   (ship the whole folder)
+```
+
+Double‑clicking the `.exe` starts the app and opens it in the browser — zero setup. (One‑dir bundle,
+~400 MB; the deep‑learning stack the desktop app uses is excluded since the stats app never needs it.)
+
+### Keep the Downloads copy in sync
+
+A stand‑alone copy for day‑to‑day analysis lives in `C:\Users\mbaff\Downloads\Plaque Stats Analysis`.
+After changing the code here, refresh it (your dropped `data\` and generated `results\` in the copy are
+never deleted):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File sync_to_downloads.ps1
+```
+
 ---
 
 ## 4. The statistics (and why plate‑level)

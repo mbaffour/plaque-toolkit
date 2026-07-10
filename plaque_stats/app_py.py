@@ -12,6 +12,8 @@
 # ---------------------------------------------------------------------------------------------
 import io
 import os
+import sys
+import tempfile
 
 import pandas as pd
 import matplotlib
@@ -23,6 +25,37 @@ from shiny import App, ui, render, reactive, req
 import plaque_stats as ps          # the shared engine (same code as the CLI)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _example_wide_path():
+    """Locate example_data_wide.csv, regenerating it if necessary.
+
+    Search order (robust across source / editable / wheel / frozen installs):
+      1. next to this module (source & editable installs),
+      2. a dir advertised by the launcher via PLAQUE_STATS_EXAMPLE_DIR,
+      3. the install prefix's share/plaque_stats (data-files from the wheel),
+      4. as a last resort, generate it fresh with ps.make_example() into a
+         temp dir and read from there.
+    """
+    candidates = [HERE]
+    env_dir = os.environ.get("PLAQUE_STATS_EXAMPLE_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    candidates.append(os.path.join(sys.prefix, "share", "plaque_stats"))
+    if getattr(sys, "_MEIPASS", None):
+        candidates.append(sys._MEIPASS)
+    for d in candidates:
+        p = os.path.join(d, "example_data_wide.csv")
+        if os.path.exists(p):
+            return p
+    # Fallback: generate on the fly into a stable temp dir.
+    tmp = os.path.join(tempfile.gettempdir(), "plaque_stats_example")
+    os.makedirs(tmp, exist_ok=True)
+    p = os.path.join(tmp, "example_data_wide.csv")
+    if not os.path.exists(p):
+        ps.make_example(tmp)
+    return p
+
 
 FORMAT_HELP = """
 <h4>Input data format (one row per plaque)</h4>
@@ -119,12 +152,10 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.load_example)
     def _load_example():
-        p = os.path.join(HERE, "example_data_wide.csv")
-        if os.path.exists(p):
-            raw.set(pd.read_csv(p))
-        else:
-            ui.notification_show("example_data_wide.csv not found — run "
-                                 "'python plaque_stats.py --make-example'", type="warning")
+        try:
+            raw.set(pd.read_csv(_example_wide_path()))
+        except Exception as e:                                  # noqa: BLE001
+            ui.notification_show(f"Could not load example data: {e}", type="warning")
 
     @render.ui
     def col_pickers():
