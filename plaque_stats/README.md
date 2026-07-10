@@ -74,6 +74,8 @@ For each run (both tools produce the same things):
 - **`summary_by_replicate.csv`** — the per‑plate means (what the stats use).
 - **`stats_table_<metric>.png`** — a rendered, slide‑ready **descriptive‑statistics table** (n, plates,
   mean, SD, SEM, 95% CI, median, IQR, CV%).
+- **`pairwise_table_<metric>.png`** + **`pairwise_tests_<metric>.csv`** — every pairwise comparison with
+  the **magnitude** (Δ of the group means) and the **adjusted p‑value** + significance stars.
 - **Statistics** — an omnibus test + pairwise post‑hoc (see §4), with effect sizes.
 - **`report.md`** — a plain‑language summary **and a paste‑ready Methods/Results sentence**.
 - **`run_config.json`** — every setting + package versions, for reproducibility.
@@ -111,10 +113,11 @@ Common options (everything is also settable from a JSON `--config`):
 | `--unit auto\|replicate\|plaque` | statistical unit (default `auto` → per‑plate when replicates exist) |
 | `--parametric auto\|parametric\|nonparametric` | force a test family (default `auto`, chosen from normality + Levene) |
 | `--order T4,T7,lambda` | x‑axis order |
-| `--palette "#0072B2,#E69F00,#009E73"` | custom colours |
+| `--palette okabe\|set2\|tab10\|warm\|cool\|grays` or `"#hex,#hex,…"` | a named colour theme, or your own per‑sample colours |
 | `--annotate auto\|all\|adjacent\|none` | which pairs get significance brackets |
 | `--violin-fill auto\|neutral\|group` | violin fill (default `auto`: neutral grey in SuperPlot mode; use `group` + `--palette` to colour each sample differently) |
-| `--center mean\|median` | group centre marker: mean ± SEM (default) or median + IQR of the plate means |
+| `--center mean\|median` | group centre marker (default mean) |
+| `--error sd\|sem\|ci95\|iqr\|none` | error bar on the centre marker (auto: SEM for mean, IQR for median) |
 | `--frame` | draw a full box/frame around the plot (all four spines) |
 | `--no-n` | hide the `n = …` plaque‑count labels on top of each group |
 | `--no-stats-table` | skip the rendered descriptive‑stats table PNG |

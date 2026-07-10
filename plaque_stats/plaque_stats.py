@@ -85,7 +85,18 @@ DEFAULTS = {
     "log_y": False, "width": 8.0, "height": 5.2, "dpi": 300,
     "point_size": 16.0, "jitter": 0.08, "violin_alpha": 0.55, "seed": 7,
     "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
-    "show_n": True, "center": "mean", "frame": False, "stats_table": True,
+    "show_n": True, "center": "mean", "error": "auto", "frame": False, "stats_table": True,
+}
+
+# named colour themes for --palette (or pass your own comma-separated hex list)
+PALETTES = {
+    "okabe": OKABE_ITO,
+    "set2": ["#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3"],
+    "tab10": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2",
+              "#7f7f7f", "#bcbd22", "#17becf"],
+    "warm": ["#B4451F", "#D98032", "#E9B44C", "#9B2226", "#CA6702", "#BB3E03", "#AE2012", "#EE9B00"],
+    "cool": ["#3D5A80", "#5E8B9E", "#98C1D9", "#293241", "#4C6E9C", "#6AAA9E", "#5C7AA0", "#7FB3C9"],
+    "grays": ["#4d4d4d", "#7f7f7f", "#a6a6a6", "#c9c9c9", "#2b2b2b", "#8f8f8f", "#606060", "#b8b8b8"],
 }
 
 
@@ -345,14 +356,20 @@ def run_stats(df, order, unit, parametric):
 
 
 # ----------------------------------------------------------------------- plotting
-def _center_spread(vals, kind):
-    """Return (centre, low, high) for the group-summary marker: mean±SEM or median+IQR."""
-    v = np.asarray(vals, float)
-    if kind == "median":
-        return float(np.median(v)), float(np.percentile(v, 25)), float(np.percentile(v, 75))
-    c = float(np.mean(v))
-    sem = float(st.sem(v)) if len(v) > 1 else 0.0
-    return c, c - sem, c + sem
+def _center_spread(vals, center, error="auto"):
+    """Return (centre, low, high) for the group marker.
+    centre = mean|median; error bar = sd|sem|ci95|iqr|none (auto → sem for mean, iqr for median)."""
+    v = np.asarray(vals, float); n = len(v)
+    cen = float(np.median(v)) if center == "median" else float(np.mean(v))
+    if error == "auto":
+        error = "iqr" if center == "median" else "sem"
+    if error == "none" or n < 2:
+        return cen, cen, cen
+    if error == "iqr":
+        return cen, float(np.percentile(v, 25)), float(np.percentile(v, 75))
+    sd = float(np.std(v, ddof=1)); sem = sd / math.sqrt(n)
+    half = sd if error == "sd" else (sem * st.t.ppf(0.975, n - 1) if error == "ci95" else sem)
+    return cen, cen - half, cen + half
 
 
 def _style_axes(ax, opts):
@@ -413,7 +430,8 @@ def plot_violin(df, order, opts, metric_name, posthoc):
             ax.scatter(jx, gm["value"].values, s=opts["point_size"] * 5.5,
                        c=[rcol[r] for r in gm["replicate"]], edgecolor="#12211d",
                        linewidth=0.9, zorder=6)
-            cen, lo, hi = _center_spread(gm["value"].values, opts.get("center", "mean"))
+            cen, lo, hi = _center_spread(gm["value"].values, opts.get("center", "mean"),
+                                         opts.get("error", "auto"))
             ax.plot([x0 - 0.19, x0 + 0.19], [cen, cen], color="#12211d", lw=2.0,
                     solid_capstyle="round", zorder=7)
             if hi > lo:
@@ -422,23 +440,16 @@ def plot_violin(df, order, opts, metric_name, posthoc):
             if opts["show_points"]:
                 jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
                 ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3)
-            cen, lo, hi = _center_spread(v, opts.get("center", "mean"))
+            cen, lo, hi = _center_spread(v, opts.get("center", "mean"), opts.get("error", "auto"))
             ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
             ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
 
     ax.set_xticks(pos); ax.set_xticklabels(order)
-    if opts.get("show_n", True):                       # n plaques on top of each group
-        import matplotlib.transforms as mtransforms
-        tr = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
-        for i, g in enumerate(order):
-            ax.text(pos[i], 1.008, "n = %d" % len(data[i]), transform=tr, ha="center",
-                    va="bottom", fontsize=8.5, color="#5b6a65")
     ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13)
     if opts["xlabel"]:
         ax.set_xlabel(opts["xlabel"], fontsize=13)
     if opts["title"]:
-        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left",
-                     pad=22 if opts.get("show_n", True) else 8)   # clear the n = … row
+        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left", pad=8)
     if opts["log_y"]:
         ax.set_yscale("log")
     _style_axes(ax, opts)
@@ -465,6 +476,15 @@ def plot_violin(df, order, opts, metric_name, posthoc):
                     ha="center", va="bottom", fontsize=11)
             lvl += step
         ax.set_ylim(top=lvl + step)
+
+    if opts.get("show_n", True):                        # n = … labels INSIDE the box, near the top
+        import matplotlib.transforms as mtransforms
+        y0, y1 = ax.get_ylim()
+        ax.set_ylim(top=y1 + (y1 - y0) * 0.06)          # headroom so labels sit above the data
+        tr = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+        for i in range(len(order)):
+            ax.text(pos[i], 0.983, "n = %d" % len(data[i]), transform=tr, ha="center",
+                    va="top", fontsize=8.5, color="#5b6a65")
 
     fig.tight_layout()
     return fig
@@ -625,6 +645,38 @@ def save_stats_table(summ, path, metric, unit):
     plt.close(fig)
 
 
+def save_pairwise_table(unit_means, posthoc, path, metric, unit):
+    """Render the pairwise comparison table (Δ magnitude + adjusted p) as a PNG."""
+    rows = []
+    for (a, b), p in posthoc.items():
+        da, db = unit_means.get(a, float("nan")), unit_means.get(b, float("nan"))
+        rows.append([f"{a} vs {b}", "%.3g" % da, "%.3g" % db, "%+.3g" % (da - db),
+                     _fmt_p(p), stars(p)])
+    if not rows:
+        return
+    disp = pd.DataFrame(rows, columns=["Comparison", "mean A", "mean B", "Δ (A−B)", "p (adj)", "signif"])
+    nrow = len(disp)
+    fig, ax = plt.subplots(figsize=(min(11, 2.2 + 0.95 * len(disp.columns)), 0.55 + 0.32 * (nrow + 1)))
+    ax.axis("off")
+    ax.set_title("Pairwise comparisons — %s  (unit: %s)" % (metric, unit),
+                 fontsize=11, fontweight="bold", loc="left", pad=12)
+    tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
+                   loc="center", cellLoc="center")
+    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.3)
+    tbl.auto_set_column_width(range(len(disp.columns)))
+    sigc = list(disp.columns).index("signif")
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
+        if r == 0:
+            cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
+        elif r % 2 == 0:
+            cell.set_facecolor("#f6f9f7")
+        if r > 0 and c == sigc and disp.iloc[r - 1]["signif"] != "ns":
+            cell.set_text_props(fontweight="bold", color="#0a5c43")
+    fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
 # --------------------------------------------------------------------------- main
 def run(args):
     df, metric = normalize(read_table(args["data"]), args["group"], args["value"],
@@ -642,11 +694,17 @@ def run(args):
         rep.to_csv(os.path.join(out, f"summary_by_replicate_{mt}.csv"), index=False)
 
     omni, posthoc, unit, have_rep = run_stats(df, order, args["unit"], args["parametric"])
+    # group means on the analysis unit (plate means when unit=replicate) — the "magnitude" of differences
+    src = rep if (unit == "replicate" and rep is not None) else df
+    unit_means = src.groupby("group")["value"].mean().to_dict()
     tests = pd.DataFrame([{"test": omni["test"], "unit": unit, "p": omni["p"],
                            "parametric": omni["parametric_used"], "levene_p": omni["levene_p"]}])
     tests.to_csv(os.path.join(out, f"omnibus_test_{mt}.csv"), index=False)
     if posthoc:
-        pd.DataFrame([{"group_a": a, "group_b": b, "p_adj": p, "signif": stars(p)}
+        pd.DataFrame([{"group_a": a, "group_b": b,
+                       "mean_a": unit_means.get(a), "mean_b": unit_means.get(b),
+                       "mean_diff": unit_means.get(a, float("nan")) - unit_means.get(b, float("nan")),
+                       "p_adj": p, "signif": stars(p)}
                       for (a, b), p in posthoc.items()]).to_csv(
             os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
 
@@ -662,6 +720,9 @@ def run(args):
     write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
     if args.get("stats_table", True):
         save_stats_table(summ, os.path.join(out, f"stats_table_{mt}.png"), metric, unit)
+        if posthoc:
+            save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}.png"),
+                                metric, unit)
     prov = {k: v for k, v in args.items() if not k.startswith("_")}
     prov.update({"metric": metric, "groups": order, "unit": unit,
                  "versions": {"plaque_stats": __version__, "numpy": np.__version__,
@@ -689,7 +750,8 @@ def build_args():
     p.add_argument("--annotate", choices=["auto", "all", "adjacent", "none"])
     p.add_argument("--violin-fill", dest="violin_fill", choices=["auto", "group", "neutral"])
     p.add_argument("--order", help="comma-separated group order")
-    p.add_argument("--palette", help="comma-separated hex colours")
+    p.add_argument("--palette", help="named theme (okabe, set2, tab10, warm, cool, grays) "
+                                     "or comma-separated hex colours")
     p.add_argument("--title"); p.add_argument("--ylabel"); p.add_argument("--xlabel")
     p.add_argument("--formats", help="comma-separated: png,svg,pdf,tiff")
     p.add_argument("--width", type=float); p.add_argument("--height", type=float)
@@ -699,6 +761,8 @@ def build_args():
     p.add_argument("--no-box", dest="show_box", action="store_false")
     p.add_argument("--theme", choices=["clean", "grid"])
     p.add_argument("--center", choices=["mean", "median"], help="group summary marker (default mean)")
+    p.add_argument("--error", choices=["auto", "sd", "sem", "ci95", "iqr", "none"],
+                   help="error bar on the centre marker (auto: sem for mean, iqr for median)")
     p.add_argument("--no-n", dest="show_n", action="store_false", help="hide the n-plaques labels")
     p.add_argument("--frame", dest="frame", action="store_true", help="box the plot (all 4 spines)")
     p.add_argument("--no-stats-table", dest="stats_table", action="store_false",
@@ -720,6 +784,8 @@ def main(argv=None):
     for k, v in vars(ns).items():
         if v is not None and k not in ("config", "make_example"):
             args[k] = v
+    if isinstance(args.get("palette"), str) and args["palette"].strip().lower() in PALETTES:
+        args["palette"] = list(PALETTES[args["palette"].strip().lower()])   # named theme
     for listy in ("order", "palette", "formats"):
         if isinstance(args.get(listy), str):
             args[listy] = [x.strip() for x in args[listy].split(",") if x.strip()]

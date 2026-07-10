@@ -32,6 +32,26 @@ REP_PALETTE <- c("#4C6E9C", "#E0A458", "#6AAA64", "#B65C5C", "#8A78B0",
                  "#4FA3A5", "#C77CB5", "#9A8C6B", "#6C6C6C")
 med_iqr <- function(x) data.frame(y = median(x), ymin = quantile(x, .25, names = FALSE),
                                   ymax = quantile(x, .75, names = FALSE))
+PALETTES <- list(
+  okabe = OKABE_ITO,
+  set2  = c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3"),
+  tab10 = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"),
+  warm  = c("#B4451F", "#D98032", "#E9B44C", "#9B2226", "#CA6702", "#BB3E03", "#AE2012", "#EE9B00"),
+  cool  = c("#3D5A80", "#5E8B9E", "#98C1D9", "#293241", "#4C6E9C", "#6AAA9E", "#5C7AA0", "#7FB3C9"),
+  grays = c("#4d4d4d", "#7f7f7f", "#a6a6a6", "#c9c9c9", "#2b2b2b", "#8f8f8f", "#606060", "#b8b8b8"))
+
+# combined centre + error-bar summary for the plate means: mean|median with sd|sem|ci95|iqr|none
+summary_fun <- function(center, error) {
+  if (error == "auto") error <- if (center == "median") "iqr" else "sem"
+  function(x) {
+    n <- length(x); cen <- if (center == "median") median(x) else mean(x)
+    if (error == "iqr")
+      return(data.frame(y = cen, ymin = quantile(x, .25, names = FALSE), ymax = quantile(x, .75, names = FALSE)))
+    if (error == "none" || n < 2) return(data.frame(y = cen, ymin = cen, ymax = cen))
+    s <- sd(x); sem <- s / sqrt(n); half <- switch(error, sd = s, ci95 = sem * qt(.975, n - 1), sem)
+    data.frame(y = cen, ymin = cen - half, ymax = cen + half)
+  }
+}
 
 format_help <- function() {
   HTML(paste0(
@@ -66,7 +86,9 @@ ui <- fluidPage(
       selectInput("vfill", "Violin fill",
                   c("auto (grey when plates)" = "auto", "neutral grey" = "neutral",
                     "coloured by sample" = "group")),
-      selectInput("center", "Centre marker", c("mean ± SEM" = "mean", "median + IQR" = "median")),
+      selectInput("center", "Centre marker", c("mean" = "mean", "median" = "median")),
+      selectInput("error", "Error bar", c("auto" = "auto", "SD" = "sd", "SEM" = "sem",
+                                          "95% CI" = "ci95", "IQR" = "iqr", "none" = "none")),
       checkboxInput("show_n", "Show n on top", TRUE),
       checkboxInput("frame", "Box the plot (frame)", FALSE),
       checkboxInput("show_sig", "Significance brackets", TRUE),
@@ -76,7 +98,10 @@ ui <- fluidPage(
       textInput("ylab", "Y-axis label", ""),
       textInput("xlab", "X-axis label", ""),
       textInput("order", "Group order (comma-sep, optional)", ""),
-      textInput("palette", "Palette (comma-sep hex, optional)", ""),
+      selectInput("palette_name", "Colour theme",
+                  c("(custom hex below)" = "", "Okabe-Ito" = "okabe", "Set2" = "set2",
+                    "Tab10" = "tab10", "Warm" = "warm", "Cool" = "cool", "Grays" = "grays")),
+      textInput("palette", "Custom palette (comma-sep hex)", ""),
       sliderInput("width", "Figure width (in)", 4, 16, 8, 0.5),
       sliderInput("height", "Figure height (in)", 3, 12, 5.2, 0.2),
       numericInput("dpi", "PNG dpi", 300, 72, 1200, 50)
@@ -243,6 +268,9 @@ server <- function(input, output, session) {
   })
 
   palette_vec <- reactive({
+    if (!is.null(input$palette_name) && input$palette_name != "" &&
+        !is.null(PALETTES[[input$palette_name]]))
+      return(PALETTES[[input$palette_name]])
     p <- trimws(strsplit(input$palette, ",")[[1]]); p <- p[p != ""]
     if (length(p)) p else OKABE_ITO
   })
@@ -270,7 +298,7 @@ server <- function(input, output, session) {
     }
     if (superplot) {
       rm <- rep_means()
-      fdata <- if (input$center == "median") med_iqr else mean_se
+      fdata <- summary_fun(input$center, input$error)
       cfun  <- if (input$center == "median") stats::median else base::mean
       g <- g +
         stat_summary(data = rm, aes(group, value), fun.data = fdata, geom = "errorbar",
@@ -302,7 +330,7 @@ server <- function(input, output, session) {
     if (isTRUE(input$show_n)) {
       ns <- dplyr::count(d, group)
       g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = paste0("n = ", n)),
-                         vjust = -0.5, size = 3.1, color = "#5b6a65", inherit.aes = FALSE) +
+                         vjust = 1.4, size = 3.1, color = "#5b6a65", inherit.aes = FALSE) +
         coord_cartesian(clip = "off")
     }
     if (input$log_y) g <- g + scale_y_log10()
@@ -343,8 +371,13 @@ server <- function(input, output, session) {
   })
   output$pairwise <- renderDT({
     st <- stat_test(); if (is.null(st)) return(NULL)
-    keep <- intersect(c("group1", "group2", "p", "p.adj", "p.adj.signif", "statistic", "estimate"), names(st))
-    datatable(as.data.frame(st)[, keep, drop = FALSE], options = list(dom = "t"))
+    st <- as.data.frame(st)
+    d <- test_dat(); gm <- tapply(d$value, d$group, mean)
+    if (all(c("group1", "group2") %in% names(st)))
+      st$mean_diff <- round(as.numeric(gm[st$group1]) - as.numeric(gm[st$group2]), 4)
+    keep <- intersect(c("group1", "group2", "mean_diff", "estimate", "p", "p.adj",
+                        "p.adj.signif", "statistic"), names(st))
+    datatable(st[, keep, drop = FALSE], options = list(dom = "t"))
   })
   output$omni <- renderText({
     o <- omni_test(); u <- use_unit()
