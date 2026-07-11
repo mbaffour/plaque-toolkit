@@ -11,7 +11,10 @@ abstract: >-
 type: software
 version: 1.0.5
 date-released: '2026-07-09'
-license: Apache-2.0
+# The archived repository as a whole is AGPL-3.0: it includes the Full/Precise engine (built on
+# Ultralytics YOLO, AGPL-3.0) and the CC-BY-NC-SA 4.0 model weights. Our own source code and the
+# Light build are Apache-2.0. Full details: LICENSING.md.
+license: AGPL-3.0-or-later
 license-url: 'https://github.com/mbaffour/plaque-toolkit/blob/main/LICENSING.md'
 repository-code: 'https://github.com/mbaffour/plaque-toolkit'
 # TODO before you cite it in a paper:

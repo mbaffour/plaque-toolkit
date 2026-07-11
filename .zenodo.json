@@ -1,0 +1,51 @@
+{
+  "title": "Plaque Toolkit (\"Frankenstein's Plaque Lab\")",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "AGPL-3.0-or-later",
+  "description": "<p>A cross-platform desktop application for measuring bacteriophage plaque size and turbidity from Petri-dish photos. Built on the peer-reviewed Plaque Size Tool (Trofimova &amp; Jaschke, 2021), it adds a fused PST + PlaqSeg detector with an optional ResNet-18 precision gate, a manual-correction editor, millimetre calibration, batch processing, count/PFU, and optical-density turbidity comparison, plus a standalone statistics/violin analysis package.</p><p><strong>Licensing (see LICENSING.md):</strong> our own source code and the <em>Light</em> build are Apache-2.0; the <em>Full</em> build adds the Precise engine, which is AGPL-3.0 (built on Ultralytics YOLO) with model weights under CC BY-NC-SA 4.0 (NonCommercial). The repository as a whole is recorded here as AGPL-3.0.</p><p><strong>Validation status:</strong> only the Published engine reproduces a peer-reviewed method (Trofimova &amp; Jaschke, 2021). The in-house Current/Sensitive/Precise engines and the ResNet-18 classifier gate are validated locally by the authors on their own plates (see docs/VALIDATION_RESULTS.md), not independently or peer-reviewed. PlaqSeg is an external, pre-trained detector (OnePetri lineage), not trained here.</p>",
+  "keywords": [
+    "bacteriophage",
+    "phage",
+    "plaque assay",
+    "plaque size",
+    "image analysis",
+    "computer vision",
+    "microbiology",
+    "virology",
+    "turbidity",
+    "PlaqSeg",
+    "YOLO",
+    "ResNet"
+  ],
+  "creators": [
+    {
+      "name": "Baffour Awuah, Michael"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isDerivedFrom",
+      "scheme": "doi",
+      "identifier": "10.1016/j.virol.2021.05.011",
+      "resource_type": "publication-article"
+    },
+    {
+      "relation": "references",
+      "scheme": "doi",
+      "identifier": "10.1089/phage.2021.0012",
+      "resource_type": "publication-article"
+    },
+    {
+      "relation": "isDerivedFrom",
+      "scheme": "url",
+      "identifier": "https://github.com/ellinium/plaque_size_tool"
+    },
+    {
+      "relation": "isSupplementTo",
+      "scheme": "url",
+      "identifier": "https://github.com/mbaffour/plaque-toolkit"
+    }
+  ],
+  "notes": "TODO before publishing the release: add each author's ORCID and affiliation (here under \"creators\", or in the Zenodo form). Model weights derived from the OnePetri dataset are CC BY-NC-SA 4.0 (non-commercial); the archive contains a Git-LFS pointer for the .pt weights, not the binary — attach the real weights to the GitHub Release if the model must be reproducible from the archive."
+}

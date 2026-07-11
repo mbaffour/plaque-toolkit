@@ -40,15 +40,22 @@ locally, cite it. Roughly a day of work.
 - [ ] Keep the honest caveat: Sensitive/Precise are in-house, not independently validated.
 
 ### 5. Make the tool citable (get a DOI) — 4 clicks, do once
-1. On GitHub: **Releases → Draft a new release**, tag `v1.0.0`, publish.
+1. On GitHub: **Releases → Draft a new release**, tag to match `CITATION.cff` (currently **`v1.0.5`**), publish.
 2. Go to **https://zenodo.org** → log in with GitHub → **Settings → GitHub** → flip the switch **ON** for `mbaffour/plaque-toolkit`.
 3. (Zenodo only archives releases created *after* the switch is on — so create/re-publish the release *after* step 2.)
 4. Zenodo mints a **DOI**. Paste it into `CITATION.cff` (`doi:` line) and cite that DOI in your paper.
+
+> The repo ships a **`.zenodo.json`** that pre-fills the record (title, description, **AGPL‑3.0**
+> licence, keywords, and the PST + OnePetri citations); Zenodo reads it automatically on release.
+> Add your **ORCID + affiliation** there (or in the Zenodo form) before publishing. The model
+> weights are **Git‑LFS**, so the source tarball holds an LFS *pointer* — attach the real `.pt` to
+> the Release if the model must be reproducible straight from the archive.
+
 - [ ] DOI obtained and added to `CITATION.cff`.
 - [ ] Confirm author list + affiliations + ORCID iDs in `CITATION.cff`.
 
 ### 6. Data / code availability statement
-- [ ] “Analysis used Plaque Toolkit vX (DOI …), source at github.com/mbaffour/plaque-toolkit (Apache-2.0).”
+- [ ] “Analysis used Plaque Toolkit vX (DOI …), source at github.com/mbaffour/plaque-toolkit (AGPL‑3.0; the Light build is Apache‑2.0 — see LICENSING.md).”
 - [ ] Deposit the **raw plate images + your ground-truth labels + per-plate CSVs** (Zenodo/Figshare) so the figure is reproducible.
 
 ---
