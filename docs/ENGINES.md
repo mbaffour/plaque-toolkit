@@ -126,11 +126,14 @@ the model judges to be real plaques.
 
 - **Architecture / data:** a ResNet-18 trained on detector-union labels plus an independent
   vision ground-truth set and OnePetri real-phage data (15,659 boxes total).
-- **Performance:** leave-one-plate-out **F1 ≈ 0.96** on held-out plates.
+- **Performance:** leave-one-plate-out **F1 ≈ 0.95** on held-out plates.
 - **Opt-in, default OFF** (`PRECISE_CLF=1` or `run_precise.py --clf`) — so the validated,
   hand-tuned-contrast path is unchanged unless you ask for the gate.
-- **Validation status:** **not human-validated.** It is trained against detector output, not a
-  blinded manual ground truth, so it can inherit detector biases.
+- **Validation status:** **locally validated by the authors, not independently/peer-reviewed.**
+  Its outputs — inside the Precise engine — were validated on the authors' own plates (detection
+  precision 1.00 and diameter *r* ≥ 0.99 vs hand-labelled ground truth; ICC 0.97 vs independent
+  Fiji tracing — see [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)). Its *training* labels are
+  partly detector-derived, so treat the training set (not the validation) with that caveat.
 
 The model and inference code live in `_research/clf/` (`plaque_clf.pt` + `infer.py`), which the
 Precise pipeline loads when `--clf` is enabled.

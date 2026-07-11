@@ -222,8 +222,10 @@ real plaque or lawn texture. It is opt-in.
   `precise/pipeline.py:70`; `engine_api.detect_precise` calls `run_inprocess(... clf=True)`,
   `app/engine_api.py:225`), because the gate is the recommended Precise config there.
 
-Honesty caveat: the classifier is trained against **detector output**, not a blinded manual
-ground truth, so it can inherit detector biases. It is not human-validated (§8).
+Honesty caveat: the classifier's *training* labels are partly **detector-derived** (not a blinded
+manual ground truth), so the training set can carry detector biases. Its outputs were **validated
+locally by the authors** as part of the Precise engine (precision 1.00 vs hand labels; ICC 0.97 vs
+Fiji — `docs/VALIDATION_RESULTS.md`); it is **not** independently or peer-reviewed (§8).
 
 > **Full training details** — data mining, exact hyperparameters, the leave-one-plate-out
 > fine-tuning loop, the external-dataset A/B (VACV −0.0027 F1, OnePetri +0.0003), the deployed

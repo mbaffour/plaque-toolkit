@@ -77,9 +77,11 @@ real plaque or lawn texture.
   **plus** OnePetri real-phage patches — 15,659 boxes total (see [ENGINES.md](ENGINES.md)).
   Because part of the training data is OnePetri-derived, the classifier inherits the OnePetri
   **CC BY-NC-SA (non-commercial)** obligations (§2).
-- **Honesty note:** it is trained against **detector output**, not a blinded manual ground
-  truth, so it can inherit detector biases — it is **not human-validated**. Opt-in, default
-  OFF on the CLI.
+- **Honesty note:** its *training* labels are partly **detector-derived** (not a blinded manual
+  ground truth), so the training set can carry detector biases. Its **outputs, in the Precise
+  engine, were validated locally by the authors** (precision 1.00 vs hand labels; ICC 0.97 vs
+  independent Fiji — [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)); it is **not** independently
+  or peer-reviewed. Opt-in, default OFF on the CLI.
 - **Full details:** exact architecture, hyperparameters, training data, and evaluation are in the
   [**model card**](MODEL_CARD.md) and [TRAINING_AND_MODELS.md](TRAINING_AND_MODELS.md). Key facts:
   the deployed `plaque_clf.pt` is the leave-one-plate-out fine-tune (**LOO F1 ≈ 0.95**), and the
@@ -195,7 +197,8 @@ lowered size gates).
   (non-commercial)**; free for non-commercial research, full source public. The **Light** build has
   no YOLO/weights and is **Apache-2.0 (free for any use)**. Qt/PySide6 is **LGPL-3.0** in both.
   Details: [`LICENSING.md`](../LICENSING.md), [`THIRD_PARTY_LICENSES.md`](../THIRD_PARTY_LICENSES.md).
-- **Classifier** — trained on detector output + OnePetri patches; **not human-validated**, and
+- **Classifier** — trained partly on detector-derived labels + OnePetri patches; **validated
+  locally by the authors** as part of the Precise engine but **not independently/peer-reviewed**;
   **CC BY-NC-SA 4.0 (non-commercial)** by inheritance.
 - **Current / Sensitive / Precise / classifier / turbidity** — in-house; **do not inherit the
   published validation.** Validate on your own plates before publishing.

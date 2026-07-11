@@ -52,6 +52,7 @@ robustness). Fine-tuning loop: 4 rounds of hard-negative mining under leave-one-
 |---|---|---|
 | **Cross-plate** (base, `train_clf.py`) | plates `I70T` + `WT2` (1604 patches) | **F1 0.978** (P 0.964 / R 0.992 @0.5) |
 | **Leave-one-plate-out** (fine-tune loop) | each of `WT` / `2-4` / `G12E` in turn | **F1 ≈ 0.95** (best 0.9544) |
+| **Deployed, in the Precise engine** — *authors' validation* | GT plates + n = 100 vs Fiji | detection **precision 1.00**, diameter **r ≥ 0.99** vs hand labels; **ICC 0.97** vs independent Fiji ([VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)) |
 | **External-data A/B** | same held-out | VACV **−0.0027** F1; OnePetri **+0.0003** F1 (both negligible) |
 | **Engine-level FP** (negative controls) | 17 blank plates | Precise **≈ 3 FP/blank** (irreducible by gate/classifier tuning) |
 
@@ -59,8 +60,11 @@ Scoring: position match (centre within `0.5 ×` GT radius) → precision / recal
 (`app/validate.py`, `_research/clf/gt_sanity.py`, `_research/clf/loop/gt_eval.py`).
 
 ## Limitations & ethical considerations
-- **Not human-validated as a method.** Trained partly against **detector output**, so it can
-  inherit detector biases. Only the **Published** engine is peer-reviewed/citable.
+- **Locally validated, not independently peer-reviewed.** As part of the Precise engine, the model
+  was validated by the authors on their own plates (precision 1.00 vs hand labels; ICC 0.97 vs Fiji —
+  [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)); only the **Published** engine is
+  peer-reviewed/citable. Its *training* labels are partly detector-derived — a training-set caveat,
+  not a validation gap.
 - **Small, single-operator ground truth** (a few plates, one labeller); no inter-observer check.
 - **Imaging ceiling, not the model:** residual false positives are genuinely plaque-like artifacts
   (bubbles, debris) on top-lit phone photos — a dedicated study showed they are **not** reducible by

@@ -15,7 +15,7 @@ number from this toolkit into a manuscript.
 | **Current** engine | ⚠️ in-house; ≤ ~0.04 mm from Published, count unchanged on bundled plates | Cite the paper "with minor numerical-precision corrections," or run `--published` for an exact match. |
 | **Sensitive** engine | ❌ in-house, not validated | **No** — validate it yourself first. |
 | **Precise** engine (PST + PlaqSeg) | ❌ in-house; PlaqSeg not peer-reviewed | **No** — validate it yourself first. |
-| **ML classifier** (`--clf`) | ❌ trained on detector output, not human-validated | **No** — validate it yourself first. |
+| **ML classifier** (`--clf`) | ⚠️ in-house; **locally validated** by the authors, not peer-reviewed | **No** — cite Published; validate on your own plates. |
 | **Turbidity (OD)** | greyscale densitometry, not a separately validated assay | Report as relative optical density with the caveats below. |
 
 If you used anything other than Published, you must **validate it on your own plates** and
