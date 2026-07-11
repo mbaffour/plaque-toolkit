@@ -79,6 +79,9 @@ top-lit iPhone plates: [**docs/ENGINES.md**](docs/ENGINES.md).
 
 ## Documentation map
 
+**→ [docs/README.md](docs/README.md) is the full, categorized documentation index — start there.** The
+highlights:
+
 | Doc | What's inside |
 |---|---|
 | [**docs/USER_GUIDE.md**](docs/USER_GUIDE.md) | How to do each task: measure, edit, batch, compare turbidity, scale bars, outputs, troubleshooting. |
@@ -90,6 +93,10 @@ top-lit iPhone plates: [**docs/ENGINES.md**](docs/ENGINES.md).
 | [**docs/PLAQUE_SIZE_TOOL.md**](docs/PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
 | [**docs/CREDITS_AND_LINEAGE.md**](docs/CREDITS_AND_LINEAGE.md) | Every upstream tool/model/dataset/library, its licence, and what's original here. |
 | [**docs/VALIDATION_RESULTS.md**](docs/VALIDATION_RESULTS.md) · [**docs/PAPER_METHODS.md**](docs/PAPER_METHODS.md) | The local validation numbers, and paste‑ready Methods/Results text. |
+| [**docs/MANUSCRIPT_METHODS_AND_AI.md**](docs/MANUSCRIPT_METHODS_AND_AI.md) | Brief paste‑ready Methods paragraph **+ a use‑of‑AI statement** for a manuscript. |
+| [**docs/TRAINING_AND_MODELS.md**](docs/TRAINING_AND_MODELS.md) | **How the models were built and trained** — the classifier, datasets, the fine‑tune loop, tuning, and provenance. |
+| [**docs/HOW_IT_WAS_BUILT.md**](docs/HOW_IT_WAS_BUILT.md) | The build‑and‑design narrative: origin, architecture, the four engines, and the honesty caveats. |
+| [**plaque_stats/README.md**](plaque_stats/README.md) | The standalone **stats & violin** analysis workspace (CLI + R‑Shiny + Python‑Shiny + frozen app). |
 | [**LICENSING.md**](LICENSING.md) · [**THIRD_PARTY_LICENSES.md**](THIRD_PARTY_LICENSES.md) | Per‑build licensing and every bundled component's licence. |
 | `docs/STATS_EXPLAINED.html`, `docs/TOOL_ATLAS.html`, `docs/guide.html`, `docs/setup_and_run.html` | Interactive/visual HTML guides. |
 

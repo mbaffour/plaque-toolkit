@@ -1,0 +1,143 @@
+<svg viewBox="0 0 1160 700" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', system-ui, -apple-system, Arial, sans-serif" role="img" aria-labelledby="ttl desc">
+  <title id="ttl">Plaque Toolkit measurement pipeline</title>
+  <desc id="desc">A plate photo enters through a single locked engine interface; one of four detection engines is chosen (only Published is peer-reviewed; Precise is used in this study). The Precise engine runs PST front, artifact masks, PlaqSeg YOLO, a density switch, gated PST recall, an optional classifier gate, union and dedup, then sizing (area-equivalent diameter). Results are verified in an interactive editor and exported. Calibration is from the detected dish; Precise was validated locally against Fiji.</desc>
+  <style>
+    .ink{fill:#1c2b33} .mut{fill:#5c6b73} .wht{fill:#ffffff}
+    .t{font-weight:700} .s{font-size:11px} .lab{font-size:13.5px;font-weight:700}
+    .box{fill:#eef2f4;stroke:#c3ced4;stroke-width:1.4;rx:9}
+    .blue{fill:#e3eff7;stroke:#0072B2;stroke-width:1.6}
+    .green{fill:#e2f3ec;stroke:#009E73;stroke-width:1.6}
+    .orange{fill:#fdf1dd;stroke:#E69F00;stroke-width:1.6}
+    .arw{stroke:#5c6b73;stroke-width:1.7;fill:none} .dash{stroke-dasharray:5 4}
+    .pill{rx:11}
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5c6b73"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="700" fill="#ffffff"/>
+
+  <text x="40" y="40" class="ink" font-size="23" font-weight="800">Plaque Toolkit — plaque-measurement pipeline</text>
+  <text x="40" y="63" class="mut" font-size="12.5">Built on the peer-reviewed Plaque Size Tool (Trofimova &amp; Jaschke 2021); the Precise engine is an in-house extension, validated locally.</text>
+
+  <!-- Row 1: routing -->
+  <rect x="40" y="92" width="150" height="52" rx="9" class="box"/>
+  <text x="115" y="115" text-anchor="middle" class="ink lab">Plate photo</text>
+  <text x="115" y="132" text-anchor="middle" class="mut s">one plate · square-on</text>
+
+  <line x1="190" y1="118" x2="228" y2="118" class="arw" marker-end="url(#ah)"/>
+
+  <rect x="230" y="92" width="164" height="52" rx="9" class="box"/>
+  <text x="312" y="115" text-anchor="middle" class="ink lab">engine_api</text>
+  <text x="312" y="132" text-anchor="middle" class="mut s">one locked entry point</text>
+
+  <line x1="394" y1="118" x2="432" y2="118" class="arw" marker-end="url(#ah)"/>
+
+  <!-- engine chooser -->
+  <rect x="434" y="82" width="326" height="84" rx="10" fill="#f7f9fa" stroke="#c3ced4" stroke-width="1.4"/>
+  <text x="446" y="100" class="ink t" font-size="12">Detection engine (choose one)</text>
+  <rect x="446" y="108" width="150" height="22" rx="11" class="green"/>
+  <text x="521" y="123" text-anchor="middle" class="ink" font-size="11" font-weight="700">✓ Published — citable</text>
+  <rect x="602" y="108" width="150" height="22" rx="11" class="box"/>
+  <text x="677" y="123" text-anchor="middle" class="ink" font-size="11">Current (default)</text>
+  <rect x="446" y="136" width="150" height="22" rx="11" class="box"/>
+  <text x="521" y="151" text-anchor="middle" class="ink" font-size="11">Sensitive</text>
+  <rect x="602" y="136" width="150" height="22" rx="11" class="blue"/>
+  <text x="677" y="151" text-anchor="middle" class="ink" font-size="11" font-weight="700">★ Precise (this study)</text>
+
+  <!-- legend -->
+  <rect x="784" y="92" width="16" height="12" rx="2" class="green"/>
+  <text x="806" y="102" class="mut s">peer-reviewed / citable</text>
+  <rect x="784" y="112" width="16" height="12" rx="2" class="blue"/>
+  <text x="806" y="122" class="mut s">engine used here</text>
+  <rect x="784" y="132" width="16" height="12" rx="2" class="orange"/>
+  <text x="806" y="142" class="mut s">manual / optional step</text>
+
+  <!-- down arrow into Precise panel -->
+  <line x1="677" y1="166" x2="677" y2="188" class="arw" marker-end="url(#ah)"/>
+
+  <!-- Precise panel -->
+  <rect x="40" y="190" width="1080" height="288" rx="12" fill="#fbfcfd" stroke="#0072B2" stroke-width="1.6"/>
+  <rect x="40" y="190" width="6" height="288" rx="3" fill="#0072B2"/>
+  <text x="62" y="214" class="ink" font-size="15" font-weight="800">Precise engine — Plaque Size Tool geometry ⊕ PlaqSeg YOLO + precision gates</text>
+
+  <!-- top row steps 1-4 -->
+  <g>
+    <rect x="60" y="230" width="238" height="58" rx="9" class="box"/>
+    <text x="179" y="255" text-anchor="middle" class="ink lab">1 · PST front</text>
+    <text x="179" y="273" text-anchor="middle" class="mut s">dish · mm-per-px · centres</text>
+
+    <rect x="322" y="230" width="238" height="58" rx="9" class="box"/>
+    <text x="441" y="255" text-anchor="middle" class="ink lab">2 · Artifact masks</text>
+    <text x="441" y="273" text-anchor="middle" class="mut s">lawn ROI · label · rim reject</text>
+
+    <rect x="584" y="230" width="238" height="58" rx="9" class="blue"/>
+    <text x="703" y="255" text-anchor="middle" class="ink lab">3 · PlaqSeg YOLO</text>
+    <text x="703" y="273" text-anchor="middle" class="mut s">deep learning · primary</text>
+
+    <rect x="846" y="230" width="238" height="58" rx="9" class="box"/>
+    <text x="965" y="255" text-anchor="middle" class="ink lab">4 · Density switch</text>
+    <text x="965" y="273" text-anchor="middle" class="mut s">dense plate → skip recall</text>
+  </g>
+  <line x1="298" y1="259" x2="320" y2="259" class="arw" marker-end="url(#ah)"/>
+  <line x1="560" y1="259" x2="582" y2="259" class="arw" marker-end="url(#ah)"/>
+  <line x1="822" y1="259" x2="844" y2="259" class="arw" marker-end="url(#ah)"/>
+
+  <!-- 4 -> 5 down -->
+  <line x1="965" y1="288" x2="965" y2="316" class="arw" marker-end="url(#ah)"/>
+
+  <!-- bottom row steps 5-8 (right to left) -->
+  <g>
+    <rect x="846" y="318" width="238" height="58" rx="9" class="box"/>
+    <text x="965" y="343" text-anchor="middle" class="ink lab">5 · Gated PST recall</text>
+    <text x="965" y="361" text-anchor="middle" class="mut s">contrast floor · sparse plates</text>
+
+    <rect x="584" y="318" width="238" height="58" rx="9" class="orange"/>
+    <text x="703" y="343" text-anchor="middle" class="ink lab">6 · Classifier gate</text>
+    <text x="703" y="361" text-anchor="middle" class="mut s">plaque vs texture · optional</text>
+
+    <rect x="322" y="318" width="238" height="58" rx="9" class="box"/>
+    <text x="441" y="343" text-anchor="middle" class="ink lab">7 · Union + dedup</text>
+    <text x="441" y="361" text-anchor="middle" class="mut s">merge detectors</text>
+
+    <rect x="60" y="318" width="238" height="58" rx="9" class="blue"/>
+    <text x="179" y="343" text-anchor="middle" class="ink lab">8 · Sizing</text>
+    <text x="179" y="361" text-anchor="middle" class="mut s">area · d = 2√(A/π) · mm</text>
+  </g>
+  <line x1="846" y1="347" x2="824" y2="347" class="arw" marker-end="url(#ah)"/>
+  <line x1="584" y1="347" x2="562" y2="347" class="arw" marker-end="url(#ah)"/>
+  <line x1="322" y1="347" x2="300" y2="347" class="arw" marker-end="url(#ah)"/>
+
+  <!-- dense shortcut 4 -> 7 -->
+  <path d="M900,288 C900,304 470,300 452,316" class="arw dash" marker-end="url(#ah)"/>
+  <text x="612" y="300" class="mut s" font-style="italic">dense plate: skip 5–6</text>
+
+  <!-- 8 -> editor down -->
+  <line x1="179" y1="376" x2="179" y2="500" class="arw" marker-end="url(#ah)"/>
+
+  <!-- editor + outputs -->
+  <rect x="40" y="502" width="520" height="54" rx="9" class="orange"/>
+  <text x="300" y="526" text-anchor="middle" class="ink lab">Interactive editor — verify &amp; correct every plate</text>
+  <text x="300" y="544" text-anchor="middle" class="mut s">add · erase · ROI re-scan · draggable scale bar</text>
+
+  <line x1="560" y1="529" x2="598" y2="529" class="arw" marker-end="url(#ah)"/>
+
+  <rect x="600" y="502" width="520" height="54" rx="9" class="box"/>
+  <text x="860" y="526" text-anchor="middle" class="ink lab">Outputs</text>
+  <text x="860" y="544" text-anchor="middle" class="mut s">per-plaque CSV · annotated overlay · ground-truth labels</text>
+
+  <!-- footer banners -->
+  <rect x="40" y="576" width="520" height="104" rx="10" fill="#f7f9fa" stroke="#c3ced4" stroke-width="1.4"/>
+  <text x="58" y="600" class="ink t" font-size="13">Calibration &amp; QC (all engines)</text>
+  <text x="58" y="622" class="mut" font-size="11.5">•  mm-per-pixel from the detected dish diameter</text>
+  <text x="58" y="641" class="mut" font-size="11.5">•  tilt warning when dish axis-ratio &gt; 1.03</text>
+  <text x="58" y="660" class="mut" font-size="11.5">•  no dish detected → pixel-only output + warning</text>
+
+  <rect x="600" y="576" width="520" height="104" rx="10" class="green"/>
+  <text x="618" y="600" class="ink t" font-size="13">Local validation (this study)</text>
+  <text x="618" y="622" class="ink" font-size="11.5">Precise vs independent Fiji/ImageJ tracing (n = 100 plaques):</text>
+  <text x="618" y="641" class="ink" font-size="11.5" font-weight="700">ICC 0.97 · r 0.98 · mean bias −1.8% · LoA −0.15 to +0.09 mm</text>
+  <text x="618" y="660" class="mut" font-size="11">no proportional bias (p = 0.78).  Only “Published” is peer-reviewed.</text>
+</svg>

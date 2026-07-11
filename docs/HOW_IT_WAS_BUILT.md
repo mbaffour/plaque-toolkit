@@ -225,6 +225,11 @@ real plaque or lawn texture. It is opt-in.
 Honesty caveat: the classifier is trained against **detector output**, not a blinded manual
 ground truth, so it can inherit detector biases. It is not human-validated (§8).
 
+> **Full training details** — data mining, exact hyperparameters, the leave-one-plate-out
+> fine-tuning loop, the external-dataset A/B (VACV −0.0027 F1, OnePetri +0.0003), the deployed
+> checkpoint's provenance, and the false-positive-reduction study — are in
+> [**TRAINING_AND_MODELS.md**](TRAINING_AND_MODELS.md).
+
 ---
 
 ## 5. Calibration math

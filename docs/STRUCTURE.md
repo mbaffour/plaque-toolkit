@@ -14,22 +14,24 @@ and a research/validation history — this map keeps it navigable.
 | Item | Purpose |
 |---|---|
 | `README.md` | **Project entry point.** What it is, quick start, the four engines, links into `docs/`. Stays at root. |
-| `docs/` | All other documentation (see below). |
+| `docs/` | All other documentation. **[`docs/README.md`](README.md) is the categorized index** — start there. |
 | `Manual_images/` | Screenshots referenced by the upstream manual (`docs/UPSTREAM_README.md`). 🔒 (referenced by relative links) |
 
-### `docs/`
+### `docs/` (kept **flat** on purpose)
 
-| Item | Purpose |
+The app's Help menu opens several docs **by filename** from a flat `docs/`, and the installers bundle
+the whole folder — so docs are **not** moved into subfolders. See [`docs/README.md`](README.md) for
+the full categorized index. Grouped by purpose:
+
+| Group | Files |
 |---|---|
-| `docs/USER_GUIDE.md` | How to do each task (measure, edit, batch, turbidity, scale bars, outputs, troubleshooting). |
-| `docs/ENGINES.md` | The four detection modes in depth + when to use each + validation status. |
-| `docs/INSTALL.md` | Install on Windows/macOS/Linux; the two installers; the optional Precise env. |
-| `docs/PUBLICATION.md` | The honest validation playbook (ground truth, stats, negative control, Methods text). |
-| `docs/DEVELOPER.md` | File map, the two-env vs unified-env design, the ML classifier, rebuilding the installers. |
-| `docs/PLAQUE_SIZE_TOOL.md` | Focused reference for the core `plaque_size_tool.py` size CLI. |
-| `docs/UPSTREAM_README.md` | The original upstream Plaque Size Tool manual, preserved verbatim (image links repointed to `../Manual_images/`). |
-| `docs/STRUCTURE.md` | This file. |
-| `docs/guide.html`, `docs/setup_and_run.html` | Interactive HTML guides (self-contained; open in a browser). |
+| **Using the tool** | `USER_GUIDE.md` · `INSTALL.md` · `ENGINES.md` · `PLAQUE_SIZE_TOOL.md` + interactive `*.html` (`TOOL_ATLAS`, `guide`, `setup_and_run`, `HOWTO_AND_VERIFICATION`) |
+| **For a paper** | `MANUSCRIPT_METHODS_AND_AI.md` · `PAPER_METHODS.md` · `METHODS_TEMPLATE.md` · `VALIDATION_RESULTS.md` · **`TRAINING_AND_MODELS.md`** · `PUBLICATION.md` · `PUBLISHING_CHECKLIST.md` · `TESTING_AND_VALIDATION.md` · `VALIDATION_GUIDE.md` · `LABELLING_GUIDE.md` · figures (`plaque_pipeline.svg`, `PlaqueToolkit_vs_Fiji_BlandAltman.png`) + `STATS_EXPLAINED.html`, `FIJI_*.html` |
+| **How it works / dev** | `HOW_IT_WAS_BUILT.md` · `STRUCTURE.md` (this file) · `DEVELOPER.md` · `CREDITS_AND_LINEAGE.md` · `UPSTREAM_README.md` |
+| `atlas_img/` | Screenshots embedded by the interactive HTML/atlas guides. |
+
+> **🔒 Do not rename** the docs the app opens in-app: `USER_GUIDE.md`, `VALIDATION_GUIDE.md`,
+> `HOW_IT_WAS_BUILT.md`, `ENGINES.md`, `PUBLICATION.md`, `CREDITS_AND_LINEAGE.md`, `LICENSING.md`.
 
 ---
 
@@ -52,6 +54,14 @@ and a research/validation history — this map keeps it navigable.
 | `_plaqseg/` | PlaqSeg YOLO runner + model weights (`models/small.pt`, `nano.pt`). |
 | `_research/clf/` | The learned plaque-vs-texture classifier (`plaque_clf.pt` + `infer.py`) — used by Precise's `--clf` gate. |
 | `setup.py`, `pyproject.toml` | Packaging metadata for the underlying tool. 🔒 |
+
+---
+
+## Standalone analysis package
+
+| Item | Purpose |
+|---|---|
+| `plaque_stats/` | A **self-contained stats & violin workspace**, independent of the app: the shared engine `plaque_stats.py` with three front-ends — CLI, R-Shiny (`app.R`), and Python-Shiny (`app_py.py`) — plus `.bat` launchers, a `data/` drop-zone + `results/` folder, `pyproject.toml` (pip-installable → `plaque-stats` / `plaque-stats-app`), and `build_exe/` (PyInstaller spec → a no-Python `.exe`). See [`../plaque_stats/README.md`](../plaque_stats/README.md). A synced copy for daily use lives in `…/Downloads/Plaque Stats Analysis/` (refresh with `plaque_stats/sync_to_downloads.ps1`). |
 
 ---
 
@@ -85,7 +95,9 @@ and a research/validation history — this map keeps it navigable.
 | `requirements_full.txt` | Deps for the unified `plaqueapp` env (in-process Precise / Full build). |
 | `build/` | PyInstaller specs (`*.spec`) + Inno Setup scripts (`installer.iss`, `installer_full.iss`). The `_work/`, `_pyi_work/`, `localpycs/` subfolders are build scratch (gitignored). |
 | `.gitattributes` / `.gitignore` | Line-ending rules (LF scripts, CRLF .bat) + ignore rules. |
-| `LICENSE` | License. |
+| `LICENSE` · `LICENSING.md` · `THIRD_PARTY_LICENSES.md` · `NOTICE` | Licence + the multi-tier licensing posture (Light = Apache-2.0; Full/Precise = AGPL-3.0 + CC BY-NC-SA weights) + third-party credits/notices. |
+| `CITATION.cff` | How to cite the software. |
+| `_research/clf/plaque_clf.pt`, `infer.py` | The deployed classifier + inference (the only committed `_research/` artifacts; training scripts/data are gitignored — see `docs/TRAINING_AND_MODELS.md`). |
 
 ---
 
@@ -125,5 +137,10 @@ and a research/validation history — this map keeps it navigable.
 - Regenerable turbidity test-output folders (`out_turb_*`, `_vt2`) and the gitignored
   `_gen_samples.py` scratch were removed; `.gitignore` was extended to cover them and other
   scratch/secret/build-output patterns.
+- A categorized **[`docs/README.md`](README.md) index** was added as the docs front door;
+  **`docs/TRAINING_AND_MODELS.md`** (how the models were trained) and
+  **`docs/MANUSCRIPT_METHODS_AND_AI.md`** (paste-ready Methods + AI-use statement) were added; this
+  map was refreshed to include `plaque_stats/`, the licensing files, and the new docs. Docs were kept
+  **flat** (the in-app viewer + installers reference them by name).
 - **Nothing load-bearing was moved** — all code modules, packages, launchers, installers, and
   the Precise engine stayed exactly where their hard-coded paths expect them.
