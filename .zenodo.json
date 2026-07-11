@@ -20,7 +20,8 @@
   ],
   "creators": [
     {
-      "name": "Baffour Awuah, Michael"
+      "name": "Baffour Awuah, Michael",
+      "orcid": "0009-0007-9036-413X"
     }
   ],
   "related_identifiers": [
@@ -47,5 +48,5 @@
       "identifier": "https://github.com/mbaffour/plaque-toolkit"
     }
   ],
-  "notes": "TODO before publishing the release: add each author's ORCID and affiliation (here under \"creators\", or in the Zenodo form). Model weights derived from the OnePetri dataset are CC BY-NC-SA 4.0 (non-commercial); the archive contains a Git-LFS pointer for the .pt weights, not the binary — attach the real weights to the GitHub Release if the model must be reproducible from the archive."
+  "notes": "Affiliation is optional and left blank; add it under \"creators\" or in the Zenodo form if desired. Model weights derived from the OnePetri dataset are CC BY-NC-SA 4.0 (non-commercial); the archive contains a Git-LFS pointer for the .pt weights, not the binary — attach the real weights to the GitHub Release if the model must be reproducible from the archive."
 }

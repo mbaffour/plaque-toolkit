@@ -23,8 +23,8 @@ repository-code: 'https://github.com/mbaffour/plaque-toolkit'
 authors:
   - family-names: Baffour Awuah
     given-names: Michael
-    # affiliation: 'Your lab / institution'
-    # orcid: 'https://orcid.org/0000-0000-0000-0000'
+    orcid: 'https://orcid.org/0009-0007-9036-413X'
+    # affiliation: 'Your lab / institution'   # optional — add if you like
 # doi: '10.5281/zenodo.XXXXXXX'   # <- fill in after the Zenodo release
 references:
   - type: article
