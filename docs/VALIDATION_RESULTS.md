@@ -14,6 +14,26 @@
 
 ---
 
+## 0. What was validated — at a glance
+
+A single-operator but **multi-pronged** local validation on the authors' own plates and labels:
+
+| # | What was validated | Data | Headline result |
+|---|---|---|---|
+| 1 | **Hand-corrected ground truth** | plates labelled in-app (WT / 2-4 / G12E / DTR + the `IMG_39xx` sets) | the human reference the rest is scored against |
+| 2 | **Detection + sizing** vs the hand labels | dense GT plates (185 + 89 plaques) | Precise **precision 1.00**, diameter **r ≥ 0.99**, MAE ≤ 0.0025 mm (§2A) |
+| 3 | **Size** vs **independent Fiji** tracing | **100 plaques** traced blind in Fiji | **ICC 0.97**, r 0.98, bias −1.8%, LoA −0.15…+0.09 mm, no proportional bias (§2B) |
+| 4 | **False positives** on negative controls | **17 blank** plates | Precise **3.1 ± 3.0 FP/blank** (Sensitive 12.4) (§2C) |
+| 5 | **Agreement statistics** (Bland–Altman + ICC) | 3 comparisons | independent Fiji ICC 0.97; hand labels ICC 0.99; same-outline consistency ICC 1.00 / r 0.9999 (§2D) |
+| 6 | **The ML classifier gate, on vs off** | WT/2-4/G12E/DTR, threshold sweep | precision **0.67 → 0.70** at the operating point — a working precision filter (§2E) |
+
+**Boundary (stated plainly):** this is a **real local validation performed by the authors** — not an
+independent or peer-reviewed one. Only the **Published** engine carries peer-reviewed validation; the
+Precise engine and its classifier gate are validated **here, on these plates**, and should be
+described that way in a paper.
+
+---
+
 ## 1. What was validated, and how
 
 Two independent checks:
@@ -143,6 +163,23 @@ experimental unit, but only **2** ground-truth plates were available — too few
 correlation. The two plates show systematic under-counting on dense plates (Precise 74 vs 185; 25 vs
 89), consistent with the recall in §2A. A defensible count-level validation needs **≥ 5–6 plates
 spanning densities** (still to do).
+
+### (E) The ML classifier gate — on vs off (`_research/clf/val/`, `val_gate.py`)
+
+The Precise engine was scored **with and without** its ResNet-18 `--clf` gate on the four GT plates
+(WT, 2-4, G12E, DTR), position-matched to the hand labels, across keep-thresholds 0.5–0.95:
+
+| Gate | Mean precision | Mean recall | Mean F1 |
+|---|---:|---:|---:|
+| **off** | 0.672 | 0.328 | 0.382 |
+| **on** (best thr 0.7) | **0.699** | 0.319 | 0.376 |
+
+The gate **raises precision** — it removes a handful of PlaqSeg/PST false positives per plate (the
+per-plate `n_clf_dropped` records which detector each drop came from) — at a **small recall cost**,
+leaving F1 essentially unchanged on these plates. That is the intended behaviour of a **precision
+filter**, not a recall booster, and it is why it ships **on by default in the app** but **off by
+default in the CLI**. (Recall here is dominated by Precise's deliberate under-counting on very dense
+plates, §2A — not by the gate.)
 
 ---
 
