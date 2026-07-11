@@ -25,6 +25,7 @@ index (and [`STRUCTURE.md`](STRUCTURE.md), the repo map) to navigate.
 | [METHODS_TEMPLATE.md](METHODS_TEMPLATE.md) | A fill-in-the-blanks Methods template. |
 | [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md) | The authors' own local validation (Precise vs Fiji: ICC 0.97; negative controls; size stats). |
 | [TRAINING_AND_MODELS.md](TRAINING_AND_MODELS.md) | **How the models were built and trained** — the classifier, datasets, the fine-tune loop, tuning, and provenance. |
+| [MODEL_CARD.md](MODEL_CARD.md) | A concise **model card** for the plaque-vs-texture classifier (paper-ready). |
 | [PUBLICATION.md](PUBLICATION.md) | The honest validation playbook — what is and isn't citable, and how to validate on your own plates. |
 | [PUBLISHING_CHECKLIST.md](PUBLISHING_CHECKLIST.md) | What's still needed before publication. |
 | [TESTING_AND_VALIDATION.md](TESTING_AND_VALIDATION.md) | The acceptance gates and validation harness. |

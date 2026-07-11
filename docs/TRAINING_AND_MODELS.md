@@ -4,6 +4,8 @@ This documents **exactly** how the deep-learning components of the Plaque Toolki
 trained, tuned, and evaluated, so the work is reproducible and correctly credited. Every number
 below is taken from a file in the repo (cited inline); where something is not recorded, it says so.
 
+> For a one-page summary of the classifier, see the [**model card**](MODEL_CARD.md).
+>
 > **Read this together with** [`HOW_IT_WAS_BUILT.md`](HOW_IT_WAS_BUILT.md) (architecture),
 > [`ENGINES.md`](ENGINES.md) (the four engines), and [`VALIDATION_RESULTS.md`](VALIDATION_RESULTS.md)
 > (the measurement validation). The training scripts live under `_research/` (gitignored bulk;

@@ -80,6 +80,10 @@ real plaque or lawn texture.
 - **Honesty note:** it is trained against **detector output**, not a blinded manual ground
   truth, so it can inherit detector biases — it is **not human-validated**. Opt-in, default
   OFF on the CLI.
+- **Full details:** exact architecture, hyperparameters, training data, and evaluation are in the
+  [**model card**](MODEL_CARD.md) and [TRAINING_AND_MODELS.md](TRAINING_AND_MODELS.md). Key facts:
+  the deployed `plaque_clf.pt` is the leave-one-plate-out fine-tune (**LOO F1 ≈ 0.95**), and the
+  external datasets barely helped (VACV −0.0027, OnePetri +0.0003 F1).
 
 ---
 
