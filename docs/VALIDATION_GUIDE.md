@@ -123,7 +123,7 @@ standard.
 ```jsonc
 {
   "meta": {
-    "image": "TG51-1.heic", "image_path": "C:/.../TG51-1.heic",
+    "image": "WT-1.heic", "image_path": "C:/.../WT-1.heic",
     "mm_per_px": 0.041,            // calibration; null if no dish diameter entered
     "n_plaques": 47,               // total in the gold standard
     "n_manual": 9,                 // hand-edited (source != "auto") — your correction effort

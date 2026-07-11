@@ -64,3 +64,7 @@ build/*/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+# plate photos dropped into the batch input folder — keep the folder + README, not the images
+plates/*
+!plates/README.txt

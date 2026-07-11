@@ -116,7 +116,7 @@ the full categorized index. Grouped by purpose:
 |---|---|
 | `Test_plates/` | Bundled sample plates (`large/`, `small/`) to try the tools. 🔒 (referenced by docs/examples) |
 | `Plaques to measure/` | The 21-plate study (7 phages × 3 replicates) with its compiled Excel, violins, and plot CSVs. 🔒 |
-| `plates/` | Default input folder for `Batch Plates (CSV per plate).bat` (currently holds two sample plates). |
+| `plates/` | Default input (drop) folder for `Batch Plates (CSV per plate).bat` — **empty by default** (drop your own plate photos here; they're gitignored so they're never committed). |
 | `IMG_3901.jpeg`, `IMG_3964.jpeg` | Calibration/ground-truth input photos referenced by several `_research/` scripts. **Keep.** |
 | `_research/` | Validation & method-development history: ground truth, blob/ensemble experiments, sweeps, the classifier (`clf/`). 🔒 (`clf/` is a Precise dep). |
 | `_imagej/` | ImageJ + the ViralPlaque macros used by `run_viralplaque.py` for the cross-tool comparison. 🔒 |

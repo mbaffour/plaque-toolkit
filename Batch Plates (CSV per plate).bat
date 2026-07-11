@@ -2,7 +2,7 @@
 rem ============================================================
 rem  Measure EVERY plate in a folder -> one data-green-<plate>.csv each + summary.csv
 rem  Drag a FOLDER of plate photos onto this file (or put them in the 'plates' folder).
-rem  Name each photo after its plate (e.g. TG51-1.jpg) so the CSV is named the same.
+rem  Name each photo after its plate (e.g. WT-1.jpg) so the CSV is named the same.
 rem  HEIC (iPhone) is supported. Results go to the 'out' folder.
 rem ============================================================
 setlocal
