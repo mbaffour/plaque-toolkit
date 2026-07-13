@@ -24,6 +24,25 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 > touching/overlapping plaques were flagged and excluded from size statistics. For each plaque the
 > software reports its area and the **area‑equivalent diameter**, *d* = 2·√(*A*/π).
 
+### Deep‑learning detection and classifier training (if the Precise engine was used)
+> The **Precise** engine augments the Plaque Size Tool detector with a pre‑trained deep‑learning
+> plaque detector — a YOLO segmentation model (PlaqSeg; OnePetri lineage, Shamash & Maurice, 2021),
+> used for inference only — and an optional convolutional **plaque‑versus‑texture classifier** that
+> we trained in‑house as a precision filter. The classifier (a ResNet‑18 fine‑tuned from ImageNet)
+> was trained on 48 × 48‑pixel image patches: positive patches from hand‑labelled plaque centres on
+> our own plates, augmented with external plaque imagery (**VACVPlaque**, *Scientific Data* 2025,
+> doi:10.1038/s41597‑025‑05030‑8, CC‑BY‑4.0; and the **OnePetri** bacteriophage plaque set,
+> CC‑BY‑NC‑SA), and negative patches (lawn texture, dish rim, bubbles, debris) mined from
+> uninfected control plates. Training used a **leave‑one‑plate‑out** protocol with **iterative
+> hard‑negative mining**, selecting the model by held‑out F1 (deployed model: leave‑one‑plate‑out
+> F1 ≈ 0.95). Adding the external datasets changed held‑out F1 only marginally (VACVPlaque −0.003;
+> OnePetri +0.0003), so performance was driven mainly by the in‑house ground truth and
+> hard‑negative mining. A separate false‑positive‑reduction analysis on uninfected control plates
+> found the residual false‑positive rate (≈ 3 per blank plate for Precise) was not further reducible
+> by classifier or gate tuning. Full training details and code are in the software's
+> `docs/TRAINING_AND_MODELS.md` and model card. *(Include this paragraph only if you used the
+> Precise engine.)*
+
 ### Validation against manual measurement (Fiji/ImageJ)
 > To validate the software's measurements, **100 plaques** `[spanning N plates and a range of sizes]`
 > were additionally measured **independently** in Fiji/ImageJ (Schindelin et al., 2012) by manual
@@ -97,3 +116,7 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
   Nat. Methods 9:676–682. doi:10.1038/nmeth.2019
 - Schneider C.A. et al. (2012). *NIH Image to ImageJ: 25 years of image analysis.* Nat. Methods
   9:671–675. doi:10.1038/nmeth.2089
+- Shamash M. & Maurice C.F. (2021). *OnePetri: accelerating common bacteriophage Petri dish assays
+  with computer vision.* PHAGE 2(4):224–231. doi:10.1089/phage.2021.0012
+- VACVPlaque dataset (2025). *A digital photography dataset for Vaccinia Virus plaque quantification
+  using Deep Learning.* Scientific Data 12:719. doi:10.1038/s41597-025-05030-8 (CC-BY-4.0)

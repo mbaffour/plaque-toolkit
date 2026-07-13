@@ -29,6 +29,15 @@ fully-referenced version is in [PAPER_METHODS.md](PAPER_METHODS.md); the pipelin
 > −0.15 to +0.09 mm) with no proportional bias (regression of the difference on the mean: slope
 > = +0.006, *p* = 0.78).
 
+> **Classifier training.** The optional plaque‑versus‑texture classifier (a ResNet‑18 fine‑tuned
+> from ImageNet) was trained in‑house on 48 × 48‑pixel patches — positives from hand‑labelled
+> plaques on our own plates plus external plaque imagery (VACVPlaque, CC‑BY‑4.0; the OnePetri
+> bacteriophage set, CC‑BY‑NC‑SA; Shamash & Maurice, 2021), and negatives mined from uninfected
+> control plates — using a **leave‑one‑plate‑out** protocol with **iterative hard‑negative mining**
+> (deployed model: leave‑one‑plate‑out F1 ≈ 0.95; the external datasets changed held‑out F1 only
+> marginally). The deep‑learning detector itself (PlaqSeg, OnePetri lineage) is a pre‑trained model
+> used for inference. Full details: `docs/TRAINING_AND_MODELS.md` and the model card.
+
 ## 2. Compact one‑sentence version (if space is tight)
 
 > Plaques were measured with Plaque Toolkit (v1.0.2; built on the Plaque Size Tool of Trofimova &
