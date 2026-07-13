@@ -1,5 +1,8 @@
 # Plaque Stats & Violins
 
+> **New here?** Open **[`GUIDE.html`](GUIDE.html)** — a visual, worked‑example walkthrough (your data
+> in → violin figure + statistics out). This README is the full text reference.
+
 A small, self‑contained package for turning plaque measurements from **different samples** into
 **publication‑ready, reproducible, customizable violin plots** plus **statistics and data
 summaries**. It ships two front‑ends that read the **same data format** and give the **same numbers**:

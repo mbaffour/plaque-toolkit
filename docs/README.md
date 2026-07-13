@@ -45,7 +45,7 @@ index (and [`STRUCTURE.md`](STRUCTURE.md), the repo map) to navigate.
 ## 4 · Related, outside this folder
 | Location | What it is |
 |---|---|
-| [../plaque_stats/README.md](../plaque_stats/README.md) | The standalone **stats & violin** analysis workspace (CLI + R-Shiny + Python-Shiny + frozen app). |
+| [../plaque_stats/README.md](../plaque_stats/README.md) | The standalone **stats & violin** analysis workspace (CLI + R-Shiny + Python-Shiny + frozen app) — with a visual [`GUIDE.html`](../plaque_stats/GUIDE.html). |
 | [../LICENSING.md](../LICENSING.md) · [../THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) · [../NOTICE](../NOTICE) | Licensing of the toolkit and its third-party components. |
 | [../CITATION.cff](../CITATION.cff) | How to cite this software. |
 

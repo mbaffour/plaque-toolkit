@@ -5,6 +5,9 @@
 Welcome! Drop your plaque measurements in, get publication-ready
 violin plots + statistics out. Everything runs on your own PC.
 
+Prefer to see it first? Open  GUIDE.html  in this folder for a
+visual, worked-example walkthrough.
+
 ----------------------------------------------------------------
 THE 3-STEP VERSION
 ----------------------------------------------------------------
