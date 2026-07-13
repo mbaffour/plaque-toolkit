@@ -14,6 +14,7 @@ import io
 import os
 import sys
 import tempfile
+import zipfile
 
 import pandas as pd
 import matplotlib
@@ -119,11 +120,18 @@ app_ui = ui.page_sidebar(
                      ui.h5("Omnibus test"), ui.output_text_verbatim("omni"),
                      ui.h5("Pairwise (Sample A vs B — mean of all plates)"),
                      ui.output_data_frame("pairwise"),
+                     ui.download_button("dl_pairwise", "Download pairwise CSV"),
                      ui.h5("Paste-ready sentence"), ui.output_text_verbatim("sentence")),
         ui.nav_panel("Summaries",
                      ui.h5("Per group"), ui.output_data_frame("summary_group"),
                      ui.download_button("dl_sumg", "Download group summary CSV"),
-                     ui.h5("Per plate (replicate means)"), ui.output_data_frame("summary_rep")),
+                     ui.h5("Per plate (replicate means)"), ui.output_data_frame("summary_rep"),
+                     ui.download_button("dl_sumr", "Download per-plate CSV"),
+                     ui.hr(),
+                     ui.markdown("**Everything in one file** — the violin (PNG/SVG/PDF), both stat "
+                                 "tables (images), all summary + pairwise CSVs, the report, and "
+                                 "`run_config.json`:"),
+                     ui.download_button("dl_all", "⬇  Download EVERYTHING (ZIP)", class_="btn-primary")),
         ui.nav_panel("Data format", ui.HTML(FORMAT_HELP)),
     ),
     title="Plaque Stats & Violins  ·  Python / Shiny",
@@ -206,10 +214,17 @@ def server(input, output, session):
                     log_y=bool(input.log_y()), width=float(input.width()), height=float(input.height()),
                     title=input.title() or None, ylabel=input.ylabel() or None, order=order)
         pname = input.palette_name()
+        chose_theme = False
         if pname and pname in ps.PALETTES:
-            opts["palette"] = list(ps.PALETTES[pname])
+            opts["palette"] = list(ps.PALETTES[pname]); chose_theme = True
         elif input.palette_custom().strip():
             opts["palette"] = [x.strip() for x in input.palette_custom().split(",") if x.strip()]
+            chose_theme = True
+        # A colour theme only shows on the violins when they are group-filled. So if the user
+        # picked a theme but left "Violin fill" on auto, colour the violins (otherwise the theme
+        # would silently do nothing under the neutral grey SuperPlot default).
+        if chose_theme and input.violin_fill() == "auto":
+            opts["violin_fill"] = "group"
 
         omni, posthoc, unit, have_rep = ps.run_stats(d, order, opts["unit"], opts["parametric"])
         rep_means = ps.replicate_means(d)
@@ -292,6 +307,44 @@ def server(input, output, session):
     def dl_sumg():
         a = analysis()
         yield ps.group_summary(a["d"], a["order"]).to_csv(index=False)
+
+    @render.download(filename=lambda: "summary_by_replicate.csv")
+    def dl_sumr():
+        a = analysis()
+        rm = ps.replicate_means(a["d"])
+        yield (rm.to_csv(index=False) if rm is not None else "note,no replicate column\n")
+
+    @render.download(filename=lambda: "pairwise_tests.csv")
+    def dl_pairwise():
+        a = analysis()
+        um = a["unit_means"]
+        rows = [{"group_a": x, "group_b": y,
+                 "mean_a": um.get(x, float("nan")), "mean_b": um.get(y, float("nan")),
+                 "mean_diff": um.get(x, float("nan")) - um.get(y, float("nan")),
+                 "p_adj": p, "signif": ps.stars(p)}
+                for (x, y), p in (a["posthoc"] or {}).items()]
+        yield (pd.DataFrame(rows).to_csv(index=False) if rows else "note,need >=2 groups\n")
+
+    @render.download(filename=lambda: "plaque_stats_all.zip")
+    def dl_all():
+        df = raw.get(); req(df is not None)
+        a = analysis()
+        is_long = "value" in [str(c) for c in df.columns]
+        value = input.metric() if is_long else input.value()
+        rep_in = input.replicate()
+        rep = rep_in if (rep_in and rep_in != "(none)") else "replicate"
+        tmp = tempfile.mkdtemp()
+        src = os.path.join(tmp, "data.csv"); df.to_csv(src, index=False)
+        outdir = os.path.join(tmp, "out")
+        args = dict(a["opts"])                      # DEFAULTS + all the app's options (palette, center, …)
+        args.update(data=src, group=input.group(), value=value, replicate=rep, metric="metric",
+                    out=outdir, formats=["png", "svg", "pdf"], order=a["order"], _stamp="")
+        ps.run(args)                                # writes the full CLI output set
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for fn in sorted(os.listdir(outdir)):
+                z.write(os.path.join(outdir, fn), fn)
+        yield buf.getvalue()
 
 
 app = App(app_ui, server)

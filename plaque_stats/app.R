@@ -279,9 +279,13 @@ server <- function(input, output, session) {
     d <- dat(); req(nrow(d) > 0)
     gpal <- rep(palette_vec(), length.out = nlevels(d$group))
     superplot <- isTRUE(has_rep())      # Violin SuperPlot when we have >=2 plates per group
-    # neutral grey violin when plate colours carry the hue (forced in SuperPlot mode to keep one
-    # fill scale for the plate legend); group-coloured only when there are no plate points
-    neutral_violin <- superplot || input$vfill == "neutral"
+    chose_theme <- (!is.null(input$palette_name) && input$palette_name != "" &&
+                    !is.null(PALETTES[[input$palette_name]])) || nzchar(trimws(input$palette))
+    # colour the violins by group when the user asks for group fill, OR picks a colour theme
+    # (otherwise the theme silently does nothing under the neutral grey SuperPlot default);
+    # otherwise keep the grey SuperPlot violin so the plate colours carry the hue.
+    group_fill <- identical(input$vfill, "group") || (chose_theme && identical(input$vfill, "auto"))
+    neutral_violin <- identical(input$vfill, "neutral") || (!group_fill && superplot)
     g <- ggplot(d, aes(group, value))
     if (neutral_violin) {
       g <- g + geom_violin(fill = "#b9c2bd", color = "#6f7b74", alpha = 0.38,

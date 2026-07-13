@@ -83,14 +83,16 @@ a paste-ready sentence + interpretation.</p>
   is the mean bias, the amber dashed lines the 95% limits of agreement; red points fall outside them.</figcaption>
 </figure>
 <div class="scroll"><table>
-  <thead><tr><th>n</th><th>Pearson r</th><th>ICC(A,1)</th><th>bias</th><th>95% LoA</th><th>slope</th></tr></thead>
-  <tbody><tr><td>120</td><td>0.99</td><td>0.99 <span class="k">(excellent)</span></td>
-    <td>−0.027 mm (−2.6%)</td><td>−0.128 to +0.074 mm</td><td>0.99</td></tr></tbody>
+  <thead><tr><th>n</th><th>r (R²)</th><th>ICC(A,1) [95% CI]</th><th>Lin's CCC</th><th>bias</th><th>95% LoA</th></tr></thead>
+  <tbody><tr><td>120</td><td>0.99 (0.98)</td><td>0.99 [0.98–0.99] <span class="k">excellent</span></td>
+    <td>0.99</td><td>−0.027 mm (−2.6%)</td><td>−0.128 to +0.074 mm</td></tr></tbody>
 </table></div>
 <div class="card paste"><b>Paste-ready sentence</b>
-  <p style="margin:6px 0 0">Plaque diameter measured with Plaque Toolkit agreed with Fiji/ImageJ
-  (n = 120): Pearson r = 0.99, ICC(A,1) = 0.99 (excellent agreement). Bland–Altman analysis showed a
-  mean bias of −0.027 mm (−2.6%) with 95% limits of agreement of −0.128 to +0.074 mm, and a regression
+  <p style="margin:6px 0 0">Plaque diameter measured with Plaque Toolkit closely agreed with Fiji/ImageJ
+  (n = 120): highly correlated (Pearson r = 0.992, R² = 0.983, p &lt; 0.001), with an intraclass
+  correlation coefficient ICC(A,1) = 0.989 (95% CI 0.983–0.993; excellent agreement) and Lin's
+  concordance correlation CCC = 0.989. Bland–Altman analysis showed a mean bias of −0.027 mm (−2.6%;
+  paired t-test p &lt; 0.001) with 95% limits of agreement of −0.128 to +0.074 mm, and a regression
   slope of 0.99 (1.0 = no proportional bias).</p></div>
 
 <h2>4 · Understand it — interactive Bland–Altman</h2>
@@ -131,8 +133,10 @@ agreement. A non-zero proportional slope tilts the cloud — the methods disagre
     measure of how interchangeable the two methods are. Report them with the bias.</li>
   <li><b>Proportional bias</b> — slope near 1.0 (or a flat Bland–Altman cloud) means the disagreement does
     <i>not</i> grow with plaque size. A clear tilt means it does — report that.</li>
-  <li><b><i>r</i> vs ICC</b> — Pearson <i>r</i> only measures correlation and stays high even with a large
-    bias; ICC penalises bias. Always report ICC (or both).</li>
+  <li><b><i>r</i> / R² vs ICC</b> — Pearson <i>r</i> (and R²) only measure correlation and stay high even
+    with a large bias; ICC penalises bias. Always report ICC (or both).</li>
+  <li><b>Lin's CCC</b> — the concordance correlation coefficient combines accuracy and precision in one
+    number; many method-validation papers report it alongside ICC.</li>
   <li><b>Red points</b> = the plaques whose tool−manual difference is outside the 95% limits — the largest
     disagreements, worth eyeballing.</li>
   <li><b>Report n <i>and</i> plates.</b> Write "n = 100 plaques from N plates." Size agreement is a

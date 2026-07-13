@@ -137,6 +137,85 @@ unreliable and non-parametric tests are underpowered at n = 3). In this example:
   </tbody>
 </table></div>
 
+<h2>6 · Preview the colour themes (interactive)</h2>
+<p class="muted">Pick a theme and a fill — the mini SuperPlot recolours live. In the app, choosing a
+theme now colours the violins automatically; leave it on the default <b>neutral grey</b> for the
+classic SuperPlot look (points coloured by plate).</p>
+<div class="card">
+  <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:14px">
+    <label>Theme&nbsp;
+      <select id="theme"><option>okabe</option><option>set2</option><option>tab10</option>
+      <option>warm</option><option>cool</option><option>grays</option></select></label>
+    <label>Violin fill&nbsp;
+      <select id="fill"><option value="neutral">neutral grey (SuperPlot)</option>
+      <option value="group">coloured by sample</option></select></label>
+    <label><input type="checkbox" id="showpts" checked>&nbsp;plaque points (by plate)</label>
+  </div>
+  <canvas id="mini" width="660" height="300" style="width:100%;max-width:660px;margin-top:10px;border:1px solid var(--line);border-radius:8px"></canvas>
+</div>
+
+<script>
+(function(){
+  var PAL={
+    okabe:["#0072B2","#E69F00","#009E73","#CC79A7","#56B4E9","#D55E00","#F0E442","#999999"],
+    set2:["#66C2A5","#FC8D62","#8DA0CB","#E78AC3","#A6D854","#FFD92F","#E5C494","#B3B3B3"],
+    tab10:["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f"],
+    warm:["#B4451F","#D98032","#E9B44C","#9B2226","#CA6702","#BB3E03","#AE2012","#EE9B00"],
+    cool:["#3D5A80","#5E8B9E","#98C1D9","#293241","#4C6E9C","#6AAA9E","#5C7AA0","#7FB3C9"],
+    grays:["#4d4d4d","#7f7f7f","#a6a6a6","#c9c9c9","#2b2b2b","#8f8f8f","#606060","#b8b8b8"]};
+  var REP=["#4C6E9C","#E0A458","#6AAA64","#B65C5C","#8A78B0","#4FA3A5","#C77CB5"];
+  function mul(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  var rnd=mul(7);
+  function gauss(){var u=0,v=0;while(!u)u=rnd();while(!v)v=rnd();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+  var G=["Sample A","Sample B","Sample C","Sample D"], base=[0.55,0.90,1.12,1.15], P=3, NPP=13, groups=[];
+  for(var g=0;g<G.length;g++){var plates=[];
+    for(var p=0;p<P;p++){var pm=base[g]+0.10*gauss(), pts=[];
+      for(var i=0;i<NPP;i++) pts.push(Math.max(0.05, pm+0.16*gauss())); plates.push({mean:pm,pts:pts});}
+    var all=[].concat.apply([],plates.map(function(pl){return pl.pts;}));
+    var m=all.reduce((a,b)=>a+b,0)/all.length, sd=Math.sqrt(all.reduce((s,x)=>s+(x-m)*(x-m),0)/all.length);
+    groups.push({plates:plates,mean:m,sd:Math.max(sd,0.05)});}
+  var vals=[].concat.apply([],groups.map(function(gr){return [].concat.apply([],gr.plates.map(function(p){return p.pts;}));}));
+  var ymin=Math.min.apply(0,vals)-0.1, ymax=Math.max.apply(0,vals)+0.1;
+  var jit={}; function jitter(k){ if(!(k in jit)) jit[k]=rnd()*2-1; return jit[k]; }
+  function hexA(h,a){h=h.replace('#','');return 'rgba('+parseInt(h.slice(0,2),16)+','+
+    parseInt(h.slice(2,4),16)+','+parseInt(h.slice(4,6),16)+','+a+')';}
+  var cv=document.getElementById('mini'),th=document.getElementById('theme'),
+      fl=document.getElementById('fill'),sp=document.getElementById('showpts');
+  function draw(){
+    var dpr=window.devicePixelRatio||1,W=660,H=300;
+    cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';
+    var x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+    var cs=getComputedStyle(document.documentElement),line=cs.getPropertyValue('--line').trim(),mut=cs.getPropertyValue('--mut').trim();
+    var pl=46,pr=14,pt=16,pb=34, Y=v=>H-pb-(v-ymin)/(ymax-ymin)*(H-pt-pb);
+    x.strokeStyle=line;x.lineWidth=1;x.beginPath();x.moveTo(pl,pt);x.lineTo(pl,H-pb);x.lineTo(W-pr,H-pb);x.stroke();
+    x.fillStyle=mut;x.font='11px system-ui';x.textAlign='right';
+    for(var t=0;t<=3;t++){var yv=ymin+(ymax-ymin)*t/3;x.fillText(yv.toFixed(1),pl-5,Y(yv)+4);}
+    x.save();x.translate(13,(pt+H-pb)/2);x.rotate(-Math.PI/2);x.textAlign='center';x.fillText('plaque diameter (mm)',0,0);x.restore();
+    var pal=PAL[th.value],grp=fl.value==='group',slot=(W-pl-pr)/G.length;
+    for(var g=0;g<groups.length;g++){
+      var cx=pl+slot*(g+0.5),gr=groups[g],maxHW=slot*0.34,gc=pal[g%pal.length],st=40;
+      x.beginPath();
+      for(var i=0;i<=st;i++){var yy=ymin+(ymax-ymin)*i/st;x.lineTo(cx+maxHW*Math.exp(-0.5*Math.pow((yy-gr.mean)/gr.sd,2)),Y(yy));}
+      for(var i=st;i>=0;i--){var yy=ymin+(ymax-ymin)*i/st;x.lineTo(cx-maxHW*Math.exp(-0.5*Math.pow((yy-gr.mean)/gr.sd,2)),Y(yy));}
+      x.closePath();
+      x.fillStyle=grp?hexA(gc,0.28):'rgba(150,160,155,0.28)';
+      x.strokeStyle=grp?gc:'#8a938e';x.lineWidth=1;x.fill();x.stroke();
+      if(sp.checked){for(var p=0;p<gr.plates.length;p++){var col=REP[p%REP.length];
+        gr.plates[p].pts.forEach(function(v,k){x.beginPath();x.arc(cx+12*jitter(g+'-'+p+'-'+k),Y(v),2.3,0,7);
+          x.fillStyle=col;x.globalAlpha=.72;x.fill();x.globalAlpha=1;});}}
+      for(var p=0;p<gr.plates.length;p++){x.beginPath();x.arc(cx+(p-1)*11,Y(gr.plates[p].mean),4.3,0,7);
+        x.fillStyle=REP[p%REP.length];x.strokeStyle='#fff';x.lineWidth=1;x.fill();x.stroke();}
+      x.beginPath();x.arc(cx,Y(gr.mean),3.8,0,7);x.fillStyle='#33413c';x.fill();
+      x.fillStyle=mut;x.textAlign='center';x.fillText(G[g],cx,H-pb+16);
+    }
+  }
+  [th,fl,sp].forEach(function(e){e.addEventListener('input',draw);e.addEventListener('change',draw);});
+  draw();
+})();
+</script>
+
 <h2>References</h2>
 <ul class="muted">
   <li>Lord SJ <i>et al.</i> (2020). SuperPlots: communicating reproducibility and variability in cell

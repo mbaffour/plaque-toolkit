@@ -35,6 +35,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from scipy import stats as scstats
 
 import matplotlib
 matplotlib.use("Agg")
@@ -120,6 +121,51 @@ def compute(tool, fiji):
 
 
 # =============================================================================
+#  Extra rigour: R^2, Pearson p, paired bias test, Lin's CCC, bootstrap ICC CI
+#  (a full method-comparison / agreement panel — not just correlation)
+# =============================================================================
+def ccc(x, y):
+    """Lin's concordance correlation coefficient (accuracy AND precision)."""
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    mx, my = x.mean(), y.mean()
+    vx, vy = x.var(), y.var()            # population variances (Lin 1989)
+    cov = ((x - mx) * (y - my)).mean()
+    denom = vx + vy + (mx - my) ** 2
+    return float(2 * cov / denom) if denom else float("nan")
+
+
+def icc_ci(tool, fiji, n_boot=2000, seed=7):
+    """Percentile bootstrap 95% CI for ICC(A,1) (2000 resamples, seeded)."""
+    t = np.asarray(tool, float); f = np.asarray(fiji, float); n = len(t)
+    if n < 3:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        vals.append(icc_a1(f[idx].tolist(), t[idx].tolist()))
+    vals = [v for v in vals if v == v]
+    if not vals:
+        return float("nan"), float("nan")
+    lo, hi = np.percentile(vals, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def extra_stats(tool, fiji, seed=7):
+    """scipy-backed additions to compute(): R^2, Pearson p, paired t-test, CCC, ICC CI."""
+    r, rp = scstats.pearsonr(tool, fiji)
+    t, tp = scstats.ttest_rel(tool, fiji)
+    lo, hi = icc_ci(tool, fiji, seed=seed)
+    return {"r2": float(r * r), "pearson_p": float(rp),
+            "t_stat": float(t), "t_p": float(tp),
+            "ccc": ccc(tool, fiji), "icc_lo": lo, "icc_hi": hi}
+
+
+def _pfmt(p):
+    return "< 0.001" if p < 0.001 else ("%.3f" % p)
+
+
+# =============================================================================
 #  Interpretation, report, figure (parameterised labels)
 # =============================================================================
 def icc_grade(icc):
@@ -131,12 +177,20 @@ def icc_grade(icc):
 
 
 def report_sentence(s, unit, what, label_tool, label_manual):
-    return ("Plaque %s measured with %s agreed with %s (n = %d): Pearson r = %.2f, "
-            "ICC(A,1) = %.2f (%s agreement). Bland-Altman analysis showed a mean bias of "
-            "%+.3f %s (%.1f%%) with 95%% limits of agreement of %+.3f to %+.3f %s, and a "
-            "regression slope of %.2f (1.0 = no proportional bias)."
-            % (what, label_tool, label_manual, s["n"], s["r"], s["icc"], icc_grade(s["icc"]),
-               s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    icc_ci = ("" if s.get("icc_lo") != s.get("icc_lo")
+              else " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"]))
+    bias_ns = ("not significantly different from zero" if s.get("t_p", 1) >= 0.05
+               else "significantly different from zero")
+    return ("Plaque %s measured with %s closely agreed with %s (n = %d): highly correlated "
+            "(Pearson r = %.3f, R² = %.3f, p %s), with an intraclass correlation coefficient "
+            "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
+            "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test p = %s) "
+            "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
+            "(1.0 = no proportional bias)."
+            % (what, label_tool, label_manual, s["n"], s["r"], s.get("r2", s["r"] ** 2),
+               _pfmt(s.get("pearson_p", float("nan"))), s["icc"], icc_ci, icc_grade(s["icc"]),
+               s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
+               _pfmt(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
 
 
 def make_figure(s, unit, label_tool, label_manual, title=None):
@@ -169,9 +223,14 @@ def make_figure(s, unit, label_tool, label_manual, title=None):
     ax1.set_xlabel("%s (%s)" % (label_manual, unit))
     ax1.set_ylabel("%s (%s)" % (label_tool, unit))
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
-    ax1.text(.04, .96, "n=%d\nr=%.3f\nICC=%.3f" % (s["n"], s["r"], s["icc"]),
-             transform=ax1.transAxes, va="top", ha="left", fontsize=8, family="monospace",
+    _xl = np.array(lim)                                    # regression line (tool on reference)
+    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color="#b45309", lw=1.2, zorder=2)
+    ax1.text(.04, .96, "n=%d\nr=%.3f  R²=%.3f\nICC=%.3f\nCCC=%.3f"
+             % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"], s.get("ccc", float("nan"))),
+             transform=ax1.transAxes, va="top", ha="left", fontsize=7.5, family="monospace",
              bbox=dict(boxstyle="round,pad=0.3", fc="#f0f5f2", ec="#cfe0d8"))
+    ax1.text(.96, .05, "y = %.3f x %+.3f" % (s["slope"], s["intercept"]), transform=ax1.transAxes,
+             va="bottom", ha="right", fontsize=7.5, family="monospace", color="#b45309")
 
     ax2.axhline(0, color="#c8d2ce", lw=.8)
     ax2.axhline(s["bias"], color=TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
@@ -233,6 +292,7 @@ def run(args):
     d = df[[tcol, mcol]].apply(pd.to_numeric, errors="coerce").dropna()
     tool_vals, manual_vals = d[tcol].tolist(), d[mcol].tolist()
     s = compute(tool_vals, manual_vals)
+    s.update(extra_stats(tool_vals, manual_vals))          # R², CCC, ICC CI, p-values
 
     unit = args["unit"]; what = args["what"]
     lt, lm = args["label_tool"], args["label_manual"]
@@ -249,7 +309,8 @@ def run(args):
 
     # stats CSV (one row)
     row = {k: s[k] for k in ("n", "mean_tool", "mean_fiji", "bias", "sd", "loa_lo", "loa_hi",
-                             "rmse", "pct_bias", "mae", "r", "icc", "slope", "intercept")}
+                             "rmse", "pct_bias", "mae", "r", "r2", "pearson_p", "t_stat", "t_p",
+                             "icc", "icc_lo", "icc_hi", "ccc", "slope", "intercept")}
     row["icc_grade"] = icc_grade(s["icc"])
     pd.DataFrame([row]).to_csv(os.path.join(out, "agreement_stats_%s.csv" % suf), index=False)
 
@@ -261,23 +322,34 @@ def run(args):
         f.write("**%s vs %s**  (bias = %s - %s)\n\n" % (lt, lm, lt, lm))
         f.write("| statistic | value |\n|---|---|\n")
         f.write("| n pairs | %d |\n" % s["n"])
-        f.write("| Pearson r | %.3f |\n" % s["r"])
-        f.write("| ICC(A,1) | %.3f (%s) |\n" % (s["icc"], icc_grade(s["icc"])))
+        f.write("| Pearson r (p) | %.3f (%s) |\n" % (s["r"], _pfmt(s["pearson_p"])))
+        f.write("| R^2 | %.3f |\n" % s["r2"])
+        f.write("| ICC(A,1) | %.3f (95%% CI %.3f-%.3f; %s) |\n"
+                % (s["icc"], s["icc_lo"], s["icc_hi"], icc_grade(s["icc"])))
+        f.write("| Lin's CCC | %.3f |\n" % s["ccc"])
         f.write("| mean bias (%s) | %+.3f (%.1f%%) |\n" % (unit, s["bias"], s["pct_bias"]))
+        f.write("| bias vs 0 (paired t) | t = %.2f, p = %s |\n" % (s["t_stat"], _pfmt(s["t_p"])))
         f.write("| 95%% limits of agreement | %+.3f to %+.3f %s |\n" % (s["loa_lo"], s["loa_hi"], unit))
         f.write("| RMSE / MAE (%s) | %.3f / %.3f |\n" % (unit, s["rmse"], s["mae"]))
-        f.write("| proportional-bias slope | %.3f (1.0 = none) |\n\n" % s["slope"])
+        f.write("| regression (tool on ref) | y = %.3f x %+.3f  (slope 1.0 = no proportional bias) |\n\n"
+                % (s["slope"], s["intercept"]))
         f.write("## Paste-ready sentence\n\n> %s\n\n" % sent)
         f.write("## How to read it\n\n"
-                "- **ICC(A,1)** (Koo & Li 2016): <0.5 poor, 0.5-0.75 moderate, 0.75-0.90 good, "
-                ">0.90 excellent.\n"
-                "- **Bias** = the systematic offset (tool minus reference); state it, don't hide it.\n"
+                "- **Pearson r / R^2** measure *association*, not agreement - two methods can correlate "
+                "perfectly yet disagree systematically, so never report r alone.\n"
+                "- **ICC(A,1)** (Koo & Li 2016) is the agreement statistic (it penalises bias): "
+                "<0.5 poor, 0.5-0.75 moderate, 0.75-0.90 good, >0.90 excellent.\n"
+                "- **Lin's CCC** captures accuracy *and* precision together (a common method-validation metric).\n"
+                "- **Bias** = the systematic offset (tool minus reference); state it, don't hide it. The "
+                "paired t-test says whether it differs from zero.\n"
                 "- **95%% limits of agreement** = the range within which ~95%% of differences fall - "
                 "the practical measure of how interchangeable the methods are.\n"
-                "- **Proportional-bias slope** near 1.0 means the disagreement does not grow with size.\n")
-    print("[done] %s: n=%d  r=%.3f  ICC=%.3f  bias=%+.3f %s (%.1f%%)  LoA %+.3f..%+.3f  -> %s"
-          % (what, s["n"], s["r"], s["icc"], s["bias"], unit, s["pct_bias"],
-             s["loa_lo"], s["loa_hi"], out))
+                "- **Regression slope** near 1.0 (a flat Bland-Altman cloud) means the disagreement does "
+                "not grow with size.\n")
+    print("[done] %s: n=%d  r=%.3f  R2=%.3f  ICC=%.3f (%.3f-%.3f)  CCC=%.3f  bias=%+.3f %s (%.1f%%)  "
+          "LoA %+.3f..%+.3f  -> %s"
+          % (what, s["n"], s["r"], s["r2"], s["icc"], s["icc_lo"], s["icc_hi"], s["ccc"],
+             s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
                "what": what, "stamp": stamp, "version": __version__,
