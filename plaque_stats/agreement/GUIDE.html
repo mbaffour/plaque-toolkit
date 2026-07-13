@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agreement (tool vs manual) — Guide</title>
+<style>
+  :root{ --bg:#fff; --fg:#1c2b33; --mut:#5c6b73; --card:#f7f9fa; --line:#dde5e9;
+         --accent:#0e7d5b; --amber:#b45309; --blue:#3f5b8c; --out:#d1495b; --code:#eef2f4; }
+  @media (prefers-color-scheme:dark){ :root{ --bg:#12181b; --fg:#e6edf0; --mut:#9fb0b8;
+         --card:#1b2429; --line:#2b373d; --accent:#3ec99a; --amber:#e0a458; --blue:#8aa0c8;
+         --code:#1b2429; } }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.6 "Segoe UI",system-ui,-apple-system,Arial,sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:32px 22px 80px}
+  header{border-bottom:2px solid var(--line);padding-bottom:16px;margin-bottom:8px}
+  h1{font-size:27px;margin:0 0 4px} h2{font-size:20px;margin:34px 0 10px} h3{font-size:16px;margin:18px 0 6px}
+  .sub{color:var(--mut);font-size:14px} .muted{color:var(--mut);font-size:14px}
+  code{background:var(--code);padding:1px 6px;border-radius:5px;font-family:"Cascadia Code",Consolas,monospace;font-size:13.5px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:9px;padding:12px 14px;overflow-x:auto}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--mut);font-weight:600} .scroll{overflow-x:auto}
+  figure{margin:14px 0} figure img{width:100%;border:1px solid var(--line);border-radius:10px}
+  figcaption{color:var(--mut);font-size:13px;margin-top:6px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin:14px 0}
+  .paste{border-left:4px solid var(--accent)}
+  .pill{display:inline-block;background:var(--accent);color:#fff;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600}
+  a{color:var(--accent)}
+  /* interactive widget */
+  .widget{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:720px){.widget{grid-template-columns:1fr}}
+  .plots{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  canvas{background:var(--bg);border:1px solid var(--line);border-radius:8px;max-width:100%}
+  .controls label{display:block;margin:10px 0 2px;font-size:13px;font-weight:600}
+  .controls input[type=range]{width:100%}
+  .val{color:var(--accent);font-variant-numeric:tabular-nums}
+  .readout{font-family:"Cascadia Code",Consolas,monospace;font-size:13px;line-height:1.9}
+  .readout b{color:var(--accent)} .verdict{margin-top:8px;font-family:inherit;font-size:14px}
+  .k{color:var(--mut)}
+</style></head>
+<body><div class="wrap">
+
+<header>
+  <h1>Agreement: tool vs manual <span class="pill">guide</span></h1>
+  <div class="sub">Does the automated tool's measurement <b>agree</b> with a manual reference
+  (e.g. Plaque Toolkit vs hand-tracing in Fiji/ImageJ)? This is the <b>method-comparison</b> analysis —
+  Bland–Altman + ICC — you report when you validate the tool. Includes an interactive explainer.</div>
+</header>
+
+<p class="muted">Companion to <code>agreement/README.md</code>. It computes Pearson <i>r</i>,
+<b>ICC(A,1)</b> (absolute agreement), and <b>Bland–Altman</b> bias + 95% limits of agreement, using the
+same maths that validated the toolkit itself (ICC 0.97).</p>
+
+<h2>1 · Put your paired data in this shape</h2>
+<p><b>One row per plaque</b>, with <b>two numeric columns</b>: the tool measurement and the manual
+reference (same plaques, both methods).</p>
+<div class="scroll"><table>
+  <thead><tr><th>plaque_id</th><th>toolkit_mm</th><th>manual_mm</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>1.038</td><td>1.052</td></tr>
+    <tr><td>2</td><td>1.138</td><td>1.192</td></tr>
+    <tr><td>3</td><td>0.914</td><td>0.937</td></tr>
+  </tbody>
+</table></div>
+<p class="muted">Column names are auto-detected (containing <i>tool/toolkit/auto/precise</i> vs
+<i>manual/fiji/imagej/hand/reference</i>), or set them with <code>--tool</code> / <code>--manual</code>.
+To measure the same plaques both ways, trace them in Fiji and export the tool's per-plaque CSV, then
+line them up by plaque.</p>
+
+<h2>2 · Run it</h2>
+<p>Double-click <b><code>Run Agreement (tool vs manual).bat</code></b> — drop your CSV on it, or run it
+to use the bundled example. Or from the command line:</p>
+<pre><code>python agreement.py --make-example          # writes example_agreement.csv
+python agreement.py example_agreement.csv --unit mm --what "plaque diameter" --out results</code></pre>
+<p class="muted">You get: a two-panel figure (PNG/SVG/PDF), a stats CSV, and a <code>report.md</code> with
+a paste-ready sentence + interpretation.</p>
+
+<h2>3 · What you get — the worked example</h2>
+<figure>
+  <img alt="Method comparison scatter and Bland-Altman plot" src="example_output.png">
+  <figcaption><b>Left (A):</b> each plaque's tool vs manual value against the dashed line of identity.
+  <b>Right (B):</b> Bland–Altman — the difference (tool − manual) vs the mean of the two; the green line
+  is the mean bias, the amber dashed lines the 95% limits of agreement; red points fall outside them.</figcaption>
+</figure>
+<div class="scroll"><table>
+  <thead><tr><th>n</th><th>Pearson r</th><th>ICC(A,1)</th><th>bias</th><th>95% LoA</th><th>slope</th></tr></thead>
+  <tbody><tr><td>120</td><td>0.99</td><td>0.99 <span class="k">(excellent)</span></td>
+    <td>−0.027 mm (−2.6%)</td><td>−0.128 to +0.074 mm</td><td>0.99</td></tr></tbody>
+</table></div>
+<div class="card paste"><b>Paste-ready sentence</b>
+  <p style="margin:6px 0 0">Plaque diameter measured with Plaque Toolkit agreed with Fiji/ImageJ
+  (n = 120): Pearson r = 0.99, ICC(A,1) = 0.99 (excellent agreement). Bland–Altman analysis showed a
+  mean bias of −0.027 mm (−2.6%) with 95% limits of agreement of −0.128 to +0.074 mm, and a regression
+  slope of 0.99 (1.0 = no proportional bias).</p></div>
+
+<h2>4 · Understand it — interactive Bland–Altman</h2>
+<p class="muted">Drag the sliders and watch the plots + verdict update. This is simulated data — it
+shows how <b>bias</b>, <b>scatter</b> and <b>proportional bias</b> each change the picture and the ICC.</p>
+<div class="widget card">
+  <div class="controls">
+    <label>Systematic bias: <span class="val" id="vBias">0.00</span> mm</label>
+    <input type="range" id="bias" min="-0.4" max="0.4" step="0.01" value="-0.03">
+    <label>Random scatter (→ limits of agreement): <span class="val" id="vSpread">0.06</span></label>
+    <input type="range" id="spread" min="0.01" max="0.35" step="0.005" value="0.06">
+    <label>Proportional bias (slope of difference vs size): <span class="val" id="vProp">0.00</span></label>
+    <input type="range" id="prop" min="-0.4" max="0.4" step="0.01" value="0">
+    <div class="readout" style="margin-top:12px">
+      ICC(A,1) = <b id="rIcc">–</b> <span class="k" id="rGrade"></span><br>
+      Pearson r = <b id="rR">–</b><br>
+      bias = <b id="rBias">–</b> mm &nbsp; 95% LoA = <b id="rLoa">–</b><br>
+      proportional slope = <b id="rSlope">–</b>
+    </div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+  <div class="plots">
+    <canvas id="cScatter" width="320" height="250"></canvas>
+    <canvas id="cBA" width="320" height="250"></canvas>
+  </div>
+</div>
+<p class="muted">Notice: bias slides the whole cloud up/down (and <b>drops the ICC while <i>r</i> stays
+high</b> — that's why ICC, not <i>r</i>, is the agreement statistic). More scatter widens the limits of
+agreement. A non-zero proportional slope tilts the cloud — the methods disagree more at larger sizes.</p>
+
+<h2>5 · How to interpret &amp; report</h2>
+<ul>
+  <li><b>ICC(A,1)</b> — the headline agreement number. Koo &amp; Li (2016) bands:
+    <span class="k">&lt;0.5 poor · 0.5–0.75 moderate · 0.75–0.90 good · &gt;0.90 excellent</span>.</li>
+  <li><b>Bias</b> — the average systematic offset (tool − manual). <b>State it, don't hide it</b>; a small,
+    constant, size-independent bias reads as rigour.</li>
+  <li><b>95% limits of agreement</b> — the range within which ~95% of the differences fall; the practical
+    measure of how interchangeable the two methods are. Report them with the bias.</li>
+  <li><b>Proportional bias</b> — slope near 1.0 (or a flat Bland–Altman cloud) means the disagreement does
+    <i>not</i> grow with plaque size. A clear tilt means it does — report that.</li>
+  <li><b><i>r</i> vs ICC</b> — Pearson <i>r</i> only measures correlation and stays high even with a large
+    bias; ICC penalises bias. Always report ICC (or both).</li>
+  <li><b>Red points</b> = the plaques whose tool−manual difference is outside the 95% limits — the largest
+    disagreements, worth eyeballing.</li>
+  <li><b>Report n <i>and</i> plates.</b> Write "n = 100 plaques from N plates." Size agreement is a
+    per-plaque comparison, so 100 plaques already gives tight limits; but plaques share a plate/calibration,
+    so ≥5 plates (ideally a second independent tracer) makes it robust. This validates <b>size</b>, not counts.</li>
+</ul>
+
+<h2>References</h2>
+<ul class="muted">
+  <li>Bland JM &amp; Altman DG (1986). Statistical methods for assessing agreement between two methods of
+  clinical measurement. <i>Lancet</i> 327:307–310.</li>
+  <li>Koo TK &amp; Li MY (2016). A guideline of selecting and reporting intraclass correlation
+  coefficients. <i>J Chiropr Med</i> 15:155–163.</li>
+</ul>
+
+<script>
+(function(){
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  var rnd=mulberry32(42);
+  function gauss(){var u=0,v=0;while(u===0)u=rnd();while(v===0)v=rnd();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+  var N=80, baseManual=[], baseNoise=[];
+  for(var i=0;i<N;i++){ baseManual.push(0.35+2.15*rnd()); baseNoise.push(gauss()); }
+  var mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+  var meanManual=mean(baseManual);
+  function sd(a){var m=mean(a);return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/(a.length-1));}
+  function pearson(x,y){var mx=mean(x),my=mean(y),n=0,dx=0,dy=0;for(var i=0;i<x.length;i++){
+    n+=(x[i]-mx)*(y[i]-my);dx+=(x[i]-mx)*(x[i]-mx);dy+=(y[i]-my)*(y[i]-my);}return n/Math.sqrt(dx*dy);}
+  function iccA1(ref,test){var n=ref.length,k=2,all=[];for(var i=0;i<n;i++){all.push(ref[i],test[i]);}
+    var g=mean(all),ssr=0;for(i=0;i<n;i++){ssr+=Math.pow((ref[i]+test[i])/2-g,2);}ssr*=k;
+    var ssc=n*(Math.pow(mean(ref)-g,2)+Math.pow(mean(test)-g,2));
+    var sse=all.reduce((s,v)=>s+Math.pow(v-g,2),0)-ssr-ssc;
+    var msr=ssr/(n-1),msc=ssc/(k-1),mse=sse/((n-1)*(k-1));
+    return (msr-mse)/(msr+(k-1)*mse+(k/n)*(msc-mse));}
+  function slopeYonX(x,y){var mx=mean(x),my=mean(y),sxx=0,sxy=0;for(var i=0;i<x.length;i++){
+    sxx+=(x[i]-mx)*(x[i]-mx);sxy+=(x[i]-mx)*(y[i]-my);}return sxy/sxx;}
+  function grade(v){return v<0.5?"poor":v<0.75?"moderate":v<0.90?"good":"excellent";}
+  var css=getComputedStyle(document.documentElement);
+  var C={accent:css.getPropertyValue('--accent').trim(),amber:css.getPropertyValue('--amber').trim(),
+    blue:css.getPropertyValue('--blue').trim(),out:css.getPropertyValue('--out').trim(),
+    line:css.getPropertyValue('--line').trim(),mut:css.getPropertyValue('--mut').trim()};
+
+  function plot(cv, xs, ys, o){
+    var dpr=window.devicePixelRatio||1, W=320,H=250;
+    cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';
+    var g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);
+    var pl=42,pr=10,pt=22,pb=30, x0=o.xmin,x1=o.xmax,y0=o.ymin,y1=o.ymax;
+    var X=v=>pl+(v-x0)/(x1-x0)*(W-pl-pr), Y=v=>H-pb-(v-y0)/(y1-y0)*(H-pt-pb);
+    g.strokeStyle=C.line;g.lineWidth=1;g.beginPath();
+    g.moveTo(pl,pt-4);g.lineTo(pl,H-pb);g.lineTo(W-pr,H-pb);g.stroke();
+    g.fillStyle=C.mut;g.font='10px system-ui';g.textAlign='center';
+    g.fillText(o.xlabel,(pl+W-pr)/2,H-6);
+    g.save();g.translate(11,(pt+H-pb)/2);g.rotate(-Math.PI/2);g.fillText(o.ylabel,0,0);g.restore();
+    g.textAlign='right';
+    for(var t=0;t<=2;t++){var yv=y0+(y1-y0)*t/2;g.fillText(yv.toFixed(2),pl-4,Y(yv)+3);}
+    (o.lines||[]).forEach(function(L){g.strokeStyle=L.color;g.lineWidth=L.w||1.4;
+      g.setLineDash(L.dash?[5,4]:[]);g.beginPath();
+      if(L.diag){g.moveTo(X(x0),Y(x0));g.lineTo(X(x1),Y(x1));}
+      else{g.moveTo(pl,Y(L.y));g.lineTo(W-pr,Y(L.y));}g.stroke();g.setLineDash([]);});
+    for(var i=0;i<xs.length;i++){var out=o.outliers&&o.outliers[i];
+      g.beginPath();g.arc(X(xs[i]),Y(ys[i]),out?3.6:2.6,0,7);
+      g.fillStyle=out?C.out:o.color;g.globalAlpha=out?.95:.7;g.fill();g.globalAlpha=1;}
+  }
+
+  function update(){
+    var bias=+bi.value, spread=+sp.value, prop=+pr_.value;
+    vBias.textContent=bias.toFixed(2);vSpread.textContent=spread.toFixed(2);vProp.textContent=prop.toFixed(2);
+    var manual=baseManual, diff=[],tool=[],mv=[];
+    for(var i=0;i<N;i++){var d=bias+prop*(manual[i]-meanManual)+spread*baseNoise[i];
+      diff.push(d);tool.push(manual[i]+d);mv.push((manual[i]+tool[i])/2);}
+    var b=mean(diff), s=sd(diff), lo=b-1.96*s, hi=b+1.96*s;
+    var icc=iccA1(manual,tool), r=pearson(manual,tool), psl=slopeYonX(mv,diff);
+    var outl=diff.map(d=>d<lo||d>hi);
+    var allv=manual.concat(tool), amin=Math.min.apply(0,allv), amax=Math.max.apply(0,allv);
+    plot(cS, manual, tool, {xmin:amin,xmax:amax,ymin:amin,ymax:amax,color:C.accent,outliers:outl,
+      xlabel:'manual (mm)',ylabel:'tool (mm)',lines:[{diag:true,color:C.mut,dash:true,w:1}]});
+    var dspan=Math.max(Math.abs(hi),Math.abs(lo),Math.max.apply(0,diff.map(Math.abs)))*1.2||0.1;
+    plot(cB, mv, diff, {xmin:amin,xmax:amax,ymin:-dspan,ymax:dspan,color:C.blue,outliers:outl,
+      xlabel:'mean (mm)',ylabel:'tool − manual',
+      lines:[{y:0,color:C.line,w:.8},{y:b,color:C.accent,w:1.7},
+        {y:hi,color:C.amber,dash:true},{y:lo,color:C.amber,dash:true}]});
+    rIcc.textContent=icc.toFixed(3);rGrade.textContent='('+grade(icc)+')';rR.textContent=r.toFixed(3);
+    rBias.textContent=b.toFixed(3);rLoa.textContent=lo.toFixed(3)+' to '+hi.toFixed(3);
+    rSlope.textContent=psl.toFixed(3);
+    var msgs=[];
+    if(Math.abs(b)<0.02) msgs.push('negligible bias');
+    else msgs.push('a '+(b>0?'positive':'negative')+' bias of '+b.toFixed(3)+' mm (ICC drops even though r stays '+r.toFixed(2)+')');
+    msgs.push(Math.abs(psl)<0.05?'no proportional bias':'proportional bias (disagreement grows with size)');
+    verdict.innerHTML='<b>Verdict:</b> '+grade(icc)+' agreement (ICC '+icc.toFixed(2)+') with '+msgs.join(', ')+'.';
+  }
+  var bi=document.getElementById('bias'),sp=document.getElementById('spread'),pr_=document.getElementById('prop'),
+      vBias=document.getElementById('vBias'),vSpread=document.getElementById('vSpread'),vProp=document.getElementById('vProp'),
+      rIcc=document.getElementById('rIcc'),rGrade=document.getElementById('rGrade'),rR=document.getElementById('rR'),
+      rBias=document.getElementById('rBias'),rLoa=document.getElementById('rLoa'),rSlope=document.getElementById('rSlope'),
+      verdict=document.getElementById('verdict'),cS=document.getElementById('cScatter'),cB=document.getElementById('cBA');
+  [bi,sp,pr_].forEach(function(el){el.addEventListener('input',update);});
+  update();
+})();
+</script>
+
+</div></body></html>

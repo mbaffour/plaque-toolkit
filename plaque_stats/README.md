@@ -2,6 +2,10 @@
 
 > **New here?** Open **[`GUIDE.html`](GUIDE.html)** — a visual, worked‑example walkthrough (your data
 > in → violin figure + statistics out). This README is the full text reference.
+>
+> **Validating the tool against manual measurements?** See the **[`agreement/`](agreement)** subfolder —
+> tool‑vs‑manual method comparison (Bland–Altman + ICC), with its own interactive
+> [`GUIDE.html`](agreement/GUIDE.html).
 
 A small, self‑contained package for turning plaque measurements from **different samples** into
 **publication‑ready, reproducible, customizable violin plots** plus **statistics and data

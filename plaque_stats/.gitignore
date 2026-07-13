@@ -26,6 +26,9 @@ results/*
 
 !results/README.txt
 
+# nested tool outputs (regenerable) — keep the code + example, drop the run outputs
+agreement/results/
+
 
 
 # --- Build / packaging artifacts ---------------------------------------------
