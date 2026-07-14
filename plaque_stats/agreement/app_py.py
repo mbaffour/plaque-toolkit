@@ -81,11 +81,13 @@ paste-ready sentence for you.</p>
 <div style="border-left:4px solid #b45309;background:#fff7ed;padding:.7em 1em;border-radius:6px;margin-top:1em">
 <b>⚠ Get it right — three things that silently break the comparison</b>
 <ol style="margin-bottom:0">
-<li><b>Compare diameter with diameter.</b> Use the tool’s <code>DIAMETER_MM</code> against a manual
-<i>area-equivalent</i> diameter. Don’t pair an <code>AREA_MM2</code> column against a diameter, and
-don’t compare a straight-line / Feret caliper diameter against the area-equivalent one — for non-round
-plaques those are genuinely different numbers. This tool does <b>no</b> unit-checking; it compares
-whatever two columns you hand it.</li>
+<li><b>Compare like with like.</b> Use the tool’s <code>DIAMETER_MM</code> against a manual
+<i>area-equivalent</i> diameter, or area against area. Don’t pair a straight-line / Feret caliper
+diameter against the area-equivalent one — for non-round plaques those are genuinely different numbers.
+<b>If your two columns are areas</b> (e.g. the tool’s <code>AREA_MM2</code> and Fiji’s <i>Area</i>),
+tick <b>“Columns are AREA → convert to diameter”</b> in the sidebar and the tool derives the
+area-equivalent diameters for you (<code>d = 2·√(A/π)</code>, the same formula it uses internally) — so
+you get the diameter result straight from an area sheet.</li>
 <li><b>Use the same mm-per-pixel on both sides.</b> If the manual calibration differs from the app’s,
 you inject a fake <b>proportional bias</b> that shows up as a regression <b>slope ≠ 1</b> — a
 calibration artefact, not a real disagreement.</li>
@@ -107,6 +109,7 @@ app_ui = ui.page_sidebar(
         ui.input_action_button("load_example", "Load example data", class_="btn-sm"),
         ui.hr(),
         ui.output_ui("col_pickers"),
+        ui.input_checkbox("convert_area", "Columns are AREA → convert to diameter (d = 2·√(A/π))", False),
         ui.hr(),
         ui.input_text("unit", "Unit", "mm"),
         ui.input_text("what", "What was measured", "plaque diameter"),
@@ -191,6 +194,10 @@ def server(input, output, session):
             ui.input_select("manual", "Manual / reference column", {c: c for c in num}, selected=mguess),
         )
 
+    def _unit():
+        # diameter is always mm when we convert areas, regardless of the Unit textbox
+        return "mm" if input.convert_area() else input.unit()
+
     @reactive.calc
     def stats():
         df = raw.get(); req(df is not None); req(input.tool()); req(input.manual())
@@ -198,17 +205,19 @@ def server(input, output, session):
         if len(d) < 3:
             req(False)
         t, m = d[input.tool()].tolist(), d[input.manual()].tolist()
+        if input.convert_area():                 # AREA columns → area-equivalent diameter
+            t, m = ag.area_to_diameter(t), ag.area_to_diameter(m)
         s = ag.compute(t, m)
         s.update(ag.extra_stats(t, m))
         return s
 
     def _mk_both():
-        return ag.make_figure(stats(), input.unit(), input.label_tool(),
+        return ag.make_figure(stats(), _unit(), input.label_tool(),
                               input.label_manual(), input.title() or None,
                               show_key=input.show_key(), show_stats=input.show_stats())
 
     def _mk_panel(which):
-        return ag.make_panel(stats(), which, input.unit(), input.label_tool(),
+        return ag.make_panel(stats(), which, _unit(), input.label_tool(),
                              input.label_manual(), input.title() or None,
                              show_key=input.show_key(), show_stats=input.show_stats())
 
@@ -226,7 +235,7 @@ def server(input, output, session):
 
     @render.data_frame
     def stats_tbl():
-        s = stats(); u = input.unit()
+        s = stats(); u = _unit()
         rows = [
             ("n pairs", "%d" % s["n"]),
             ("Pearson r (p)", "%.3f (%s)" % (s["r"], ag._pfmt(s["pearson_p"]))),
@@ -243,7 +252,7 @@ def server(input, output, session):
 
     @render.text
     def sentence():
-        return ag.report_sentence(stats(), input.unit(), input.what(),
+        return ag.report_sentence(stats(), _unit(), input.what(),
                                   input.label_tool(), input.label_manual())
 
     # ---- downloads ---------------------------------------------------------
@@ -302,6 +311,7 @@ def server(input, output, session):
                 "label_tool": input.label_tool(), "label_manual": input.label_manual(),
                 "title": input.title() or None, "out": outdir,
                 "show_key": input.show_key(), "show_stats": input.show_stats(),
+                "convert_area": input.convert_area(),
                 "formats": ["png", "svg", "pdf"], "dpi": 300})
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

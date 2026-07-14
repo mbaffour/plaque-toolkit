@@ -171,6 +171,13 @@ def _pstr(p):
     return "p < 0.001" if p < 0.001 else "p = %.3f" % p
 
 
+def area_to_diameter(vals):
+    """Area-equivalent diameter d = 2·√(A/π) for each area value — the SAME formula the measurement
+    tool uses for its DIAMETER_MM column. Lets you feed AREA (mm²) columns and get the diameter (mm)
+    comparison without converting the spreadsheet yourself."""
+    return [2.0 * math.sqrt(max(float(v), 0.0) / math.pi) for v in vals]
+
+
 # =============================================================================
 #  Interpretation, report, figure (parameterised labels)
 # =============================================================================
@@ -345,10 +352,13 @@ def run(args):
 
     d = df[[tcol, mcol]].apply(pd.to_numeric, errors="coerce").dropna()
     tool_vals, manual_vals = d[tcol].tolist(), d[mcol].tolist()
+    convert = args.get("convert_area", False)
+    if convert:                                            # columns are AREA → compare diameters
+        tool_vals, manual_vals = area_to_diameter(tool_vals), area_to_diameter(manual_vals)
     s = compute(tool_vals, manual_vals)
     s.update(extra_stats(tool_vals, manual_vals))          # R², CCC, ICC CI, p-values
 
-    unit = args["unit"]; what = args["what"]
+    unit = "mm" if convert else args["unit"]; what = args["what"]
     lt, lm = args["label_tool"], args["label_manual"]
     out = args["out"]; os.makedirs(out, exist_ok=True)
     suf = _safe(what)
@@ -413,7 +423,7 @@ def run(args):
              s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
-               "what": what, "stamp": stamp, "version": __version__,
+               "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": __version__,
                "numpy": np.__version__, "pandas": pd.__version__, "stats": row},
               open(os.path.join(out, "run_config_%s.json" % suf), "w"), indent=2, default=float)
     return s
@@ -445,7 +455,10 @@ def build_args():
                    help="hide the line/point key (identity, fit, within/outside) if it crowds the figure")
     p.add_argument("--no-stats", dest="show_stats", action="store_false",
                    help="hide the n/r/R²/ICC/CCC + equation box on Panel A")
-    p.set_defaults(show_key=True, show_stats=True)
+    p.add_argument("--convert-area-to-diameter", dest="convert_area", action="store_true",
+                   help="treat the two columns as AREA and convert them to area-equivalent diameter "
+                        "d=2*sqrt(A/pi) before comparing (result is diameter, in mm)")
+    p.set_defaults(show_key=True, show_stats=True, convert_area=False)
     p.add_argument("--out", default="agreement_out")
     p.add_argument("--formats", default="png,svg,pdf")
     p.add_argument("--dpi", type=int, default=300)
