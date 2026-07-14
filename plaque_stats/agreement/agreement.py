@@ -193,28 +193,30 @@ def report_sentence(s, unit, what, label_tool, label_manual):
                _pfmt(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
 
 
-def make_figure(s, unit, label_tool, label_manual, title=None):
-    """Two-panel method-comparison + Bland-Altman Figure (vendored from app/agreement.py)."""
-    tool, fiji = s["tool"], s["fiji"]
-    fig = Figure(figsize=(9.6, 4.6), layout="constrained")
-    if title:
-        fig.suptitle(title, fontsize=12, fontweight="bold")
-    ax1, ax2 = fig.subplots(1, 2)
-    TEAL, AMB, BLU, OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
+_TEAL, _AMB, _BLU, _OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
+
+
+def _out_split(s):
+    """Flag which paired differences fall outside the 95% limits of agreement."""
     diff = s["diff"]
     out = [d < s["loa_lo"] or d > s["loa_hi"] for d in diff]
     keep = lambda seq, flag: [seq[i] for i in range(len(seq)) if out[i] == flag]
-    n_out = sum(out)
+    return diff, keep, sum(out)
 
+
+def _draw_scatter(ax1, s, unit, label_tool, label_manual):
+    """Panel A — method-comparison scatter with identity + regression lines."""
+    tool, fiji = s["tool"], s["fiji"]
+    _diff, keep, n_out = _out_split(s)
     lo, hi = min(tool + fiji), max(tool + fiji)
     pad = (hi - lo) * 0.06 or 0.1
     lim = [lo - pad, hi + pad]
     ax1.plot(lim, lim, "--", color="#9fb3ab", lw=1, zorder=1)
-    ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=TEAL, alpha=.72,
+    ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=_TEAL, alpha=.72,
                 edgecolor="white", linewidth=.4, zorder=3, label="within limits")
     if n_out:
-        ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=OUT, alpha=.95,
-                    edgecolor="white", linewidth=.5, zorder=4, label="outside 95%% limits")
+        ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=_OUT, alpha=.95,
+                    edgecolor="white", linewidth=.5, zorder=4, label="outside 95% limits")
         ax1.legend(loc="lower right", fontsize=7.5, framealpha=.92)
     ax1.set_xlim(lim); ax1.set_ylim(lim); ax1.set_aspect("equal", "box")
     _tk = [t for t in ax1.get_xticks() if lim[0] <= t <= lim[1]]
@@ -224,22 +226,28 @@ def make_figure(s, unit, label_tool, label_manual, title=None):
     ax1.set_ylabel("%s (%s)" % (label_tool, unit))
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
     _xl = np.array(lim)                                    # regression line (tool on reference)
-    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color="#b45309", lw=1.2, zorder=2)
-    ax1.text(.04, .96, "n=%d\nr=%.3f  R²=%.3f\nICC=%.3f\nCCC=%.3f"
-             % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"], s.get("ccc", float("nan"))),
+    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color=_AMB, lw=1.2, zorder=2)
+    # everything legible in ONE dark-on-light box (incl. the regression equation, which used to
+    # be faint amber text overlapping the legend at the bottom-right corner)
+    ax1.text(.04, .96,
+             "n=%d\nr=%.3f   R²=%.3f\nICC=%.3f   CCC=%.3f\ny = %.3f x %+.3f"
+             % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"],
+                s.get("ccc", float("nan")), s["slope"], s["intercept"]),
              transform=ax1.transAxes, va="top", ha="left", fontsize=7.5, family="monospace",
-             bbox=dict(boxstyle="round,pad=0.3", fc="#f0f5f2", ec="#cfe0d8"))
-    ax1.text(.96, .05, "y = %.3f x %+.3f" % (s["slope"], s["intercept"]), transform=ax1.transAxes,
-             va="bottom", ha="right", fontsize=7.5, family="monospace", color="#b45309")
+             color="#14342b", bbox=dict(boxstyle="round,pad=0.35", fc="#f0f5f2", ec="#cfe0d8"))
 
+
+def _draw_bland(ax2, s, unit, label_tool, label_manual):
+    """Panel B — Bland-Altman difference plot with bias + 95% limits of agreement."""
+    diff, keep, n_out = _out_split(s)
     ax2.axhline(0, color="#c8d2ce", lw=.8)
-    ax2.axhline(s["bias"], color=TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
-    ax2.axhline(s["loa_hi"], color=AMB, lw=1.3, ls="--", label="+1.96 SD  %+.3f" % s["loa_hi"])
-    ax2.axhline(s["loa_lo"], color=AMB, lw=1.3, ls="--", label="-1.96 SD  %+.3f" % s["loa_lo"])
-    ax2.scatter(keep(s["avg"], False), keep(diff, False), s=20, color=BLU, alpha=.72,
+    ax2.axhline(s["bias"], color=_TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
+    ax2.axhline(s["loa_hi"], color=_AMB, lw=1.3, ls="--", label="+1.96 SD  %+.3f" % s["loa_hi"])
+    ax2.axhline(s["loa_lo"], color=_AMB, lw=1.3, ls="--", label="-1.96 SD  %+.3f" % s["loa_lo"])
+    ax2.scatter(keep(s["avg"], False), keep(diff, False), s=20, color=_BLU, alpha=.72,
                 edgecolor="white", linewidth=.4, zorder=3)
     if n_out:
-        ax2.scatter(keep(s["avg"], True), keep(diff, True), s=34, color=OUT, alpha=.95,
+        ax2.scatter(keep(s["avg"], True), keep(diff, True), s=34, color=_OUT, alpha=.95,
                     edgecolor="white", linewidth=.5, zorder=4)
     ax2.set_xlabel("Mean of the two methods (%s)" % unit)
     ax2.set_ylabel("%s - %s (%s)" % (label_tool, label_manual, unit))
@@ -248,6 +256,29 @@ def make_figure(s, unit, label_tool, label_manual, title=None):
     ax2.set_ylim(-yspan, yspan)
     ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
                fontsize=8, handlelength=1.6, columnspacing=1.4, prop={"family": "monospace"})
+
+
+def make_figure(s, unit, label_tool, label_manual, title=None):
+    """Two-panel method-comparison + Bland-Altman figure (both panels together)."""
+    fig = Figure(figsize=(9.6, 4.6), layout="constrained")
+    if title:
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+    ax1, ax2 = fig.subplots(1, 2)
+    _draw_scatter(ax1, s, unit, label_tool, label_manual)
+    _draw_bland(ax2, s, unit, label_tool, label_manual)
+    return fig
+
+
+def make_panel(s, which, unit, label_tool, label_manual, title=None):
+    """Single-panel figure — which = 'scatter' (Panel A) or 'bland' (Panel B)."""
+    fig = Figure(figsize=(5.0, 4.7), layout="constrained")
+    if title:
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+    ax = fig.subplots(1, 1)
+    if which == "scatter":
+        _draw_scatter(ax, s, unit, label_tool, label_manual)
+    else:
+        _draw_bland(ax, s, unit, label_tool, label_manual)
     return fig
 
 
@@ -300,12 +331,17 @@ def run(args):
     suf = _safe(what)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # figure (multi-format, editable vectors)
-    fig = make_figure(s, unit, lt, lm, title=args.get("title"))
-    for fmt in args["formats"]:
-        kw = {"pil_kwargs": {"compression": "tiff_lzw"}} if fmt == "tiff" else {}
-        fig.savefig(os.path.join(out, "agreement_%s.%s" % (suf, fmt)), dpi=args["dpi"],
-                    bbox_inches="tight", facecolor="white", **kw)
+    # figures (multi-format, editable vectors): the combined panel AND each panel on its own
+    def _save(figure, name):
+        for fmt in args["formats"]:
+            kw = {"pil_kwargs": {"compression": "tiff_lzw"}} if fmt == "tiff" else {}
+            figure.savefig(os.path.join(out, "%s.%s" % (name, fmt)), dpi=args["dpi"],
+                           bbox_inches="tight", facecolor="white", **kw)
+    _save(make_figure(s, unit, lt, lm, title=args.get("title")), "agreement_%s" % suf)
+    _save(make_panel(s, "scatter", unit, lt, lm, title=args.get("title")),
+          "agreement_%s_A_method_comparison" % suf)
+    _save(make_panel(s, "bland", unit, lt, lm, title=args.get("title")),
+          "agreement_%s_B_bland_altman" % suf)
 
     # stats CSV (one row)
     row = {k: s[k] for k in ("n", "mean_tool", "mean_fiji", "bias", "sd", "loa_lo", "loa_hi",
@@ -342,7 +378,7 @@ def run(args):
                 "- **Lin's CCC** captures accuracy *and* precision together (a common method-validation metric).\n"
                 "- **Bias** = the systematic offset (tool minus reference); state it, don't hide it. The "
                 "paired t-test says whether it differs from zero.\n"
-                "- **95%% limits of agreement** = the range within which ~95%% of differences fall - "
+                "- **95% limits of agreement** = the range within which ~95% of differences fall - "
                 "the practical measure of how interchangeable the methods are.\n"
                 "- **Regression slope** near 1.0 (a flat Bland-Altman cloud) means the disagreement does "
                 "not grow with size.\n")

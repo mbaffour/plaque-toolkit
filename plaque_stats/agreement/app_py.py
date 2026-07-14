@@ -116,11 +116,24 @@ app_ui = ui.page_sidebar(
         width=330,
     ),
     ui.navset_tab(
-        ui.nav_panel("Figure",
-                     ui.output_plot("fig", height="440px"),
-                     ui.div(ui.download_button("dl_png", "PNG"),
-                            ui.download_button("dl_svg", "SVG (editable)"),
-                            ui.download_button("dl_pdf", "PDF (editable)"))),
+        ui.nav_panel("Figures",
+                     ui.navset_pill(
+                         ui.nav_panel("Both (A + B)",
+                                      ui.output_plot("fig", height="440px"),
+                                      ui.div(ui.download_button("dl_png", "PNG"),
+                                             ui.download_button("dl_svg", "SVG (editable)"),
+                                             ui.download_button("dl_pdf", "PDF (editable)"))),
+                         ui.nav_panel("A · Method comparison",
+                                      ui.output_plot("fig_a", height="470px"),
+                                      ui.div(ui.download_button("dl_a_png", "PNG"),
+                                             ui.download_button("dl_a_svg", "SVG (editable)"),
+                                             ui.download_button("dl_a_pdf", "PDF (editable)"))),
+                         ui.nav_panel("B · Bland–Altman",
+                                      ui.output_plot("fig_b", height="470px"),
+                                      ui.div(ui.download_button("dl_b_png", "PNG"),
+                                             ui.download_button("dl_b_svg", "SVG (editable)"),
+                                             ui.download_button("dl_b_pdf", "PDF (editable)"))),
+                     )),
         ui.nav_panel("Statistics",
                      ui.output_data_frame("stats_tbl"),
                      ui.h5("Paste-ready sentence"), ui.output_text_verbatim("sentence"),
@@ -186,10 +199,25 @@ def server(input, output, session):
         s.update(ag.extra_stats(t, m))
         return s
 
-    @render.plot
-    def fig():
+    def _mk_both():
         return ag.make_figure(stats(), input.unit(), input.label_tool(),
                               input.label_manual(), input.title() or None)
+
+    def _mk_panel(which):
+        return ag.make_panel(stats(), which, input.unit(), input.label_tool(),
+                             input.label_manual(), input.title() or None)
+
+    @render.plot
+    def fig():
+        return _mk_both()
+
+    @render.plot
+    def fig_a():
+        return _mk_panel("scatter")
+
+    @render.plot
+    def fig_b():
+        return _mk_panel("bland")
 
     @render.data_frame
     def stats_tbl():
@@ -214,25 +242,48 @@ def server(input, output, session):
                                   input.label_tool(), input.label_manual())
 
     # ---- downloads ---------------------------------------------------------
-    def _fig_bytes(fmt):
-        fig = ag.make_figure(stats(), input.unit(), input.label_tool(),
-                             input.label_manual(), input.title() or None)
+    def _bytes(make, fmt):
+        fig = make()
         buf = io.BytesIO()
         fig.savefig(buf, format=fmt, dpi=300, bbox_inches="tight", facecolor="white")
         plt.close(fig)
         return buf.getvalue()
 
-    @render.download(filename=lambda: "agreement.png")
+    @render.download(filename=lambda: "agreement_both.png")
     def dl_png():
-        yield _fig_bytes("png")
+        yield _bytes(_mk_both, "png")
 
-    @render.download(filename=lambda: "agreement.svg")
+    @render.download(filename=lambda: "agreement_both.svg")
     def dl_svg():
-        yield _fig_bytes("svg")
+        yield _bytes(_mk_both, "svg")
 
-    @render.download(filename=lambda: "agreement.pdf")
+    @render.download(filename=lambda: "agreement_both.pdf")
     def dl_pdf():
-        yield _fig_bytes("pdf")
+        yield _bytes(_mk_both, "pdf")
+
+    @render.download(filename=lambda: "agreement_A_method_comparison.png")
+    def dl_a_png():
+        yield _bytes(lambda: _mk_panel("scatter"), "png")
+
+    @render.download(filename=lambda: "agreement_A_method_comparison.svg")
+    def dl_a_svg():
+        yield _bytes(lambda: _mk_panel("scatter"), "svg")
+
+    @render.download(filename=lambda: "agreement_A_method_comparison.pdf")
+    def dl_a_pdf():
+        yield _bytes(lambda: _mk_panel("scatter"), "pdf")
+
+    @render.download(filename=lambda: "agreement_B_bland_altman.png")
+    def dl_b_png():
+        yield _bytes(lambda: _mk_panel("bland"), "png")
+
+    @render.download(filename=lambda: "agreement_B_bland_altman.svg")
+    def dl_b_svg():
+        yield _bytes(lambda: _mk_panel("bland"), "svg")
+
+    @render.download(filename=lambda: "agreement_B_bland_altman.pdf")
+    def dl_b_pdf():
+        yield _bytes(lambda: _mk_panel("bland"), "pdf")
 
     @render.download(filename=lambda: "agreement_results.zip")
     def dl_all():
