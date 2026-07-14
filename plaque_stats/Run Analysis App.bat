@@ -74,6 +74,11 @@ set "PYCMD=python"
 
 echo.
 
+rem Always use port 8000, and free it first so a leftover server from a previous run
+rem can't keep serving the OLD app. Only the listener on this exact port is stopped.
+set "PLAQUE_PORT=8000"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:8000" ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>nul
+
 rem Prefer the launcher module; fall back to 'shiny run' if it isn't importable.
 
 %PYCMD% -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('plaque_stats_launch') else 1)"
@@ -92,7 +97,7 @@ if not errorlevel 1 (
 
 echo Launching via 'shiny run'...
 
-%PYCMD% -m shiny run --launch-browser "%~dp0app_py.py"
+%PYCMD% -m shiny run --launch-browser --port 8000 "%~dp0app_py.py"
 
 
 

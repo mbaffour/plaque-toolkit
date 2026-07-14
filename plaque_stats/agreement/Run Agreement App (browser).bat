@@ -31,6 +31,9 @@ echo conda not found; falling back to 'python' on your PATH...
 set "PYCMD=python"
 
 :run
+rem Free port 8010 if a server from a previous run is still bound to it — otherwise the
+rem browser keeps showing the OLD app. Only the listener on this exact port is stopped.
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:8010" ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>nul
 echo Launching...
 %PYCMD% -m shiny run --launch-browser --port 8010 "%~dp0app_py.py"
 
