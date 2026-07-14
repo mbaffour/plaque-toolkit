@@ -91,6 +91,21 @@ one or more measurement columns. Both apps auto-detect the columns.</p>
   measured; brackets show significant pairwise comparisons.</figcaption>
 </figure>
 
+<div class="card">
+<b>How to read it — what to look for</b>
+<ul style="margin:6px 0 0">
+  <li><b>Do the plate means agree?</b> Tightly clustered plate markers = reproducible across plates;
+     scattered plate markers = high plate-to-plate variability (usually your real source of noise).</li>
+  <li><b>Is a whole plate an outlier?</b> One plate mean sitting far from the others is worth checking
+     (a bad pour, focus, or contamination) — it drives the group's error bar.</li>
+  <li><b>Is the group difference bigger than the plate scatter?</b> If the black group markers differ by
+     more than the plate markers spread <i>within</i> a group, the difference is likely real.</li>
+  <li><b>The violin's shape</b> — symmetric vs skewed; one hump or two (a bimodal violin can hint at two
+     plaque phenotypes).</li>
+  <li><b>n</b> (top of each group) is plaques measured — but the <b>statistics use the plate means</b>,
+     not the individual plaques. Here's why. ↓</li>
+</ul></div>
+
 <h3>Descriptive statistics (per group)</h3>
 <div class="scroll"><table><thead><tr><th>Sample</th><th>n plaques</th><th>plates</th><th>Mean &plusmn; SD (mm)</th><th>SEM</th><th>95% CI</th><th>Median</th><th>IQR</th><th>CV%</th></tr></thead><tbody><tr><td><b>Sample A</b></td><td>350</td><td>3</td><td>0.51 &plusmn; 0.26</td><td>0.014</td><td>0.48&ndash;0.54</td><td>0.47</td><td>0.36</td><td>50%</td></tr><tr><td><b>Sample B</b></td><td>110</td><td>3</td><td>0.88 &plusmn; 0.50</td><td>0.048</td><td>0.78&ndash;0.97</td><td>0.77</td><td>0.65</td><td>58%</td></tr><tr><td><b>Sample C</b></td><td>379</td><td>3</td><td>1.15 &plusmn; 0.46</td><td>0.024</td><td>1.10&ndash;1.20</td><td>1.12</td><td>0.75</td><td>40%</td></tr><tr><td><b>Sample D</b></td><td>228</td><td>3</td><td>1.14 &plusmn; 0.48</td><td>0.032</td><td>1.08&ndash;1.20</td><td>1.12</td><td>0.74</td><td>42%</td></tr></tbody></table></div>
 
@@ -123,6 +138,115 @@ The test is chosen for you:</p>
 <b>parametric</b> test on the plate means, following the SuperPlots convention (Shapiro&ndash;Wilk is
 unreliable and non-parametric tests are underpowered at n = 3). In this example: one-way ANOVA,
 <b>p = 0.001</b>, &eta;&sup2; = 0.84.</p>
+
+<div class="card">
+<b>What to be aware of (the common pitfalls)</b>
+<ul style="margin:6px 0 0">
+  <li><b>Pseudoreplication</b> — the #1 mistake. Plaques on one plate are <i>not</i> independent;
+     treating them as your sample size hugely inflates significance. Aggregate to plate means (this tool
+     does, by default). See the demo below.</li>
+  <li><b>Significance ≠ importance</b> — with enough plates a tiny difference becomes "significant."
+     Report the <b>effect size</b> (η² / Cohen's d, in <code>report.md</code>) and the actual magnitude,
+     not just p.</li>
+  <li><b>Small n</b> — with &lt;8 plates/group the tool uses a parametric test on the plate means
+     (Shapiro is unreliable and non-parametric is underpowered at n=3). Aim for ≥3 plates; more = more power.</li>
+  <li><b>Uneven plates</b> — a group with one 300-plaque plate and two 20-plaque plates is dominated by
+     the big plate <i>at the plaque level</i>; the plate-mean approach weights each plate equally (correct).</li>
+  <li><b>Size definition</b> — "diameter" is the area-equivalent diameter <i>d</i> = 2√(A/π),
+     halo-inclusive (an upper bound on the sharp clear zone). State it in Methods.</li>
+</ul></div>
+
+<h3>See it for yourself — why the plate is the experimental unit (interactive)</h3>
+<p class="muted">Same simulated data, counted two ways. The <b>naive</b> test treats every plaque as
+independent (huge n); the <b>correct</b> test uses the plate means (n = plates). Move the sliders and
+watch the naive p-value scream “significant” even when the groups barely differ — that's
+pseudoreplication.</p>
+<div class="card">
+  <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;align-items:center">
+    <label>Plates / group: <span class="val" id="vP">3</span><br><input type="range" id="pP" min="2" max="6" step="1" value="3"></label>
+    <label>Plaques / plate: <span class="val" id="vN">40</span><br><input type="range" id="pN" min="10" max="150" step="5" value="40"></label>
+    <label>True difference: <span class="val" id="vD">0.10</span> mm<br><input type="range" id="pD" min="0" max="0.4" step="0.01" value="0.10"></label>
+    <label>Plate-to-plate SD: <span class="val" id="vS">0.15</span><br><input type="range" id="pS" min="0.03" max="0.35" step="0.01" value="0.15"></label>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px">
+    <canvas id="psr" width="330" height="240"></canvas>
+    <div class="readout" style="min-width:250px">
+      <div>❌ <b>Naive</b> (every plaque as n):</div>
+      <div style="padding-left:1.4em">n = <b id="nNaive">–</b>/group · t = <b id="tNaive">–</b> · p = <b id="pNaive">–</b> <span id="sNaive"></span></div>
+      <div style="margin-top:6px">✅ <b>Correct</b> (plate means as n):</div>
+      <div style="padding-left:1.4em">n = <b id="nOk">–</b>/group · t = <b id="tOk">–</b> · p = <b id="pOk">–</b> <span id="sOk"></span></div>
+      <div class="verdict" id="psVerdict" style="margin-top:8px"></div>
+    </div>
+  </div>
+  <p class="muted" style="margin:6px 0 0">p-values are exact two-sample t-tests (Student's t).</p>
+</div>
+
+<script>
+(function(){
+  function mul(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  function mkgauss(r){return function(){var u=0,v=0;while(!u)u=r();while(!v)v=r();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};}
+  var mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+  function vS(a){var m=mean(a);return a.reduce((s,x)=>s+(x-m)*(x-m),0)/(a.length-1);}
+  // Student's t two-sided p via regularized incomplete beta (Numerical Recipes)
+  function gammln(x){var c=[76.18009172947146,-86.50532032941677,24.01409824083091,
+    -1.231739572450155,0.1208650973866179e-2,-0.5395239384953e-5];var y=x,t=x+5.5;
+    t-=(x+0.5)*Math.log(t);var s=1.000000000190015;for(var j=0;j<6;j++){y++;s+=c[j]/y;}
+    return -t+Math.log(2.5066282746310005*s/x);}
+  function betacf(a,b,x){var FP=1e-300,c=1,d=1-(a+b)*x/(a+1);if(Math.abs(d)<FP)d=FP;d=1/d;var h=d;
+    for(var m=1;m<=200;m++){var m2=2*m,aa=m*(b-m)*x/((a+m2-1)*(a+m2));d=1+aa*d;if(Math.abs(d)<FP)d=FP;
+      c=1+aa/c;if(Math.abs(c)<FP)c=FP;d=1/d;h*=d*c;aa=-(a+m)*(a+b+m)*x/((a+m2)*(a+m2+1));
+      d=1+aa*d;if(Math.abs(d)<FP)d=FP;c=1+aa/c;if(Math.abs(c)<FP)c=FP;d=1/d;var del=d*c;h*=del;
+      if(Math.abs(del-1)<3e-12)break;}return h;}
+  function betai(a,b,x){if(x<=0)return 0;if(x>=1)return 1;
+    var bt=Math.exp(gammln(a+b)-gammln(a)-gammln(b)+a*Math.log(x)+b*Math.log(1-x));
+    return x<(a+1)/(a+b+2)?bt*betacf(a,b,x)/a:1-bt*betacf(b,a,1-x)/b;}
+  function tp(t,df){if(df<=0||!isFinite(t))return NaN;return betai(df/2,0.5,df/(df+t*t));}
+  function ttest2(a,b){var na=a.length,nb=b.length;if(na<2||nb<2)return{t:NaN,p:NaN,n:na};
+    var sp=((na-1)*vS(a)+(nb-1)*vS(b))/(na+nb-2),se=Math.sqrt(sp*(1/na+1/nb));
+    return{t:(mean(a)-mean(b))/se,p:tp((mean(a)-mean(b))/se,na+nb-2),n:na};}
+  function fp(p){return p!==p?"–":p<1e-4?"<0.0001":p.toFixed(4);}
+  var els=["pP","pN","pD","pS"].map(id=>document.getElementById(id));
+  var cv=document.getElementById("psr");
+  function run(){
+    var P=+els[0].value,N=+els[1].value,D=+els[2].value,S=+els[3].value,W=0.16;
+    document.getElementById("vP").textContent=P;document.getElementById("vN").textContent=N;
+    document.getElementById("vD").textContent=D.toFixed(2);document.getElementById("vS").textContent=S.toFixed(2);
+    var r=mul(12345),g=mkgauss(r);           // fresh seeded stream each redraw (stable per settings)
+    var base=0.9, GA=[],GB=[],mA=[],mB=[],pmA=[],pmB=[];
+    for(var grp=0;grp<2;grp++){var sign=grp?+1:-1;
+      for(var p=0;p<P;p++){var pm=base+sign*D/2+S*g();(grp?pmB:pmA).push(pm);
+        for(var i=0;i<N;i++){(grp?GB:GA).push(pm+W*g());}}}
+    var naive=ttest2(GA,GB), ok=ttest2(pmA,pmB);
+    var set=(id,v)=>document.getElementById(id).textContent=v;
+    set("nNaive",P*N);set("tNaive",naive.t.toFixed(2));set("pNaive",fp(naive.p));
+    set("nOk",P);set("tOk",ok.t.toFixed(2));set("pOk",fp(ok.p));
+    var sig=(id,p)=>{var e=document.getElementById(id);var s=p<0.05;
+      e.textContent=s?"✔ significant":"ns";e.style.color=s?"var(--accent)":"var(--mut)";};
+    sig("sNaive",naive.p);sig("sOk",ok.p);
+    var v=document.getElementById("psVerdict");
+    if(naive.p<0.05 && ok.p>=0.05)
+      v.innerHTML='<b style="color:var(--out)">Pseudoreplication trap:</b> the naive test calls this "significant", but honestly (plate-level) it is not.';
+    else if(ok.p<0.05) v.innerHTML='<b style="color:var(--accent)">Both agree it is significant</b> — a real, plate-level difference.';
+    else v.innerHTML='Neither is significant at these settings.';
+    // draw: two group columns, plaques small, plate means big
+    var dpr=window.devicePixelRatio||1,Wd=330,H=240;cv.width=Wd*dpr;cv.height=H*dpr;cv.style.height=H+"px";
+    var x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,Wd,H);
+    var all=GA.concat(GB),ymin=Math.min.apply(0,all)-.05,ymax=Math.max.apply(0,all)+.05;
+    var Y=vv=>H-28-(vv-ymin)/(ymax-ymin)*(H-40),cols=["#3f5b8c","#d98032"],rr=mul(99);
+    [[GA,pmA],[GB,pmB]].forEach(function(gd,gi){var cx=90+gi*150;
+      gd[0].forEach(function(v){x.beginPath();x.arc(cx+ (rr()*2-1)*26,Y(v),1.8,0,7);x.fillStyle=cols[gi];x.globalAlpha=.30;x.fill();x.globalAlpha=1;});
+      gd[1].forEach(function(v){x.beginPath();x.arc(cx,Y(v),5,0,7);x.fillStyle=cols[gi];x.strokeStyle="#fff";x.lineWidth=1;x.fill();x.stroke();});
+      x.fillStyle="var(--mut)";x.font="11px system-ui";x.textAlign="center";x.fillText("Group "+(gi?"B":"A"),cx,H-8);});
+    x.strokeStyle="#9fb3ab";x.setLineDash([4,3]);
+    [mean(pmA),mean(pmB)].forEach(function(m,i){x.beginPath();x.moveTo(60+i*150,Y(m));x.lineTo(120+i*150,Y(m));x.stroke();});
+    x.setLineDash([]);
+  }
+  els.forEach(function(e){e.addEventListener("input",run);});
+  run();
+})();
+</script>
 
 <h2>5 · Handy options</h2>
 <div class="scroll"><table>
