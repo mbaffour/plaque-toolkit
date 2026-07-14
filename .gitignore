@@ -58,6 +58,10 @@ _imagej/
 Plaques to measure/
 /IMG_*.jpeg
 
+# training-data store — your accumulated labels + image copies (never committed; keep the README)
+training_data/*
+!training_data/README.txt
+
 # PyInstaller work dirs (keep build/*.spec and *.iss only)
 build/*/
 

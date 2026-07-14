@@ -1204,9 +1204,24 @@ class PlaqueCanvas(QWidget):
             json.dump({"meta": meta, "plaques": recs}, fh, indent=2)
         csv_path = os.path.splitext(path)[0] + ".csv"
         pd.DataFrame(recs).to_csv(csv_path, index=False)
+        # Also file a copy + metadata into the persistent training-data store, so labels accumulate
+        # into a dataset for retraining. Best-effort: never let it block or break the export.
+        store_note = ""
+        try:
+            import label_store
+            try:
+                from app import __version__ as _appver
+            except Exception:                                       # noqa: BLE001
+                _appver = None
+            label_store.file_into_store(meta, recs, self.image_path,
+                                        source="app-editor", app_version=_appver)
+            store_note = "\n\nAlso filed into your training store (for retraining):\n%s" \
+                % label_store.store_root()
+        except Exception:                                           # noqa: BLE001
+            pass
         self._update_hint("saved %d labels → %s" % (len(recs), os.path.basename(path)))
         self._info("Ground truth saved",
-                   "Saved %d plaque labels (%d hand-edited):\n\n%s\n%s\n\n"
+                   "Saved %d plaque labels (%d hand-edited):\n\n%s\n%s%s\n\n"
                    "Use these as the gold standard to score the engines (precision / recall) "
-                   "and to retrain the classifier." % (len(recs), meta["n_manual"], path, csv_path))
+                   "and to retrain the classifier." % (len(recs), meta["n_manual"], path, csv_path, store_note))
         return path

@@ -53,6 +53,8 @@ the full categorized index. Grouped by purpose:
 | `precise/` | The Precise pipeline (`pst_front`, `combine`, `pipeline`, `run_precise`). |
 | `_plaqseg/` | PlaqSeg YOLO runner + model weights (`models/small.pt`, `nano.pt`). |
 | `_research/clf/` | The learned plaque-vs-texture classifier (`plaque_clf.pt` + `infer.py`) — used by Precise's `--clf` gate. |
+| `label_store.py` | The **training-label store engine** (stdlib-only): enrich metadata, copy the image, append `catalog.csv`. Used by the app + `labelling/`. |
+| `labelling/` | **Label → store** helpers: `ingest_labels.py` (file existing `labels_*.json`), `fiji_label.ijm` + `fiji_import.py` (hand-label in Fiji), `.bat` launchers, and [its README](../labelling/README.md). |
 | `setup.py`, `pyproject.toml` | Packaging metadata for the underlying tool. 🔒 |
 
 ---
@@ -119,6 +121,7 @@ the full categorized index. Grouped by purpose:
 | `plates/` | Default input (drop) folder for `Batch Plates (CSV per plate).bat` — **empty by default** (drop your own plate photos here; they're gitignored so they're never committed). |
 | `IMG_3901.jpeg`, `IMG_3964.jpeg` | Calibration/ground-truth input photos referenced by several `_research/` scripts. **Keep.** |
 | `_research/` | Validation & method-development history: ground truth, blob/ensemble experiments, sweeps, the classifier (`clf/`). 🔒 (`clf/` is a Precise dep). |
+| `training_data/` | The **persistent training-label store** (labels + image copies + `catalog.csv`) written by the app / `labelling/`. Only `README.txt` is tracked; the rest is gitignored (your data). Relocatable via `PLAQUE_TRAINING_DIR`. |
 | `_imagej/` | ImageJ + the ViralPlaque macros used by `run_viralplaque.py` for the cross-tool comparison. 🔒 |
 | `_robust/`, `_vfolder/` | Small image fixtures used in ad-hoc testing (gitignored). |
 | `out/`, `out_turbidity/`, `out_precise*/` | Tool results — created on first run, regenerable (gitignored). |
