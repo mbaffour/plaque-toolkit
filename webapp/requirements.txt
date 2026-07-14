@@ -1,0 +1,18 @@
+# Web app deps for the Precise engine served via Shiny for Python.
+# torch + torchvision are installed SEPARATELY from the CPU wheel index (see Dockerfile),
+# so they are intentionally NOT listed here.
+#
+# numpy is pinned to 1.26.4 because PST uses np.warnings (removed in numpy 2.0); cv2 4.13 and
+# ultralytics run fine on 1.26 at runtime (only a harmless pip metadata warning). The Dockerfile
+# reinstalls this pin LAST so opencv/ultralytics can't drag numpy 2.x back in.
+shiny
+numpy==1.26.4
+ultralytics==8.4.79
+opencv-python-headless==4.13.0.92
+scikit-image==0.25.2
+scipy==1.15.3
+pandas==2.3.3
+matplotlib==3.10.9
+pillow==12.2.0
+pillow-heif==1.4.0
+imutils==0.5.4
