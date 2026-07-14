@@ -74,6 +74,55 @@ T4,plate1,diameter_mm,2.34</pre>
 R-Shiny app, so the violin figure and every statistic are identical.</p>
 """
 
+LEARN = """
+<div style="max-width:840px;line-height:1.5">
+<h4>What a SuperPlot violin shows</h4>
+<p>Three layers at once: the <b>violin</b> is the shape of the plaque-size distribution; each
+<b>dot</b> is one plaque, coloured by the <b>plate</b> it came from; and the <b>error bar</b> marks the
+summary that is actually tested — the <b>mean ± SEM of the per-plate means</b>. Colouring by plate
+lets you see at a glance whether a “difference” is real or driven by one odd plate
+(Lord et&nbsp;al. 2020; Kenny &amp; Schoen 2021).</p>
+
+<h4>The experimental unit is the PLATE, not the plaque</h4>
+<p>Plaques on the same plate share the plate, the lawn and the incubation — they are <b>not
+independent</b>. Counting each plaque as its own data point (“pseudoreplication”) inflates n from a
+handful of plates to hundreds of plaques and manufactures <b>falsely tiny p-values</b>. By default
+this tool collapses each plate to its mean and compares <b>plate means</b> across groups, so
+<b>n = number of plates</b>. You <i>can</i> switch to per-plaque in the sidebar — but only if a single
+plaque genuinely is your unit of replication.</p>
+
+<h4>Which test is run</h4>
+<ul>
+<li><b>Omnibus first</b> (all groups together): one-way ANOVA (parametric) or Kruskal–Wallis
+(non-parametric).</li>
+<li><b>Then pairwise</b> group-vs-group comparisons, computed on the plate means.</li>
+<li><b>auto</b> chooses parametric (t&nbsp;/ ANOVA) at the small replicate counts typical of plaque
+assays; pick <b>non-parametric</b> (Mann–Whitney&nbsp;/ Kruskal–Wallis) to assume nothing about the
+distribution.</li>
+</ul>
+
+<h4>The summary tables</h4>
+<ul>
+<li><b>Per group</b> — n, mean/median, SD, SEM and 95&nbsp;% CI across your plates.</li>
+<li><b>Per plate</b> — each plate’s mean: the exact numbers the test uses.</li>
+</ul>
+
+<h4>Significance brackets</h4>
+<p>Brackets mark pairwise comparisons; stars are the usual thresholds (* p&lt;0.05, ** p&lt;0.01,
+*** p&lt;0.001, ns = not significant). With only a few plates, read a lone star as “worth another
+replicate,” not proof.</p>
+
+<div style="border-left:4px solid #0e7d5b;background:#f0f7f4;padding:.7em 1em;border-radius:6px;margin-top:1em">
+<b>The one habit that matters:</b> report the number of <b>plates</b> (experimental replicates) — not
+the number of plaques — as your n, and keep the per-plate points visible so readers can judge the
+spread themselves.
+</div>
+
+<p style="margin-top:1em">Open the <b>Interactive guide</b> tab for a live pseudoreplication demo:
+watch the p-value flip from “significant” to “not” when you count plates instead of plaques.</p>
+</div>
+"""
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.input_file("file", "Data file (CSV / TSV / XLSX)",
@@ -132,6 +181,10 @@ app_ui = ui.page_sidebar(
                                  "tables (images), all summary + pairwise CSVs, the report, and "
                                  "`run_config.json`:"),
                      ui.download_button("dl_all", "⬇  Download EVERYTHING (ZIP)", class_="btn-primary")),
+        ui.nav_panel("Learn", ui.HTML(LEARN)),
+        ui.nav_panel("Interactive guide",
+                     ui.tags.iframe(src="guide/GUIDE.html",
+                                    style="width:100%;height:80vh;border:1px solid #dde3e0;border-radius:8px;")),
         ui.nav_panel("Data format", ui.HTML(FORMAT_HELP)),
     ),
     title="Plaque Stats & Violins  ·  Python / Shiny",
@@ -347,4 +400,4 @@ def server(input, output, session):
         yield buf.getvalue()
 
 
-app = App(app_ui, server)
+app = App(app_ui, server, static_assets={"/guide": HERE})   # serves GUIDE.html + its assets at /guide/

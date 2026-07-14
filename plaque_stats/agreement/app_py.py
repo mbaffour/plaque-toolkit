@@ -23,20 +23,81 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import agreement as ag          # the shared engine (same code as the CLI)
 
-HELP = """
-<h4>Agreement (tool vs manual) — how to read it</h4>
+LEARN = """
+<div style="max-width:840px;line-height:1.5">
+<h4>What this tool answers</h4>
+<p>Not “are the two measurements correlated?” but <b>“do they <i>agree</i>?”</b> — can the Plaque
+Toolkit’s automatic measurement stand in for your manual reference, or is there a systematic
+difference? Two methods can correlate almost perfectly and still disagree (e.g. one reads 10&nbsp;% high
+on every plaque), so we report <b>agreement</b> statistics, not just correlation.</p>
+
+<h4>What is actually being compared</h4>
 <ul>
-<li><b>Pearson r / R²</b> measure <i>association</i>, not agreement — two methods can correlate
-perfectly yet disagree systematically, so never report r alone.</li>
-<li><b>ICC(A,1)</b> is the agreement statistic (penalises bias): &lt;0.5 poor · 0.5–0.75 moderate ·
-0.75–0.90 good · &gt;0.90 excellent (Koo &amp; Li 2016).</li>
-<li><b>Lin's CCC</b> captures accuracy <i>and</i> precision together.</li>
-<li><b>Bland–Altman</b>: <b>bias</b> = the systematic offset; <b>95% limits of agreement</b> = the
-range within which ~95% of differences fall; a paired t-test says whether the bias differs from zero.</li>
-<li><b>Regression slope</b> near 1.0 (a flat Bland–Altman cloud) = the disagreement does not grow
-with size.</li>
+<li><b>The same quantity on both sides.</b> Each value is an <b>area-equivalent diameter</b> in mm —
+the diameter of a circle with the same area, <code>d = 2·√(area/π)</code>. The tool derives the area
+from the detected plaque outline; the manual side from your traced region (Fiji <i>Area</i> → the
+identical formula). So it is a true like-for-like comparison.</li>
+<li><b>One row = one plaque</b>; the two columns are the two methods. Plaques are <b>paired by row
+order</b> — row 5 of the tool column is compared with row 5 of the manual column — so line the rows
+up by plaque before you run it.</li>
 </ul>
-<p>Input: one row per plaque, two numeric columns (the tool measurement and the manual reference).</p>
+
+<h4>The statistics — what each one tells you</h4>
+<table class="table table-sm" style="font-size:.92em">
+<thead><tr><th>Statistic</th><th>What it answers</th><th>Good value</th></tr></thead>
+<tbody>
+<tr><td><b>Pearson r / R²</b></td><td><i>Association</i> — do the two rise and fall together? Stays
+high even when one method is biased, so <b>never report it alone</b>.</td><td>→ 1, but not sufficient</td></tr>
+<tr><td><b>ICC(A,1)</b></td><td><i>Agreement, bias included</i> — the headline reliability number
+(two-way, absolute agreement).</td><td>&gt;0.90 excellent · 0.75–0.90 good · 0.5–0.75 moderate ·
+&lt;0.5 poor (Koo &amp; Li 2016)</td></tr>
+<tr><td><b>Lin’s CCC</b></td><td>Accuracy (dots on the identity line) <i>and</i> precision (tight
+scatter) in one number.</td><td>→ 1</td></tr>
+<tr><td><b>Mean bias</b></td><td>The systematic offset, <b>tool − reference</b>. The paired t-test asks
+whether it differs from zero.</td><td>≈ 0 (and n.s.)</td></tr>
+<tr><td><b>95% limits of agreement</b></td><td>The range containing ~95&nbsp;% of the plaque-by-plaque
+differences — how interchangeable the methods are <i>in practice</i>.</td><td>narrow, relative to a
+biologically meaningful size</td></tr>
+<tr><td><b>Regression slope</b></td><td><i>Proportional bias</i> — does the gap grow with plaque size?
+1.0 = the gap is the same at every size.</td><td>≈ 1.0</td></tr>
+<tr><td><b>RMSE / MAE</b></td><td>The typical size of a single-plaque error.</td><td>small</td></tr>
+</tbody></table>
+
+<h4>Reading the figure</h4>
+<ul>
+<li><b>Panel A — Method comparison.</b> Each dot is a plaque (manual on x, tool on y). The dashed line
+is perfect agreement (identity); the solid line is the fitted regression. Dots hugging the dashed line
+= good agreement; a tilt away from it = proportional bias.</li>
+<li><b>Panel B — Bland–Altman.</b> x = the plaque’s mean of the two methods, y = their difference. The
+centre line is the mean bias; the dashed lines are the 95&nbsp;% limits of agreement. A flat cloud
+centred on ~0 means the methods agree across all sizes; a slope, funnel, or offset flags a problem.</li>
+</ul>
+
+<h4>Report it like this</h4>
+<p>Lead with agreement, not r: quote <b>ICC(A,1) with its 95&nbsp;% CI</b>, <b>Lin’s CCC</b>, and the
+<b>bias with its 95&nbsp;% limits of agreement</b>. The <b>Statistics</b> tab writes this as a
+paste-ready sentence for you.</p>
+
+<div style="border-left:4px solid #b45309;background:#fff7ed;padding:.7em 1em;border-radius:6px;margin-top:1em">
+<b>⚠ Get it right — three things that silently break the comparison</b>
+<ol style="margin-bottom:0">
+<li><b>Compare diameter with diameter.</b> Use the tool’s <code>DIAMETER_MM</code> against a manual
+<i>area-equivalent</i> diameter. Don’t pair an <code>AREA_MM2</code> column against a diameter, and
+don’t compare a straight-line / Feret caliper diameter against the area-equivalent one — for non-round
+plaques those are genuinely different numbers. This tool does <b>no</b> unit-checking; it compares
+whatever two columns you hand it.</li>
+<li><b>Use the same mm-per-pixel on both sides.</b> If the manual calibration differs from the app’s,
+you inject a fake <b>proportional bias</b> that shows up as a regression <b>slope ≠ 1</b> — a
+calibration artefact, not a real disagreement.</li>
+<li><b>Align the rows.</b> Pairing is by position, and unequal-length columns are truncated to the
+shorter one — so make sure row <i>i</i> is the same plaque in both columns.</li>
+</ol>
+</div>
+
+<p style="margin-top:1em">Input recap: one row per plaque, two numeric columns (tool measurement and
+manual reference). Open the <b>Interactive guide</b> tab for a live Bland–Altman demo — drag the
+bias/spread sliders and watch ICC fall while r barely moves.</p>
+</div>
 """
 
 app_ui = ui.page_sidebar(
@@ -65,7 +126,10 @@ app_ui = ui.page_sidebar(
                      ui.h5("Paste-ready sentence"), ui.output_text_verbatim("sentence"),
                      ui.hr(),
                      ui.download_button("dl_all", "⬇ Download EVERYTHING (ZIP)", class_="btn-primary")),
-        ui.nav_panel("How to read it", ui.HTML(HELP)),
+        ui.nav_panel("Learn", ui.HTML(LEARN)),
+        ui.nav_panel("Interactive guide",
+                     ui.tags.iframe(src="guide/GUIDE.html",
+                                    style="width:100%;height:80vh;border:1px solid #dde3e0;border-radius:8px;")),
     ),
     title="Agreement — tool vs manual  ·  Python / Shiny",
 )
@@ -189,4 +253,4 @@ def server(input, output, session):
         yield buf.getvalue()
 
 
-app = App(app_ui, server)
+app = App(app_ui, server, static_assets={"/guide": HERE})   # serves GUIDE.html + its assets at /guide/
