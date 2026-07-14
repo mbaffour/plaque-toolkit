@@ -4,7 +4,7 @@
   "manual_col": "diam_fiji_mm",
   "unit": "mm",
   "what": "diameter",
-  "stamp": "2026-07-14 11:18",
+  "stamp": "2026-07-14 11:34",
   "version": "1.0.0",
   "numpy": "1.26.4",
   "pandas": "2.3.3",

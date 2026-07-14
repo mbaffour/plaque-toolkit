@@ -165,6 +165,12 @@ def _pfmt(p):
     return "< 0.001" if p < 0.001 else ("%.3f" % p)
 
 
+def _pstr(p):
+    """p-value WITH its operator, for inline use after the word 'p' — 'p < 0.001' / 'p = 0.034'
+    (avoids the awkward 'p = < 0.001')."""
+    return "p < 0.001" if p < 0.001 else "p = %.3f" % p
+
+
 # =============================================================================
 #  Interpretation, report, figure (parameterised labels)
 # =============================================================================
@@ -184,13 +190,13 @@ def report_sentence(s, unit, what, label_tool, label_manual):
     return ("Plaque %s measured with %s closely agreed with %s (n = %d): highly correlated "
             "(Pearson r = %.3f, R² = %.3f, p %s), with an intraclass correlation coefficient "
             "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
-            "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test p = %s) "
+            "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test %s) "
             "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
             "(1.0 = no proportional bias)."
             % (what, label_tool, label_manual, s["n"], s["r"], s.get("r2", s["r"] ** 2),
                _pfmt(s.get("pearson_p", float("nan"))), s["icc"], icc_ci, icc_grade(s["icc"]),
                s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
-               _pfmt(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+               _pstr(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
 
 
 _TEAL, _AMB, _BLU, _OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
@@ -383,7 +389,7 @@ def run(args):
                 % (s["icc"], s["icc_lo"], s["icc_hi"], icc_grade(s["icc"])))
         f.write("| Lin's CCC | %.3f |\n" % s["ccc"])
         f.write("| mean bias (%s) | %+.3f (%.1f%%) |\n" % (unit, s["bias"], s["pct_bias"]))
-        f.write("| bias vs 0 (paired t) | t = %.2f, p = %s |\n" % (s["t_stat"], _pfmt(s["t_p"])))
+        f.write("| bias vs 0 (paired t) | t = %.2f, %s |\n" % (s["t_stat"], _pstr(s["t_p"])))
         f.write("| 95%% limits of agreement | %+.3f to %+.3f %s |\n" % (s["loa_lo"], s["loa_hi"], unit))
         f.write("| RMSE / MAE (%s) | %.3f / %.3f |\n" % (unit, s["rmse"], s["mae"]))
         f.write("| regression (tool on ref) | y = %.3f x %+.3f  (slope 1.0 = no proportional bias) |\n\n"

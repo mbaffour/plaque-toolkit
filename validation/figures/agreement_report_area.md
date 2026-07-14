@@ -1,6 +1,6 @@
 # Method-comparison report - area
 
-_Generated 2026-07-14 11:18 | agreement.py v1.0.0_
+_Generated 2026-07-14 11:34 | agreement.py v1.0.0_
 
 **Plaque Toolkit vs Fiji / ImageJ**  (bias = Plaque Toolkit - Fiji / ImageJ)
 
@@ -12,14 +12,14 @@ _Generated 2026-07-14 11:18 | agreement.py v1.0.0_
 | ICC(A,1) | 0.973 (95% CI 0.959-0.982; excellent) |
 | Lin's CCC | 0.973 |
 | mean bias (mm2) | -0.069 (-3.5%) |
-| bias vs 0 (paired t) | t = -4.95, p = < 0.001 |
+| bias vs 0 (paired t) | t = -4.95, p < 0.001 |
 | 95% limits of agreement | -0.342 to +0.204 mm2 |
 | RMSE / MAE (mm2) | 0.155 / 0.115 |
 | regression (tool on ref) | y = 0.951 x +0.030  (slope 1.0 = no proportional bias) |
 
 ## Paste-ready sentence
 
-> Plaque area measured with Plaque Toolkit closely agreed with Fiji / ImageJ (n = 100): highly correlated (Pearson r = 0.978, R² = 0.957, p < 0.001), with an intraclass correlation coefficient ICC(A,1) = 0.973 (95% CI 0.959-0.982) (excellent agreement) and Lin's concordance correlation CCC = 0.973. Bland-Altman analysis showed a mean bias of -0.069 mm2 (-3.5%; significantly different from zero, paired t-test p = < 0.001) with 95% limits of agreement of -0.342 to +0.204 mm2, and a regression slope of 0.95 (1.0 = no proportional bias).
+> Plaque area measured with Plaque Toolkit closely agreed with Fiji / ImageJ (n = 100): highly correlated (Pearson r = 0.978, R² = 0.957, p < 0.001), with an intraclass correlation coefficient ICC(A,1) = 0.973 (95% CI 0.959-0.982) (excellent agreement) and Lin's concordance correlation CCC = 0.973. Bland-Altman analysis showed a mean bias of -0.069 mm2 (-3.5%; significantly different from zero, paired t-test p < 0.001) with 95% limits of agreement of -0.342 to +0.204 mm2, and a regression slope of 0.95 (1.0 = no proportional bias).
 
 ## How to read it
 
