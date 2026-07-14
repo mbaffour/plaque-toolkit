@@ -227,10 +227,16 @@ evidence that the cross-tool validation is doing real work.
 
 ## 6. Reproducing these numbers
 
+- **Archived data + figures:** [`validation/`](../validation/) — the n = 100 paired dataset
+  (`paired_toolkit_vs_fiji.csv`, area + area-equivalent diameter), the hand-label ground truth, the
+  per-engine score tables, and the agreement figures **regenerated from that data** by the repo's own
+  tool. See [`validation/README.md`](../validation/README.md).
 - **(A)** Validate tab → load `Verifications/labels_*.json` → score each engine; or
   `python -c "from app import validate; print(validate.score_label_file('Verifications/labels_IMG_3907.json', mode='precise'))"`.
 - **(B)** `Export ▸ Fiji registration bundle`, then in Fiji (headless) open the crop, load the
   RoiSet, measure each ROI, and compare with the app's `_registration.csv` (or the in-app
   **Compare vs Fiji…**). Matcher: `app/fiji_match.py`.
 
-*Ground-truth and plate images are the authors' data (git-ignored); paths above are local.*
+*The paired n = 100 dataset, the hand-label ground truth and the regenerated figures are archived in
+[`validation/`](../validation/). Plate **photos** remain the authors' data and are git-ignored; the
+`Verifications/` paths above are local.*
