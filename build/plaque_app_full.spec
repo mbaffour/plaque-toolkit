@@ -54,7 +54,7 @@ datas += [(os.path.join(ROOT, f), ".")
 hiddenimports += [
     # project modules
     "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar",
-    "plate_crop",
+    "plate_crop", "label_store",
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths", "app.plaque_canvas",
     "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
