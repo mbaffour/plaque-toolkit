@@ -204,20 +204,27 @@ def _out_split(s):
     return diff, keep, sum(out)
 
 
-def _draw_scatter(ax1, s, unit, label_tool, label_manual):
-    """Panel A — method-comparison scatter with identity + regression lines."""
+def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_key=True, show_stats=True):
+    """Panel A — method-comparison scatter with identity + regression lines.
+
+    show_key   = draw the line/point key (identity, fit, within/outside dots).
+    show_stats = draw the n/r/R²/ICC/CCC + equation box.
+    """
     tool, fiji = s["tool"], s["fiji"]
     _diff, keep, n_out = _out_split(s)
     lo, hi = min(tool + fiji), max(tool + fiji)
     pad = (hi - lo) * 0.06 or 0.1
     lim = [lo - pad, hi + pad]
-    ax1.plot(lim, lim, "--", color="#9fb3ab", lw=1, zorder=1)
-    ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=_TEAL, alpha=.72,
-                edgecolor="white", linewidth=.4, zorder=3, label="within limits")
+    _xl = np.array(lim)
+    (h_id,) = ax1.plot(lim, lim, "--", color="#9fb3ab", lw=1.1, zorder=1)            # identity y=x
+    (h_fit,) = ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color=_AMB,     # regression fit
+                        lw=1.6, zorder=2)
+    h_in = ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=_TEAL, alpha=.72,
+                       edgecolor="white", linewidth=.4, zorder=3)
+    h_out = None
     if n_out:
-        ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=_OUT, alpha=.95,
-                    edgecolor="white", linewidth=.5, zorder=4, label="outside 95% limits")
-        ax1.legend(loc="lower right", fontsize=7.5, framealpha=.92)
+        h_out = ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=_OUT, alpha=.95,
+                            edgecolor="white", linewidth=.5, zorder=4)
     ax1.set_xlim(lim); ax1.set_ylim(lim); ax1.set_aspect("equal", "box")
     _tk = [t for t in ax1.get_xticks() if lim[0] <= t <= lim[1]]
     if _tk:
@@ -225,21 +232,29 @@ def _draw_scatter(ax1, s, unit, label_tool, label_manual):
     ax1.set_xlabel("%s (%s)" % (label_manual, unit))
     ax1.set_ylabel("%s (%s)" % (label_tool, unit))
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
-    _xl = np.array(lim)                                    # regression line (tool on reference)
-    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color=_AMB, lw=1.6, zorder=2)
-    # ALL the required numbers in ONE bold, high-contrast box (the regression equation used to be
-    # faint amber text overlapping the legend — now it is dark, larger, and clearly part of the figure)
-    ax1.text(.035, .965,
-             "n = %d\nr = %.3f    R² = %.3f\nICC = %.3f    CCC = %.3f\ny = %.3f x %+.3f"
-             % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"],
-                s.get("ccc", float("nan")), s["slope"], s["intercept"]),
-             transform=ax1.transAxes, va="top", ha="left", fontsize=9.5, family="monospace",
-             color="#103027", fontweight="bold",
-             bbox=dict(boxstyle="round,pad=0.5", fc="#ffffff", ec="#5f9484", lw=1.2, alpha=0.96))
+    if show_key:                                           # key: what each line / dot colour means
+        handles = [h_id, h_fit, h_in] + ([h_out] if h_out is not None else [])
+        labels = ["identity (y = x)", "linear fit", "within limits"] \
+            + (["outside 95% limits"] if h_out is not None else [])
+        ax1.legend(handles, labels, loc="lower right", fontsize=7.5, framealpha=.93,
+                   handlelength=1.9, borderpad=0.6, labelspacing=0.4)
+    if show_stats:
+        # ALL the required numbers in ONE bold, high-contrast box (the regression equation used to be
+        # faint amber text overlapping the legend — now it is dark, larger, clearly part of the figure)
+        ax1.text(.035, .965,
+                 "n = %d\nr = %.3f    R² = %.3f\nICC = %.3f    CCC = %.3f\ny = %.3f x %+.3f"
+                 % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"],
+                    s.get("ccc", float("nan")), s["slope"], s["intercept"]),
+                 transform=ax1.transAxes, va="top", ha="left", fontsize=9.5, family="monospace",
+                 color="#103027", fontweight="bold",
+                 bbox=dict(boxstyle="round,pad=0.5", fc="#ffffff", ec="#5f9484", lw=1.2, alpha=0.96))
 
 
-def _draw_bland(ax2, s, unit, label_tool, label_manual):
-    """Panel B — Bland-Altman difference plot with bias + 95% limits of agreement."""
+def _draw_bland(ax2, s, unit, label_tool, label_manual, show_key=True):
+    """Panel B — Bland-Altman difference plot with bias + 95% limits of agreement.
+
+    show_key = draw the bias / +1.96 SD / -1.96 SD line key below the axes.
+    """
     diff, keep, n_out = _out_split(s)
     ax2.axhline(0, color="#c8d2ce", lw=.8)
     ax2.axhline(s["bias"], color=_TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
@@ -255,31 +270,32 @@ def _draw_bland(ax2, s, unit, label_tool, label_manual):
     ax2.set_title("B  Bland-Altman", loc="left", fontsize=10, fontweight="bold")
     yspan = max(abs(s["loa_hi"]), abs(s["loa_lo"]), max(abs(d) for d in s["diff"])) * 1.15 or 0.1
     ax2.set_ylim(-yspan, yspan)
-    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
-               fontsize=8, handlelength=1.6, columnspacing=1.4, prop={"family": "monospace"})
+    if show_key:
+        ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
+                   fontsize=8, handlelength=1.6, columnspacing=1.4, prop={"family": "monospace"})
 
 
-def make_figure(s, unit, label_tool, label_manual, title=None):
+def make_figure(s, unit, label_tool, label_manual, title=None, show_key=True, show_stats=True):
     """Two-panel method-comparison + Bland-Altman figure (both panels together)."""
     fig = Figure(figsize=(9.6, 4.6), layout="constrained")
     if title:
         fig.suptitle(title, fontsize=12, fontweight="bold")
     ax1, ax2 = fig.subplots(1, 2)
-    _draw_scatter(ax1, s, unit, label_tool, label_manual)
-    _draw_bland(ax2, s, unit, label_tool, label_manual)
+    _draw_scatter(ax1, s, unit, label_tool, label_manual, show_key=show_key, show_stats=show_stats)
+    _draw_bland(ax2, s, unit, label_tool, label_manual, show_key=show_key)
     return fig
 
 
-def make_panel(s, which, unit, label_tool, label_manual, title=None):
+def make_panel(s, which, unit, label_tool, label_manual, title=None, show_key=True, show_stats=True):
     """Single-panel figure — which = 'scatter' (Panel A) or 'bland' (Panel B)."""
     fig = Figure(figsize=(5.0, 4.7), layout="constrained")
     if title:
         fig.suptitle(title, fontsize=12, fontweight="bold")
     ax = fig.subplots(1, 1)
     if which == "scatter":
-        _draw_scatter(ax, s, unit, label_tool, label_manual)
+        _draw_scatter(ax, s, unit, label_tool, label_manual, show_key=show_key, show_stats=show_stats)
     else:
-        _draw_bland(ax, s, unit, label_tool, label_manual)
+        _draw_bland(ax, s, unit, label_tool, label_manual, show_key=show_key)
     return fig
 
 
@@ -338,10 +354,12 @@ def run(args):
             kw = {"pil_kwargs": {"compression": "tiff_lzw"}} if fmt == "tiff" else {}
             figure.savefig(os.path.join(out, "%s.%s" % (name, fmt)), dpi=args["dpi"],
                            bbox_inches="tight", facecolor="white", **kw)
-    _save(make_figure(s, unit, lt, lm, title=args.get("title")), "agreement_%s" % suf)
-    _save(make_panel(s, "scatter", unit, lt, lm, title=args.get("title")),
+    sk, ss = args.get("show_key", True), args.get("show_stats", True)
+    _save(make_figure(s, unit, lt, lm, title=args.get("title"), show_key=sk, show_stats=ss),
+          "agreement_%s" % suf)
+    _save(make_panel(s, "scatter", unit, lt, lm, title=args.get("title"), show_key=sk, show_stats=ss),
           "agreement_%s_A_method_comparison" % suf)
-    _save(make_panel(s, "bland", unit, lt, lm, title=args.get("title")),
+    _save(make_panel(s, "bland", unit, lt, lm, title=args.get("title"), show_key=sk),
           "agreement_%s_B_bland_altman" % suf)
 
     # stats CSV (one row)
@@ -417,6 +435,11 @@ def build_args():
     p.add_argument("--label-tool", dest="label_tool", default="Plaque Toolkit")
     p.add_argument("--label-manual", dest="label_manual", default="Fiji / ImageJ")
     p.add_argument("--title", default=None)
+    p.add_argument("--no-key", dest="show_key", action="store_false",
+                   help="hide the line/point key (identity, fit, within/outside) if it crowds the figure")
+    p.add_argument("--no-stats", dest="show_stats", action="store_false",
+                   help="hide the n/r/R²/ICC/CCC + equation box on Panel A")
+    p.set_defaults(show_key=True, show_stats=True)
     p.add_argument("--out", default="agreement_out")
     p.add_argument("--formats", default="png,svg,pdf")
     p.add_argument("--dpi", type=int, default=300)

@@ -83,18 +83,38 @@ a paste-ready sentence + interpretation.</p>
   is the mean bias, the amber dashed lines the 95% limits of agreement; red points fall outside them.</figcaption>
 </figure>
 <div class="card">
-<b>How to read the two panels</b>
-<ul style="margin:6px 0 0">
-  <li><b>Panel A (scatter)</b> — each point is one plaque (tool value vs manual value). Points on the
-     dashed <b>identity line</b> = perfect agreement; the amber <b>regression line</b> is the overall
-     trend. Points sitting consistently above/below identity = the tool reads systematically larger/smaller.</li>
-  <li><b>Panel B (Bland–Altman)</b> — the real agreement plot. A point's <b>height</b> is how much the two
-     methods disagree for that plaque; the <b>green line</b> is the average disagreement (bias); the
-     <b>amber dashed lines</b> are the 95% limits of agreement (where ~95% of differences fall).</li>
-  <li><b>What to look for:</b> is the green bias line near zero? Are the limits narrow enough to call the
-     methods interchangeable? Does the cloud <b>tilt</b> (disagreement growing with size = proportional
-     bias)? Any <b>red</b> outliers worth eyeballing?</li>
-</ul></div>
+<b>Every line in the figure — decoded</b>
+
+<p style="margin:8px 0 3px"><b>Panel A · Method comparison</b> — each dot is one plaque (manual on x, tool on y):</p>
+<ul style="margin:0 0 8px">
+  <li><span style="display:inline-block;width:26px;border-top:2px dashed #9fb3ab;vertical-align:middle"></span>
+     &nbsp;<b>identity line (y = x)</b> — where a dot lands if the tool reads <i>exactly</i> the same as the
+     manual value. It's the reference for "perfect agreement," <b>not fitted</b> to your data.</li>
+  <li><span style="display:inline-block;width:26px;border-top:3px solid #b45309;vertical-align:middle"></span>
+     &nbsp;<b>linear fit</b> — the least-squares regression through your dots; its equation
+     (<code>y = slope·x + intercept</code>) is in the box. This is where your data <i>actually</i> sit.</li>
+  <li><b>Read the two together</b> (the whole point of Panel A): lines <b>overlapping</b> = excellent
+     agreement; fit <b>parallel but offset</b> from identity = a constant bias; fit <b>tilted</b>
+     (slope ≠ 1) = <b>proportional bias</b> — the gap grows or shrinks with plaque size.</li>
+  <li>Dots: <b style="color:#0e7d5b">teal</b> = within the 95% limits · <b style="color:#d1495b">red</b> = outside them.</li>
+</ul>
+
+<p style="margin:8px 0 3px"><b>Panel B · Bland–Altman</b> — x = mean of the two methods, y = their difference (tool − manual):</p>
+<ul style="margin:0 0 8px">
+  <li><span style="display:inline-block;width:26px;border-top:3px solid #0e7d5b;vertical-align:middle"></span>
+     &nbsp;<b>bias</b> — the mean difference; the systematic offset between the methods.</li>
+  <li><span style="display:inline-block;width:26px;border-top:2px dashed #b45309;vertical-align:middle"></span>
+     &nbsp;<b>+1.96 SD / −1.96 SD</b> — the <b>95% limits of agreement</b>: the band holding ~95% of the
+     plaque-by-plaque differences (how interchangeable the methods are in practice).</li>
+  <li>The faint grey line at <b>0</b> marks "no difference." A flat cloud centred near the bias line means
+     agreement holds across all sizes; a <b>tilt</b> = proportional bias; <b style="color:#d1495b">red</b>
+     points fall outside the limits.</li>
+</ul>
+
+<p class="muted" style="margin:6px 0 0">Crowded figure? Both keys and the stats box can be switched
+<b>off</b> in the app — the <b>“Line / point key”</b> and <b>“Stats box on Panel A”</b> checkboxes — or
+via <code>--no-key</code> / <code>--no-stats</code> on the command line.</p>
+</div>
 <div class="scroll"><table>
   <thead><tr><th>n</th><th>r (R²)</th><th>ICC(A,1) [95% CI]</th><th>Lin's CCC</th><th>bias</th><th>95% LoA</th></tr></thead>
   <tbody><tr><td>120</td><td>0.99 (0.98)</td><td>0.99 [0.98–0.99] <span class="k">excellent</span></td>

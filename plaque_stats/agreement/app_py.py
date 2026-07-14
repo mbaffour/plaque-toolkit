@@ -113,6 +113,9 @@ app_ui = ui.page_sidebar(
         ui.input_text("label_tool", "Tool label", "Plaque Toolkit"),
         ui.input_text("label_manual", "Reference label", "Fiji / ImageJ"),
         ui.input_text("title", "Figure title", ""),
+        ui.hr(),
+        ui.input_checkbox("show_key", "Line / point key (legend)", True),
+        ui.input_checkbox("show_stats", "Stats box on Panel A", True),
         width=330,
     ),
     ui.navset_tab(
@@ -201,11 +204,13 @@ def server(input, output, session):
 
     def _mk_both():
         return ag.make_figure(stats(), input.unit(), input.label_tool(),
-                              input.label_manual(), input.title() or None)
+                              input.label_manual(), input.title() or None,
+                              show_key=input.show_key(), show_stats=input.show_stats())
 
     def _mk_panel(which):
         return ag.make_panel(stats(), which, input.unit(), input.label_tool(),
-                             input.label_manual(), input.title() or None)
+                             input.label_manual(), input.title() or None,
+                             show_key=input.show_key(), show_stats=input.show_stats())
 
     @render.plot
     def fig():
@@ -296,6 +301,7 @@ def server(input, output, session):
                 "unit": input.unit(), "what": input.what() or "measurement",
                 "label_tool": input.label_tool(), "label_manual": input.label_manual(),
                 "title": input.title() or None, "out": outdir,
+                "show_key": input.show_key(), "show_stats": input.show_stats(),
                 "formats": ["png", "svg", "pdf"], "dpi": 300})
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
