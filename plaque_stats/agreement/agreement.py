@@ -226,15 +226,16 @@ def _draw_scatter(ax1, s, unit, label_tool, label_manual):
     ax1.set_ylabel("%s (%s)" % (label_tool, unit))
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
     _xl = np.array(lim)                                    # regression line (tool on reference)
-    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color=_AMB, lw=1.2, zorder=2)
-    # everything legible in ONE dark-on-light box (incl. the regression equation, which used to
-    # be faint amber text overlapping the legend at the bottom-right corner)
-    ax1.text(.04, .96,
-             "n=%d\nr=%.3f   R²=%.3f\nICC=%.3f   CCC=%.3f\ny = %.3f x %+.3f"
+    ax1.plot(_xl, s["slope"] * _xl + s["intercept"], "-", color=_AMB, lw=1.6, zorder=2)
+    # ALL the required numbers in ONE bold, high-contrast box (the regression equation used to be
+    # faint amber text overlapping the legend — now it is dark, larger, and clearly part of the figure)
+    ax1.text(.035, .965,
+             "n = %d\nr = %.3f    R² = %.3f\nICC = %.3f    CCC = %.3f\ny = %.3f x %+.3f"
              % (s["n"], s["r"], s.get("r2", s["r"] ** 2), s["icc"],
                 s.get("ccc", float("nan")), s["slope"], s["intercept"]),
-             transform=ax1.transAxes, va="top", ha="left", fontsize=7.5, family="monospace",
-             color="#14342b", bbox=dict(boxstyle="round,pad=0.35", fc="#f0f5f2", ec="#cfe0d8"))
+             transform=ax1.transAxes, va="top", ha="left", fontsize=9.5, family="monospace",
+             color="#103027", fontweight="bold",
+             bbox=dict(boxstyle="round,pad=0.5", fc="#ffffff", ec="#5f9484", lw=1.2, alpha=0.96))
 
 
 def _draw_bland(ax2, s, unit, label_tool, label_manual):
