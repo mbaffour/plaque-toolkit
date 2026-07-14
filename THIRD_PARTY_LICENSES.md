@@ -18,7 +18,7 @@ Legend — **Build**: L = shipped in the Light installer, F = Full only. SPDX id
 | Component | Version | Licence (SPDX) | Build | Notes / source |
 |---|---|---|---|---|
 | **Ultralytics YOLO** (runs the PlaqSeg model) | 8.4.79 | **AGPL‑3.0‑only** | F | Copyleft — governs the whole Full build. Paid Enterprise licence is the commercial alternative. https://github.com/ultralytics/ultralytics · https://www.ultralytics.com/license |
-| **PlaqSeg detector weights** (`_plaqseg/models/small.pt`, `nano.pt`) — YOLO‑seg trained on OnePetri data | — | **CC‑BY‑NC‑SA‑4.0** (weights) + AGPL‑3.0 (runtime) | F | NonCommercial · Attribution · ShareAlike. Trained on the OnePetri dataset (below). |
+| **PlaqSeg** (`_plaqseg/models/small.pt`, `nano.pt`) — YOLO‑seg plaque detector, from **PlaqSegDesktop** (Carbon16), trained on OnePetri data | app‑v0.2.1 | **CC‑BY‑NC‑SA‑4.0** (weights) + AGPL‑3.0 (runtime) | F | NonCommercial · Attribution · ShareAlike. © Carbon16 · https://github.com/Carbon16/PlaqSegDesktop (release app‑v0.2.1). Trained on the OnePetri dataset (below). |
 | **ResNet‑18 precision‑gate classifier** (`_research/clf/plaque_clf.pt`) — trained partly on OnePetri patches | — | **CC‑BY‑NC‑SA‑4.0** | F | Inherits NonCommercial from OnePetri training data. Architecture from torchvision (BSD). |
 | **OnePetri** (dataset + model lineage) — Shamash & Maurice 2021 | — | code **GPL‑3.0**; dataset **CC‑BY‑NC‑SA‑4.0** | F (derived) | © 2021 Michael Shamash · https://github.com/mshamash/OnePetri · doi:10.1089/phage.2021.0012 |
 | **PyTorch** (torch) | 2.12 | BSD‑3‑Clause | F | https://github.com/pytorch/pytorch |

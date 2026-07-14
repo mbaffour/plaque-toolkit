@@ -46,6 +46,11 @@
       "identifier": "https://github.com/ellinium/plaque_size_tool"
     },
     {
+      "relation": "references",
+      "scheme": "url",
+      "identifier": "https://github.com/Carbon16/PlaqSegDesktop/releases/tag/app-v0.2.1"
+    },
+    {
       "relation": "isSupplementTo",
       "scheme": "url",
       "identifier": "https://github.com/mbaffour/plaque-toolkit"

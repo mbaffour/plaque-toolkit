@@ -41,6 +41,10 @@ external components make that possible.
 
 ### PlaqSeg — the YOLO-seg plaque detector
 
+- **Source / cite:** **PlaqSeg**, from **PlaqSegDesktop** by *Carbon16* — release `app-v0.2.1`
+  (2026-03-19), <https://github.com/Carbon16/PlaqSegDesktop> (release:
+  <https://github.com/Carbon16/PlaqSegDesktop/releases/tag/app-v0.2.1>). Cite this if you use the
+  Precise engine. The detector weights' underlying training data are OnePetri (below).
 - **What it is:** a YOLO segmentation model trained to detect bacteriophage plaques, used as
   the **primary** detector inside the Precise pipeline (weights ship as
   `_plaqseg/models/small.pt` / `nano.pt`; inference is tiled with global NMS).

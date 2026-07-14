@@ -26,8 +26,9 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 
 ### Deep‑learning detection and classifier training (if the Precise engine was used)
 > The **Precise** engine augments the Plaque Size Tool detector with a pre‑trained deep‑learning
-> plaque detector — a YOLO segmentation model (PlaqSeg; OnePetri lineage, Shamash & Maurice, 2021),
-> used for inference only — and an optional convolutional **plaque‑versus‑texture classifier** that
+> plaque detector — a YOLO segmentation model (**PlaqSeg**, from PlaqSegDesktop, Carbon16, release
+> app‑v0.2.1, 2026; weights of OnePetri lineage, Shamash & Maurice, 2021), used for inference only —
+> and an optional convolutional **plaque‑versus‑texture classifier** that
 > we trained in‑house as a precision filter. The classifier (a ResNet‑18 fine‑tuned from ImageNet)
 > was trained on 48 × 48‑pixel image patches: positive patches from hand‑labelled plaque centres on
 > our own plates, augmented with external plaque imagery (**VACVPlaque**, *Scientific Data* 2025,
@@ -118,5 +119,7 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
   9:671–675. doi:10.1038/nmeth.2089
 - Shamash M. & Maurice C.F. (2021). *OnePetri: accelerating common bacteriophage Petri dish assays
   with computer vision.* PHAGE 2(4):224–231. doi:10.1089/phage.2021.0012
+- Carbon16 (2026). *PlaqSegDesktop* (release app‑v0.2.1) [software]. The PlaqSeg YOLO‑seg plaque
+  detector, used as the Precise engine's primary detector. https://github.com/Carbon16/PlaqSegDesktop
 - VACVPlaque dataset (2025). *A digital photography dataset for Vaccinia Virus plaque quantification
   using Deep Learning.* Scientific Data 12:719. doi:10.1038/s41597-025-05030-8 (CC-BY-4.0)

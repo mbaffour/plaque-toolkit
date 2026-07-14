@@ -58,3 +58,17 @@ references:
     journal: PHAGE
     year: 2021
     doi: 10.1089/phage.2021.0012
+  # PlaqSeg — the YOLO-seg plaque detector used as the Precise engine's primary detector
+  # (external, pre-trained; OnePetri-lineage weights). Cite it if you use Precise.
+  - type: software
+    title: PlaqSegDesktop
+    authors:
+      - name: Carbon16
+    version: app-v0.2.1
+    year: 2026
+    date-released: '2026-03-19'
+    repository-code: 'https://github.com/Carbon16/PlaqSegDesktop'
+    url: 'https://github.com/Carbon16/PlaqSegDesktop/releases/tag/app-v0.2.1'
+    notes: >-
+      The PlaqSeg YOLO-seg plaque detector; used as the Precise engine's primary detector.
+      Not peer-reviewed.
