@@ -53,7 +53,8 @@ def _maybe(mods):
 datas = []
 for fn in ("app_py.py", "plaque_stats.py", "plaque_stats_launch.py",
            "TEMPLATE.csv", "example_data_wide.csv", "example_data_long.csv",
-           "app.R", "README.md"):
+           "app.R", "README.md",
+           "GUIDE.html"):          # served at /guide/GUIDE.html for the in-app "Interactive guide" tab
     src = _proj(fn)
     if os.path.exists(src):
         datas.append((src, "."))
