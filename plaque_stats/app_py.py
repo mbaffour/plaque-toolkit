@@ -229,8 +229,11 @@ def server(input, output, session):
         is_long = "value" in cols
 
         def pick(cands, pool):
-            hit = [c for c in cands if c in pool]
-            return hit[0] if hit else (pool[0] if pool else None)
+            low = {str(c).lower(): c for c in pool}          # case-insensitive (matches REPLICATE, PHAGE, …)
+            for cand in cands:
+                if str(cand).lower() in low:
+                    return low[str(cand).lower()]
+            return pool[0] if pool else None
 
         items = [ui.input_select("group", "Group column", {c: c for c in cols},
                                  selected=pick(["group", "sample", "Sample", "phage"], cols))]
@@ -362,9 +365,16 @@ def server(input, output, session):
     def omni():
         a = analysis()
         if a["mode"] == "grouped":
-            c = a["comp"]; nsig = int((c["p"] < 0.05).sum()) if len(c) else 0
-            return ("Grouped control comparison vs '%s' (unit: %s). %d of %d subgroup-vs-control "
-                    "tests significant at p<0.05 — see the table below." % (a["control"], a["unit"], nsig, len(c)))
+            c = a["comp"]
+            n_ok = int(c["p"].notna().sum()) if len(c) else 0
+            nsig = int((c["p"] < 0.05).sum()) if len(c) else 0
+            msg = ("Grouped control comparison vs '%s' (unit: %s). %d of %d subgroup-vs-control "
+                   "tests significant at p<0.05 — see the table below." % (a["control"], a["unit"], nsig, len(c)))
+            if len(c) and n_ok == 0:
+                msg += ("\n\n⚠ No test could run — each side has fewer than 2 replicates. Your "
+                        "**Replicate (plate) column** is almost certainly wrong (it looks like the same "
+                        "column as the Subgroup). Set it to your plate/replicate id (e.g. REPLICATE).")
+            return msg
         o = a["omni"]
         msg = "%s: p = %s  (unit: %s, parametric = %s, min n = %d/group)" % (
             o["test"], ps._fmt_p(o["p"]), a["unit"], o["parametric_used"], o.get("min_n", 0))
