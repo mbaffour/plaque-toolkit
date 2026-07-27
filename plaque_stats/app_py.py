@@ -150,6 +150,7 @@ app_ui = ui.page_sidebar(
         ui.input_text("palette_custom", "Custom palette (comma hex)", ""),
         ui.input_checkbox("show_points", "Show plaque points", True),
         ui.input_checkbox("show_n", "Show n on top", True),
+        ui.input_checkbox("show_value", "Show value (mean/median)", True),
         ui.input_checkbox("frame", "Box the plot (frame)", False),
         ui.input_checkbox("show_sig", "Significance brackets", True),
         ui.input_checkbox("log_y", "Log y-axis", False),
@@ -275,7 +276,8 @@ def server(input, output, session):
         opts = dict(ps.DEFAULTS)
         opts.update(unit=input.unit(), parametric=input.parametric(), center=input.center(),
                     error=input.error(), violin_fill=input.violin_fill(), frame=bool(input.frame()),
-                    show_n=bool(input.show_n()), show_points=bool(input.show_points()),
+                    show_n=bool(input.show_n()), show_value=bool(input.show_value()),
+                    show_points=bool(input.show_points()),
                     annotate=("auto" if input.show_sig() else "none"),
                     log_y=bool(input.log_y()), width=float(input.width()), height=float(input.height()),
                     title=input.title() or None, ylabel=input.ylabel() or None)

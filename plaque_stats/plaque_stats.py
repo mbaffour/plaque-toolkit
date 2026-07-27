@@ -89,7 +89,8 @@ DEFAULTS = {
     "log_y": False, "width": 8.0, "height": 5.2, "dpi": 300,
     "point_size": 16.0, "jitter": 0.08, "violin_alpha": 0.55, "seed": 7,
     "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
-    "show_n": True, "center": "mean", "error": "auto", "frame": False, "stats_table": True,
+    "show_n": True, "show_value": True, "center": "mean", "error": "auto", "frame": False,
+    "stats_table": True,
 }
 
 # named colour themes for --palette (or pass your own comma-separated hex list)
@@ -802,6 +803,7 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     pal = opts["palette"]
     scol = {s: pal[i % len(pal)] for i, s in enumerate(sub_order)}          # colour per subgroup
     pm = _plate_means_gs(df)
+    span = (float(df["value"].max()) - float(df["value"].min())) or 1.0
     K = max(len(sub_order), 1)
     slot = 0.82 / K
     offs = {s: (i - (K - 1) / 2.0) * slot for i, s in enumerate(sub_order)}
@@ -837,11 +839,17 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
             ax.plot([x - slot * 0.34, x + slot * 0.34], [cen, cen], color="#12211d", lw=2.0, zorder=7)
             if hi > lo:
                 ax.plot([x, x], [lo, hi], color="#12211d", lw=1.1, zorder=7)
+            if opts.get("show_value", True):                 # the mean/median value, beside the crossbar
+                ax.annotate("%.2f" % cen, (x + slot * 0.38, cen), ha="left", va="center",
+                            fontsize=7.5, fontweight="bold", color="#12211d", zorder=8,
+                            bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="#cdd6d1", lw=0.6, alpha=0.9))
+            if opts.get("show_n", True):                      # n plaques, above each sub-violin
+                ax.text(x, float(np.max(vals)) + span * 0.012, "n=%d" % len(vals),
+                        ha="center", va="bottom", fontsize=7.5, color="#33413c", zorder=8)
             gmax[g] = max(gmax.get(g, float("-inf")), float(np.max(vals)))
 
-    span = (float(df["value"].max()) - float(df["value"].min())) or 1.0
     for gi, g in enumerate(group_order):
-        lvl = gmax.get(g, float(df["value"].max())) + span * 0.04
+        lvl = gmax.get(g, float(df["value"].max())) + span * 0.075   # headroom above the n labels
         xc = (gi + 1) + offs[control]
         for s in sub_order:
             if s == control or (g, s) not in pmap:
@@ -1026,6 +1034,8 @@ def build_args():
     p.add_argument("--error", choices=["auto", "sd", "sem", "ci95", "iqr", "none"],
                    help="error bar on the centre marker (auto: sem for mean, iqr for median)")
     p.add_argument("--no-n", dest="show_n", action="store_false", help="hide the n-plaques labels")
+    p.add_argument("--no-value", dest="show_value", action="store_false",
+                   help="hide the mean/median value label on the grouped plot")
     p.add_argument("--frame", dest="frame", action="store_true", help="box the plot (all 4 spines)")
     p.add_argument("--no-stats-table", dest="stats_table", action="store_false",
                    help="skip the descriptive-stats table PNG")
