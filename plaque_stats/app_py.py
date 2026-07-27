@@ -130,6 +130,7 @@ app_ui = ui.page_sidebar(
         ui.input_action_button("load_example", "Load example data", class_="btn-sm"),
         ui.hr(),
         ui.output_ui("col_pickers"),
+        ui.output_ui("control_picker"),
         ui.hr(),
         ui.input_select("unit", "Statistical unit",
                         {"auto": "auto (plate if replicates)", "replicate": "per plate",
@@ -243,21 +244,30 @@ def server(input, output, session):
         else:
             items.append(ui.input_select("value", "Value column", {c: c for c in numeric},
                                          selected=pick(["diameter_mm", "DIAMETER_MM", "value"], numeric)))
+        items.append(ui.input_select("subgroup", "Subgroup — 2nd factor (optional, e.g. host)",
+                                     {"(none)": "(none)", **{c: c for c in cols}}, selected="(none)"))
         return ui.TagList(*items)
+
+    @render.ui
+    def control_picker():
+        df = raw.get()
+        sg = input.subgroup()
+        if df is None or not sg or sg == "(none)" or sg not in [str(c) for c in df.columns]:
+            return ui.HTML("")
+        levels = [str(x) for x in pd.Series(df[sg]).dropna().unique()]
+        return ui.input_select("control", "Control level (of %s)" % sg, {c: c for c in levels},
+                               selected=levels[0] if levels else None)
 
     @reactive.calc
     def analysis():
         df = raw.get(); req(df is not None)
         req(input.group())
-        is_long = "value" in [str(c) for c in df.columns]
+        cols = [str(c) for c in df.columns]
+        is_long = "value" in cols
         value = input.metric() if is_long else input.value()
         rep_in = input.replicate()
         rep = rep_in if (rep_in and rep_in != "(none)") else "replicate"
-        d, metric = ps.normalize(df, input.group(), value, rep, "metric")
         order_in = [x.strip() for x in (input.order() or "").split(",") if x.strip()]
-        order = order_in or list(dict.fromkeys(d["group"]))
-        order = [g for g in order if g in set(d["group"])]
-        d = d[d["group"].isin(order)].reset_index(drop=True)
 
         opts = dict(ps.DEFAULTS)
         opts.update(unit=input.unit(), parametric=input.parametric(), center=input.center(),
@@ -265,7 +275,7 @@ def server(input, output, session):
                     show_n=bool(input.show_n()), show_points=bool(input.show_points()),
                     annotate=("auto" if input.show_sig() else "none"),
                     log_y=bool(input.log_y()), width=float(input.width()), height=float(input.height()),
-                    title=input.title() or None, ylabel=input.ylabel() or None, order=order)
+                    title=input.title() or None, ylabel=input.ylabel() or None)
         pname = input.palette_name()
         chose_theme = False
         if pname and pname in ps.PALETTES:
@@ -273,38 +283,71 @@ def server(input, output, session):
         elif input.palette_custom().strip():
             opts["palette"] = [x.strip() for x in input.palette_custom().split(",") if x.strip()]
             chose_theme = True
-        # A colour theme only shows on the violins when they are group-filled. So if the user
-        # picked a theme but left "Violin fill" on auto, colour the violins (otherwise the theme
-        # would silently do nothing under the neutral grey SuperPlot default).
         if chose_theme and input.violin_fill() == "auto":
             opts["violin_fill"] = "group"
 
+        sg = input.subgroup()
+        if sg and sg != "(none)" and sg in cols:                    # ---------- grouped mode ----------
+            d, metric = ps.normalize_grouped(df, input.group(), sg, value, rep, "metric")
+            gorder = order_in or list(dict.fromkeys(d["group"]))
+            gorder = [g for g in gorder if g in set(d["group"])]
+            subs = list(dict.fromkeys(d["subgroup"]))
+            ctrl = input.control()
+            control = ctrl if (ctrl in subs) else (subs[0] if subs else None)
+            sub_order = ([control] + [s for s in subs if s != control]) if control else subs
+            d = d[d["group"].isin(gorder)].reset_index(drop=True)
+            opts["order"] = gorder; opts["_sublabel"] = sg
+            summ, comp, unit = ps.grouped_stats(d, gorder, sub_order, control, opts["parametric"])
+            return dict(mode="grouped", d=d, group_order=gorder, sub_order=sub_order, control=control,
+                        summ=summ, comp=comp, unit=unit, opts=opts, metric=metric)
+
+        # ---------- single-factor mode (original) ----------
+        d, metric = ps.normalize(df, input.group(), value, rep, "metric")
+        order = order_in or list(dict.fromkeys(d["group"]))
+        order = [g for g in order if g in set(d["group"])]
+        d = d[d["group"].isin(order)].reset_index(drop=True)
+        opts["order"] = order
         omni, posthoc, unit, have_rep = ps.run_stats(d, order, opts["unit"], opts["parametric"])
         rep_means = ps.replicate_means(d)
         src = rep_means if (unit == "replicate" and rep_means is not None) else d
         unit_means = src.groupby("group")["value"].mean().to_dict()
-        return dict(d=d, order=order, opts=opts, metric=metric, omni=omni,
+        return dict(mode="single", d=d, order=order, opts=opts, metric=metric, omni=omni,
                     posthoc=posthoc, unit=unit, have_rep=have_rep, unit_means=unit_means)
+
+    def _make_fig(a):
+        if a["mode"] == "grouped":
+            return ps.plot_grouped(a["d"], a["group_order"], a["sub_order"], a["control"],
+                                   a["opts"], a["metric"], a["comp"])
+        return ps.plot_violin(a["d"], a["order"], a["opts"], a["metric"], a["posthoc"])
 
     @render.plot
     def violin():
-        a = analysis()
-        return ps.plot_violin(a["d"], a["order"], a["opts"], a["metric"], a["posthoc"])
+        return _make_fig(analysis())
 
     @render.data_frame
     def summary_group():
         a = analysis()
+        if a["mode"] == "grouped":
+            return a["summ"].round(4)
         return ps.group_summary(a["d"], a["order"]).round(4)
 
     @render.data_frame
     def summary_rep():
         a = analysis()
-        rm = ps.replicate_means(a["d"])
+        rm = ps._plate_means_gs(a["d"]) if a["mode"] == "grouped" else ps.replicate_means(a["d"])
         return (rm.round(4) if rm is not None else pd.DataFrame({"note": ["no replicate column"]}))
 
     @render.data_frame
     def pairwise():
         a = analysis()
+        if a["mode"] == "grouped":
+            c = a["comp"]
+            if not len(c):
+                return pd.DataFrame({"note": ["no non-control subgroups to compare"]})
+            out = c[["group", "subgroup", "control", "mean_control", "mean_subgroup",
+                     "change_pct", "cohens_d", "test", "p", "signif"]].copy()
+            out["p"] = out["p"].map(ps._fmt_p)
+            return out.round(4)
         if not a["posthoc"]:
             return pd.DataFrame({"note": ["need ≥2 groups"]})
         um = a["unit_means"]
@@ -317,7 +360,12 @@ def server(input, output, session):
 
     @render.text
     def omni():
-        a = analysis(); o = a["omni"]
+        a = analysis()
+        if a["mode"] == "grouped":
+            c = a["comp"]; nsig = int((c["p"] < 0.05).sum()) if len(c) else 0
+            return ("Grouped control comparison vs '%s' (unit: %s). %d of %d subgroup-vs-control "
+                    "tests significant at p<0.05 — see the table below." % (a["control"], a["unit"], nsig, len(c)))
+        o = a["omni"]
         msg = "%s: p = %s  (unit: %s, parametric = %s, min n = %d/group)" % (
             o["test"], ps._fmt_p(o["p"]), a["unit"], o["parametric_used"], o.get("min_n", 0))
         for w in o.get("warnings", []):
@@ -327,6 +375,13 @@ def server(input, output, session):
     @render.text
     def sentence():
         a = analysis()
+        if a["mode"] == "grouped":
+            c = a["comp"]
+            if not len(c):
+                return "No non-control subgroups to compare."
+            parts = ["%s (%s vs %s %+.1f%%, %s)" % (r["group"], r["subgroup"], r["control"],
+                     r["change_pct"], r["signif"]) for _, r in c.iterrows()]
+            return ("Relative to the control '%s', %s: " % (a["control"], a["metric"])) + "; ".join(parts) + "."
         summ = ps.group_summary(a["d"], a["order"])
         import tempfile
         p = os.path.join(tempfile.gettempdir(), "_plaque_report.md")
@@ -337,8 +392,7 @@ def server(input, output, session):
         return txt.split("## Paste-ready sentence")[-1].strip().lstrip(">").strip()
 
     def _fig_bytes(fmt):
-        a = analysis()
-        fig = ps.plot_violin(a["d"], a["order"], a["opts"], a["metric"], a["posthoc"])
+        fig = _make_fig(analysis())
         buf = io.BytesIO()
         fig.savefig(buf, format=fmt, dpi=300, bbox_inches="tight", facecolor="white")
         plt.close(fig)
@@ -359,17 +413,21 @@ def server(input, output, session):
     @render.download(filename=lambda: "summary_by_group.csv")
     def dl_sumg():
         a = analysis()
-        yield ps.group_summary(a["d"], a["order"]).to_csv(index=False)
+        d = a["summ"] if a["mode"] == "grouped" else ps.group_summary(a["d"], a["order"])
+        yield d.to_csv(index=False)
 
     @render.download(filename=lambda: "summary_by_replicate.csv")
     def dl_sumr():
         a = analysis()
-        rm = ps.replicate_means(a["d"])
+        rm = ps._plate_means_gs(a["d"]) if a["mode"] == "grouped" else ps.replicate_means(a["d"])
         yield (rm.to_csv(index=False) if rm is not None else "note,no replicate column\n")
 
     @render.download(filename=lambda: "pairwise_tests.csv")
     def dl_pairwise():
         a = analysis()
+        if a["mode"] == "grouped":
+            yield (a["comp"].to_csv(index=False) if len(a["comp"]) else "note,no comparisons\n")
+            return
         um = a["unit_means"]
         rows = [{"group_a": x, "group_b": y,
                  "mean_a": um.get(x, float("nan")), "mean_b": um.get(y, float("nan")),
@@ -391,7 +449,9 @@ def server(input, output, session):
         outdir = os.path.join(tmp, "out")
         args = dict(a["opts"])                      # DEFAULTS + all the app's options (palette, center, …)
         args.update(data=src, group=input.group(), value=value, replicate=rep, metric="metric",
-                    out=outdir, formats=["png", "svg", "pdf"], order=a["order"], _stamp="")
+                    out=outdir, formats=["png", "svg", "pdf"], _stamp="")
+        if a["mode"] == "grouped":                  # grouped -> run_grouped writes the grouped output set
+            args.update(subgroup=input.subgroup(), control=input.control())
         ps.run(args)                                # writes the full CLI output set
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

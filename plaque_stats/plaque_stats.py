@@ -78,6 +78,7 @@ def _darken(hexc, f=0.62):
 
 DEFAULTS = {
     "group": "group", "value": None, "replicate": "replicate", "metric": "metric",
+    "subgroup": None, "control": None,   # grouped control-comparison mode (2nd factor + its control)
     "unit": "auto",                # auto | replicate | plaque  (statistical unit)
     "order": None,                 # explicit group order (list) or None = as-they-appear
     "palette": OKABE_ITO,
@@ -695,7 +696,247 @@ def save_pairwise_table(unit_means, posthoc, base, metric, unit, formats=("png",
 
 
 # --------------------------------------------------------------------------- main
+# =============================================================================
+#  GROUPED CONTROL-COMPARISON MODE  (two factors: group × subgroup, vs a control)
+#  e.g. group=phage, subgroup=host, control=the permissive host — each phage's
+#  treatment host(s) tested against its control host, on the plate means.
+# =============================================================================
+def normalize_grouped(df, group, subgroup, value, replicate, metric):
+    """Tidy frame: group, subgroup, replicate, value — for the grouped mode."""
+    df = df.copy(); df.columns = [str(c).strip() for c in df.columns]
+    cols = set(df.columns)
+    for col, nm in ((group, "group"), (subgroup, "subgroup")):
+        if col not in cols:
+            raise SystemExit("[error] %s column %r not found. Columns: %s" % (nm, col, sorted(cols)))
+    if value in (None, "value") and "value" in cols:
+        vcol = "value"
+    elif value is None:
+        numeric = [c for c in df.columns if c not in (group, subgroup, replicate, metric)
+                   and pd.api.types.is_numeric_dtype(df[c])]
+        if len(numeric) != 1:
+            raise SystemExit("[error] specify --value (one of: %s)" % ", ".join(numeric)
+                             if numeric else "[error] no numeric value column found")
+        vcol = numeric[0]
+    else:
+        if value not in cols:
+            raise SystemExit("[error] value column %r not found. Columns: %s" % (value, sorted(cols)))
+        vcol = value
+
+    def _clean(series):
+        s = series.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+        return s.where(~s.str.lower().isin(["nan", "none", "nat", ""]), np.nan)
+
+    out = pd.DataFrame({"group": _clean(df[group]), "subgroup": _clean(df[subgroup])})
+    out["replicate"] = _clean(df[replicate]).values if replicate in cols else np.nan
+    out["value"] = pd.to_numeric(df[vcol], errors="coerce").values
+    out = out.dropna(subset=["group", "subgroup", "value"]).reset_index(drop=True)
+    if out.empty:
+        raise SystemExit("[error] no numeric values after parsing — check your columns.")
+    return out, (value or vcol)
+
+
+def _plate_means_gs(df):
+    """Per (group, subgroup, replicate) mean — the plate-level unit for grouped stats (None if no reps)."""
+    if df["replicate"].isna().all():
+        return None
+    return (df.dropna(subset=["replicate"])
+              .groupby(["group", "subgroup", "replicate"], as_index=False)
+              .agg(value=("value", "mean"), n_plaques=("value", "size")))
+
+
+def _two_sample_test(control_vals, treat_vals, parametric):
+    """(p, test_name) comparing a treatment unit-set to the control unit-set."""
+    a, b = np.asarray(control_vals, float), np.asarray(treat_vals, float)
+    if len(a) < 2 or len(b) < 2:
+        return float("nan"), "n/a (need ≥2 per side)"
+    if parametric == "nonparametric":
+        try:
+            _, p = st.mannwhitneyu(a, b, alternative="two-sided")
+            return float(p), "Mann–Whitney U"
+        except ValueError:
+            return float("nan"), "Mann–Whitney U (all ties)"
+    # auto/parametric: Welch t-test (MWU can't reach p<0.05 at 3 vs 3 — underpowered at small n)
+    _, p = st.ttest_ind(a, b, equal_var=False)
+    return float(p), "Welch t-test"
+
+
+def grouped_stats(df, group_order, sub_order, control, parametric="auto"):
+    """Per (group, subgroup) summary + each non-control subgroup tested vs the control subgroup,
+    on the experimental unit (plate means when replicates exist, else plaques). Returns
+    (summary_df, comparisons_df, unit)."""
+    pm = _plate_means_gs(df)
+    unit = "replicate" if pm is not None else "plaque"
+    src = pm if pm is not None else df
+    rows, comps = [], []
+    for g in group_order:
+        ctrl = src[(src["group"] == g) & (src["subgroup"] == control)]["value"].values
+        for s in sub_order:
+            vals = src[(src["group"] == g) & (src["subgroup"] == s)]["value"].values
+            d = describe(vals)
+            rows.append({"group": g, "subgroup": s, "is_control": s == control,
+                         "n_units": len(vals),
+                         "n_plaques": int(df[(df["group"] == g) & (df["subgroup"] == s)].shape[0]),
+                         "mean": d["mean"], "sd": d["sd"], "sem": d["sem"],
+                         "ci95_lo": d["ci95_lo"], "ci95_hi": d["ci95_hi"],
+                         "median": d["median"], "min": d["min"], "max": d["max"]})
+            if s != control and len(ctrl) and len(vals):
+                p, test = _two_sample_test(ctrl, vals, parametric)
+                mc, mm = float(np.mean(ctrl)), float(np.mean(vals))
+                comps.append({"group": g, "subgroup": s, "control": control,
+                              "mean_control": round(mc, 4), "mean_subgroup": round(mm, 4),
+                              "change_pct": round((mm - mc) / mc * 100, 1) if mc else float("nan"),
+                              "cohens_d": round(cohens_d(vals, ctrl), 3),
+                              "n_control": len(ctrl), "n_subgroup": len(vals),
+                              "test": test, "p": p, "signif": stars(p)})
+    return pd.DataFrame(rows), pd.DataFrame(comps), unit
+
+
+def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
+    """Grouped SuperPlot: main groups on x, subgroups as neutral violins offset within each group,
+    plate-mean dots + mean±SEM coloured by subgroup, and a significance star for each non-control
+    subgroup vs the control (within its group). Legend marks the control."""
+    plt.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42,
+                         "font.size": 12, "font.family": "sans-serif", "axes.linewidth": 0.9})
+    rng = np.random.default_rng(opts["seed"])
+    fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
+    pal = opts["palette"]
+    scol = {s: pal[i % len(pal)] for i, s in enumerate(sub_order)}          # colour per subgroup
+    pm = _plate_means_gs(df)
+    K = max(len(sub_order), 1)
+    slot = 0.82 / K
+    offs = {s: (i - (K - 1) / 2.0) * slot for i, s in enumerate(sub_order)}
+    pmap = {(r["group"], r["subgroup"]): r["p"] for _, r in comp.iterrows()} if len(comp) else {}
+    gmax = {}
+    for gi, g in enumerate(group_order):
+        for s in sub_order:
+            x = (gi + 1) + offs[s]
+            vals = df[(df["group"] == g) & (df["subgroup"] == s)]["value"].values
+            if not len(vals):
+                continue
+            vp = ax.violinplot([vals], positions=[x], widths=slot * 0.92, showextrema=False)
+            for b in vp["bodies"]:
+                b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(0.32)
+                b.set_linewidth(0.8)
+                vv = b.get_paths()[0].vertices
+                vv[:, 1] = np.clip(vv[:, 1], float(np.min(vals)), float(np.max(vals)))
+            c = scol[s]
+            if pm is not None:
+                if opts.get("show_points", True):        # faint raw plaques behind the plate means
+                    jr = x + rng.uniform(-slot * 0.30, slot * 0.30, size=len(vals))
+                    ax.scatter(jr, vals, s=opts["point_size"] * 0.7, color=c, alpha=0.20,
+                               edgecolor="none", zorder=2)
+                um = pm[(pm["group"] == g) & (pm["subgroup"] == s)]["value"].values
+                jx = (x + np.linspace(-0.03, 0.03, len(um))) if len(um) > 1 else np.array([float(x)])
+                ax.scatter(jx, um, s=opts["point_size"] * 4.0, color=c, edgecolor="#12211d",
+                           linewidth=0.8, zorder=6)
+                cen, lo, hi = _center_spread(um, opts.get("center", "mean"), opts.get("error", "auto"))
+            else:
+                jx = x + rng.uniform(-slot * 0.25, slot * 0.25, size=len(vals))
+                ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3)
+                cen, lo, hi = _center_spread(vals, opts.get("center", "mean"), opts.get("error", "auto"))
+            ax.plot([x - slot * 0.34, x + slot * 0.34], [cen, cen], color="#12211d", lw=2.0, zorder=7)
+            if hi > lo:
+                ax.plot([x, x], [lo, hi], color="#12211d", lw=1.1, zorder=7)
+            gmax[g] = max(gmax.get(g, float("-inf")), float(np.max(vals)))
+
+    span = (float(df["value"].max()) - float(df["value"].min())) or 1.0
+    for gi, g in enumerate(group_order):
+        lvl = gmax.get(g, float(df["value"].max())) + span * 0.04
+        xc = (gi + 1) + offs[control]
+        for s in sub_order:
+            if s == control or (g, s) not in pmap:
+                continue
+            xs = (gi + 1) + offs[s]
+            ax.plot([xc, xc, xs, xs], [lvl, lvl + span * 0.02, lvl + span * 0.02, lvl],
+                    lw=1.0, color="#33413c")
+            ax.text((xc + xs) / 2, lvl + span * 0.025, stars(pmap[(g, s)]),
+                    ha="center", va="bottom", fontsize=11)
+            lvl += span * 0.095
+
+    ax.set_xticks(np.arange(1, len(group_order) + 1)); ax.set_xticklabels(group_order, fontweight="bold")
+    ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13, fontweight="bold")
+    if opts.get("xlabel"):
+        ax.set_xlabel(opts["xlabel"], fontsize=13)
+    if opts.get("title"):
+        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left", pad=8)
+    if opts.get("log_y"):
+        ax.set_yscale("log")
+    _style_axes(ax, opts)
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=scol[s],
+                      markeredgecolor="#12211d", markersize=8,
+                      label=("%s (control)" % s if s == control else s)) for s in sub_order]
+    ax.legend(handles=handles, title=opts.get("_sublabel", "subgroup"), frameon=True, fontsize=9,
+              title_fontsize=9, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+    fig.tight_layout()
+    return fig
+
+
+def _write_grouped_report(path, metric, summ, comp, unit, control, args):
+    unote = ("per-plate means — the plate is the experimental unit (avoids pseudoreplication)"
+             if unit == "replicate" else "per-plaque values — NO replicate column, so this is "
+             "pseudoreplicated; add a replicate/plate column for defensible stats")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# Grouped control-comparison — %s\n\n_Generated %s | plaque_stats v%s_\n\n"
+                % (metric, args.get("_stamp", ""), __version__))
+        f.write("Each subgroup is compared with the control **%s** within its group, on %s.\n\n"
+                % (control, unote))
+        if len(comp):
+            f.write("| group | subgroup | control mean | subgroup mean | change | Cohen's d | test | p | |\n")
+            f.write("|---|---|---:|---:|---:|---:|---|---:|---|\n")
+            for _, r in comp.iterrows():
+                f.write("| %s | %s | %.3f | %.3f | %+.1f%% | %.2f | %s | %s | %s |\n"
+                        % (r["group"], r["subgroup"], r["mean_control"], r["mean_subgroup"],
+                           r["change_pct"], r["cohens_d"], r["test"], _fmt_p(r["p"]), r["signif"]))
+        f.write("\n_Stars: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant. "
+                "Change = (subgroup − control)/control._\n")
+
+
+def run_grouped(args):
+    df, metric = normalize_grouped(read_table(args["data"]), args["group"], args["subgroup"],
+                                   args["value"], args["replicate"], args["metric"])
+    group_order = args["order"] or list(dict.fromkeys(df["group"]))
+    group_order = [g for g in group_order if g in set(df["group"])]
+    subs = list(dict.fromkeys(df["subgroup"]))
+    control = args.get("control") or subs[0]
+    if control not in subs:
+        raise SystemExit("[error] control %r not among subgroup levels: %s" % (control, subs))
+    sub_order = [control] + [s for s in subs if s != control]          # control drawn first
+    df = df[df["group"].isin(group_order)].reset_index(drop=True)
+    out = args["out"]; os.makedirs(out, exist_ok=True)
+    mt = _safe(metric)
+
+    summ, comp, unit = grouped_stats(df, group_order, sub_order, control, args.get("parametric", "auto"))
+    summ.to_csv(os.path.join(out, "grouped_summary_%s.csv" % mt), index=False)
+    if len(comp):
+        comp.to_csv(os.path.join(out, "control_comparisons_%s.csv" % mt), index=False)
+
+    opts = dict(args); opts["_sublabel"] = args["subgroup"]
+    fig = plot_grouped(df, group_order, sub_order, control, opts, metric, comp)
+    base = os.path.join(out, "grouped_%s" % mt)
+    for fmt in args["formats"]:
+        kw = {"dpi": args["dpi"], "bbox_inches": "tight", "facecolor": "white"}
+        if fmt in ("tif", "tiff"):
+            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+        fig.savefig("%s.%s" % (base, fmt), **kw)
+    plt.close(fig)
+
+    _write_grouped_report(os.path.join(out, "grouped_report_%s.md" % mt),
+                          metric, summ, comp, unit, control, args)
+    prov = {k: v for k, v in args.items() if not k.startswith("_")}
+    prov.update({"mode": "grouped", "metric": metric, "groups": group_order,
+                 "subgroups": sub_order, "control": control, "unit": unit,
+                 "versions": {"plaque_stats": __version__, "numpy": np.__version__,
+                              "pandas": pd.__version__, "scipy": scipy.__version__}})
+    json.dump(prov, open(os.path.join(out, "run_config_%s.json" % mt), "w"), indent=2)
+    n_sig = int((comp["p"] < 0.05).sum()) if len(comp) else 0
+    print("[done] grouped %s: %d groups × %d subgroups vs '%s' (unit=%s); %d vs-control p<0.05 -> %s"
+          % (metric, len(group_order), len(sub_order), control, unit, n_sig, os.path.abspath(out)))
+
+
 def run(args):
+    if args.get("subgroup"):
+        return run_grouped(args)
     df, metric = normalize(read_table(args["data"]), args["group"], args["value"],
                            args["replicate"], args["metric"])
     order = args["order"] or list(dict.fromkeys(df["group"]))
@@ -762,6 +1003,10 @@ def build_args():
     p.add_argument("--make-example", action="store_true", help="write example + template CSVs and exit")
     p.add_argument("--group"); p.add_argument("--value"); p.add_argument("--replicate")
     p.add_argument("--metric"); p.add_argument("--out", default="plaque_stats_out")
+    p.add_argument("--subgroup", help="second factor (e.g. host) — switches to grouped "
+                                      "control-comparison mode (paired violins within each group)")
+    p.add_argument("--control", help="the control level of --subgroup that the others are tested "
+                                     "against (default: the first level seen)")
     p.add_argument("--unit", choices=["auto", "replicate", "plaque"])
     p.add_argument("--parametric", choices=["auto", "parametric", "nonparametric"])
     p.add_argument("--annotate", choices=["auto", "all", "adjacent", "none"])
