@@ -26,6 +26,7 @@ A single-operator but **multi-pronged** local validation on the authors' own pla
 | 4 | **False positives** on negative controls | **17 blank** plates | Precise **3.1 ± 3.0 FP/blank** (Sensitive 12.4) (§2C) |
 | 5 | **Agreement statistics** (Bland–Altman + ICC) | 3 comparisons | independent Fiji ICC 0.97; hand labels ICC 0.99; same-outline consistency ICC 1.00 / r 0.9999 (§2D) |
 | 6 | **The ML classifier gate, on vs off** | WT/2-4/G12E/DTR, threshold sweep | precision **0.67 → 0.70** at the operating point — a working precision filter (§2E) |
+| 7 | **Resolution floor** — tiny plaques | **20** plaques ~0.3–0.5 mm, tool vs Fiji | means agree (bias ~4%) but per-plaque **ICC ≈ 0** — a shared imaging limit below ~0.5 mm, not a tool defect (§2F) |
 
 **Boundary (stated plainly):** this is a **real local validation performed by the authors** — not an
 independent or peer-reviewed one. Only the **Published** engine carries peer-reviewed validation; the
@@ -181,6 +182,33 @@ filter**, not a recall booster, and it is why it ships **on by default in the ap
 default in the CLI**. (Recall here is dominated by Precise's deliberate under-counting on very dense
 plates, §2A — not by the gate.)
 
+### (F) Resolution floor — tiny plaques (n = 20)
+
+An independent Fiji comparison on **20 very small plaques (~0.3–0.5 mm)** — below the primary
+comparison's range (§2B starts at 0.84 mm) — to probe the small-size limit
+(`validation/tiny_plaques.csv`; figure `validation/figures/agreement_tiny_diameter.*`).
+
+| Metric | Tiny diameter | Tiny area |
+|---|---|---|
+| n | 20 | 20 |
+| Mean (Toolkit / Fiji) | 0.43 / 0.42 mm | 0.149 / 0.138 mm² |
+| **Mean bias (Toolkit − Fiji)** | **+0.015 mm (+3.6%)** | +0.011 mm² (+7.6%) |
+| 95% limits of agreement | −0.10 … +0.13 mm | −0.07 … +0.09 mm² |
+| **ICC(A,1)** | **≈ 0** (−0.01) | ≈ 0 (0.00) |
+| Pearson r | ≈ 0 | ≈ 0 |
+
+**The means agree (~4%), but individual tiny plaques do not correlate (ICC ≈ 0).** At ~0.4 mm a plaque
+is only ~10 px across, so a **single-pixel** boundary difference between the tool's auto-outline and a
+manual Fiji trace changes the area by **20–40%**. The measurement noise then exceeds the true
+plaque-to-plaque size differences, so **neither method can rank tiny plaques** — this is a
+**resolution floor of the imaging** and it limits *manual Fiji tracing as much as the tool*, not a
+defect of either.
+
+**Reporting rule:** treat sub-~0.5 mm plaque sizes as **group means** (reliable), not per-plaque
+(unreliable in both methods). The primary size validation (§2B, n = 100, ≥ 0.84 mm, ICC 0.974) is
+unaffected and remains the citable result. To size tiny plaques reliably per-plaque, image at higher
+resolution (more pixels per plaque).
+
 ---
 
 ## 3. Quality-control finding fixed during validation
@@ -199,6 +227,10 @@ evidence that the cross-tool validation is doing real work.
 
 - **Small sample.** Detection/sizing was scored on **2** ground-truth plates (185 + 89 plaques);
   the Fiji cross-check on **1** plate. Not yet enough for a strong published claim.
+- **Resolution floor below ~0.5 mm.** On very small plaques (~0.3–0.5 mm, ~10 px across) the tool and
+  manual Fiji agree on the *mean* size (~4% bias) but not plaque-by-plaque (ICC ≈ 0, n = 20; §2F) — a
+  single-pixel boundary difference is 20–40% of the area, so measurement noise exceeds the true size
+  differences in *both* methods. Report sub-0.5 mm sizes as group means, not per-plaque.
 - **Precise under-detects on very dense plates** (recall ≈ 0.3–0.4). What it *does* report is highly
   accurate; use Sensitive + manual tools (Add / Draw shape / Detect area) for coverage on crowded
   plates.

@@ -56,6 +56,26 @@ The same result also appears as [`docs/PlaqueToolkit_vs_Fiji_BlandAltman.png`](.
 - `validate_permode.csv` — detection/sizing precision · recall · F1 · size-MAE per engine across the GT plates.
 - `validate_perplate.csv` — the same, per plate.
 
+## Resolution floor — tiny plaques (n = 20)
+
+`tiny_plaques.csv` + `figures/agreement_tiny_diameter.*` — 20 very small plaques (~0.3–0.5 mm, *below*
+the primary comparison's 0.84 mm floor), each measured by both methods.
+
+| metric | tiny diameter | tiny area |
+|---|---|---|
+| n | 20 | 20 |
+| mean bias (Toolkit − Fiji) | +0.015 mm (+3.6%) | +0.011 mm² (+7.6%) |
+| 95% LoA | −0.10 … +0.13 mm | −0.07 … +0.09 mm² |
+| **ICC(A,1)** | **≈ 0** (−0.01) | ≈ 0 (0.00) |
+| Pearson r | ≈ 0 | ≈ 0 |
+
+**The means agree (~4% bias) but individual plaques do not correlate (ICC ≈ 0).** At ~0.4 mm a plaque
+is only ~10 px across, so a single-pixel boundary difference changes the area by 20–40 %; measurement
+noise then exceeds the true size differences, and **neither method can rank tiny plaques** — a
+resolution floor of the imaging, not a defect of either tool. **Report sub-0.5 mm sizes as group means,
+not per-plaque.** The primary comparison (n = 100, ≥ 0.84 mm, ICC 0.974) is the citable size validation
+and is unaffected.
+
 ## Reproduce
 
 ```bash
