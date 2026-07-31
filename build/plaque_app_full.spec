@@ -29,6 +29,9 @@ for pkg in ("torch", "torchvision", "ultralytics", "skimage"):
 datas += collect_data_files("cv2")
 datas += collect_data_files("pillow_heif")
 datas += collect_data_files("matplotlib")
+# ALL matplotlib backends — the Analyze tab exports SVG/PDF/EPS + a full ZIP bundle, which need
+# backend_svg / backend_pdf / backend_ps (not just the on-screen qtagg backend).
+hiddenimports += collect_submodules("matplotlib.backends")
 binaries += collect_dynamic_libs("pillow_heif")
 hiddenimports += collect_submodules("pillow_heif")
 
@@ -58,7 +61,9 @@ hiddenimports += [
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths", "app.plaque_canvas",
     "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
-    "app.agreement",
+    "app.agreement", "app.study_tab",
+    # the standalone stats engine, reused in-process by the Analyze tab
+    "plaque_stats", "plaque_stats.plaque_stats",
     # the in-process Precise package
     "precise", "precise.pipeline", "precise.combine", "precise.pst_front",
     "_plaqseg", "_plaqseg.run_plaqseg",

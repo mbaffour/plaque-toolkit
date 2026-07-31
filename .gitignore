@@ -72,3 +72,9 @@ build/*/
 # plate photos dropped into the batch input folder — keep the folder + README, not the images
 plates/*
 !plates/README.txt
+
+# author-only calibration / verification photo folders + scratch files (never committed)
+Verifications/
+Callibration of plates/
+260701 No Plaque Plates for Calibration/
+_rt.csv

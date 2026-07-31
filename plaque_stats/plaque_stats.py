@@ -407,13 +407,14 @@ def plot_violin(df, order, opts, metric_name, posthoc):
 
     vfill = opts.get("violin_fill", "auto")
     neutral = (vfill == "neutral") or (vfill == "auto" and rm is not None)  # grey when points carry plate colour
+    afac = float(opts.get("violin_alpha", 0.55)) / 0.55   # 0.55 (default) keeps the tuned look; scales from there
     parts = ax.violinplot(data, positions=pos, showextrema=False, widths=0.80)
     for i, b in enumerate(parts["bodies"]):
         if neutral:
-            b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(0.38)
+            b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(min(1.0, 0.38 * afac))
         else:
             c = gpal[i % len(gpal)]
-            b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(0.22)
+            b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(min(1.0, 0.22 * afac))
         b.set_linewidth(0.9)
         verts = b.get_paths()[0].vertices                 # trim the violin to the data range
         verts[:, 1] = np.clip(verts[:, 1], float(np.min(data[i])), float(np.max(data[i])))
@@ -441,6 +442,10 @@ def plot_violin(df, order, opts, metric_name, posthoc):
                     solid_capstyle="round", zorder=7)
             if hi > lo:
                 ax.plot([x0, x0], [lo, hi], color="#12211d", lw=1.1, zorder=7)
+            if opts.get("show_value", True):
+                ax.annotate("%.2f" % cen, (x0 + 0.21, cen), fontsize=9, fontweight="bold",
+                            va="center", ha="left", color="#12211d", zorder=8,
+                            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
         else:                                             # -------- no replicates: median/IQR --------
             if opts["show_points"]:
                 jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
@@ -448,6 +453,10 @@ def plot_violin(df, order, opts, metric_name, posthoc):
             cen, lo, hi = _center_spread(v, opts.get("center", "mean"), opts.get("error", "auto"))
             ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
             ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
+            if opts.get("show_value", True):
+                ax.annotate("%.2f" % cen, (x0 + 0.12, cen), fontsize=9, fontweight="bold",
+                            va="center", ha="left", color="#12211d", zorder=8,
+                            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
 
     ax.set_xticks(pos); ax.set_xticklabels(order, fontweight="bold")
     ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13, fontweight="bold")
@@ -788,7 +797,9 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto"):
                               "change_pct": round((mm - mc) / mc * 100, 1) if mc else float("nan"),
                               "cohens_d": round(cohens_d(vals, ctrl), 3),
                               "n_control": len(ctrl), "n_subgroup": len(vals),
-                              "test": test, "p": p, "signif": stars(p)})
+                              # a test that didn't run (n<2 per side -> p is NaN) must NOT read as a
+                              # tested 'ns'; label it n/a so the report/plot don't imply a null result
+                              "test": test, "p": p, "signif": stars(p) if p == p else "n/a"})
     return pd.DataFrame(rows), pd.DataFrame(comps), unit
 
 
@@ -817,7 +828,8 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
                 continue
             vp = ax.violinplot([vals], positions=[x], widths=slot * 0.92, showextrema=False)
             for b in vp["bodies"]:
-                b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(0.32)
+                b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74")
+                b.set_alpha(min(1.0, 0.32 * float(opts.get("violin_alpha", 0.55)) / 0.55))
                 b.set_linewidth(0.8)
                 vv = b.get_paths()[0].vertices
                 vv[:, 1] = np.clip(vv[:, 1], float(np.min(vals)), float(np.max(vals)))
@@ -848,18 +860,20 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
                         ha="center", va="bottom", fontsize=7.5, color="#33413c", zorder=8)
             gmax[g] = max(gmax.get(g, float("-inf")), float(np.max(vals)))
 
-    for gi, g in enumerate(group_order):
-        lvl = gmax.get(g, float(df["value"].max())) + span * 0.075   # headroom above the n labels
-        xc = (gi + 1) + offs[control]
-        for s in sub_order:
-            if s == control or (g, s) not in pmap:
-                continue
-            xs = (gi + 1) + offs[s]
-            ax.plot([xc, xc, xs, xs], [lvl, lvl + span * 0.02, lvl + span * 0.02, lvl],
-                    lw=1.0, color="#33413c")
-            ax.text((xc + xs) / 2, lvl + span * 0.025, stars(pmap[(g, s)]),
-                    ha="center", va="bottom", fontsize=11)
-            lvl += span * 0.095
+    if opts.get("annotate", "auto") != "none":       # let the desktop's Brackets=None hide them
+        for gi, g in enumerate(group_order):
+            lvl = gmax.get(g, float(df["value"].max())) + span * 0.075   # headroom above the n labels
+            xc = (gi + 1) + offs[control]
+            for s in sub_order:
+                if s == control or (g, s) not in pmap:
+                    continue
+                xs = (gi + 1) + offs[s]
+                ax.plot([xc, xc, xs, xs], [lvl, lvl + span * 0.02, lvl + span * 0.02, lvl],
+                        lw=1.0, color="#33413c")
+                _pv = pmap[(g, s)]
+                ax.text((xc + xs) / 2, lvl + span * 0.025, stars(_pv) if _pv == _pv else "n/a",
+                        ha="center", va="bottom", fontsize=11)
+                lvl += span * 0.095
 
     ax.set_xticks(np.arange(1, len(group_order) + 1)); ax.set_xticklabels(group_order, fontweight="bold")
     ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13, fontweight="bold")
@@ -870,12 +884,13 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     if opts.get("log_y"):
         ax.set_yscale("log")
     _style_axes(ax, opts)
-    from matplotlib.lines import Line2D
-    handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=scol[s],
-                      markeredgecolor="#12211d", markersize=8,
-                      label=("%s (control)" % s if s == control else s)) for s in sub_order]
-    ax.legend(handles=handles, title=opts.get("_sublabel", "subgroup"), frameon=True, fontsize=9,
-              title_fontsize=9, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+    if opts.get("legend", True):
+        from matplotlib.lines import Line2D
+        handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=scol[s],
+                          markeredgecolor="#12211d", markersize=8,
+                          label=("%s (control)" % s if s == control else s)) for s in sub_order]
+        ax.legend(handles=handles, title=opts.get("_sublabel", "subgroup"), frameon=True, fontsize=9,
+                  title_fontsize=9, loc="upper left", bbox_to_anchor=(1.005, 1.0))
     fig.tight_layout()
     return fig
 

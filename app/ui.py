@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
     QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit,
-    QDialog, QTextBrowser, QLayout)
+    QDialog, QTextBrowser, QLayout, QSizePolicy)
 
 from app import __version__, engine_api, style, batch_measure, validate
+from app.study_tab import StudyTab
 from app.workers import Worker
 from app.widgets import PandasTableModel, NumericSortProxy, CopyableTableView
 from app.plaque_canvas import PlaqueCanvas
@@ -1585,12 +1586,18 @@ class AgreementTab(QWidget):
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
         fig = agreement.make_figure(s, unit)
         new = FigureCanvas(fig)
+        # pin to the figure's native pixel size so the scroll area can't stretch/distort it
+        w_in, h_in = fig.get_size_inches()
+        new.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        new.setFixedSize(int(round(w_in * 96)), int(round(h_in * 96)))
         if self.canvas is not None:
             self.fig_layout.removeWidget(self.canvas); self.canvas.setParent(None)
         elif self.fig_placeholder is not None:
             self.fig_layout.removeWidget(self.fig_placeholder); self.fig_placeholder.setParent(None)
             self.fig_placeholder = None
-        self.canvas = new; self.fig_layout.addWidget(self.canvas); self.canvas.draw()
+        self.canvas = new
+        self.fig_layout.addWidget(self.canvas, 0, Qt.AlignHCenter | Qt.AlignTop)
+        self.canvas.draw()
 
     def _example(self):
         self.tool_in.setPlainText(self._EX_TOOL); self.fiji_in.setPlaceholderText("")
@@ -1681,6 +1688,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(_scrollable(self.measure_tab, grow=False), "  Measure  ")
         self.tabs.addTab(_scrollable(BatchTab(self.pool)), "  Batch  ")
         self.tabs.addTab(_scrollable(CompareTab(self.pool)), "  Compare turbidity  ")
+        self.study_tab = StudyTab(self.measure_tab)
+        # grow=False so the scroll area does NOT stretch the tab (its figure pins its own size)
+        self.tabs.addTab(_scrollable(self.study_tab, grow=False), "  Analyze  ")
         self.tabs.addTab(_scrollable(ValidateTab(self.pool)), "  Validate  ")
         self.tabs.addTab(_scrollable(AgreementTab()), "  Fiji agreement  ")
         self.about_tab = AboutTab()
@@ -1780,6 +1790,11 @@ def launch():
         if not pm.isNull():
             splash = QSplashScreen(pm)
             splash.show()
+            # tell the user WHY the first launch is slow, so a ~30 s cold start doesn't read as a hang
+            from PySide6.QtGui import QColor
+            splash.showMessage("Loading the toolkit…  the first launch warms the Precise engine "
+                               "(~20–40 s); later launches are fast.",
+                               Qt.AlignBottom | Qt.AlignHCenter, QColor("#ffffff"))
             app.processEvents()
     win = MainWindow()
     if splash is not None:
@@ -1820,6 +1835,66 @@ def uitest():
     except Exception as e:      # pragma: no cover
         print("UITEST fiji-check error:", e)
     ok = ok and fiji_ok
+
+    # exercise the Analyze tab end-to-end: sample containers → both modes → customize/redraw →
+    # summary + comparison tables populate → export-everything ZIP → invalidation + auto-rep regressions
+    study_ok = False
+    try:
+        import tempfile as _tmp, zipfile as _zip
+        st = win.study_tab
+        rng = __import__("numpy").random.default_rng(0)
+
+        def _add_sample(group, sub, mus):
+            st._samples.append({"group": group, "subgroup": sub})
+            si = len(st._samples) - 1
+            for mu in mus:
+                d = (mu + rng.normal(0, 0.05, 40)).round(3).tolist()
+                st._add_plate(si, d, [x * x for x in d])
+
+        # single-factor: two samples, 3 replicate plates each
+        _add_sample("WT", "", [0.86, 0.90, 0.94])
+        _add_sample("mut", "", [1.16, 1.20, 1.24])
+        st._refresh_tree(); st.metric_sel.setCurrentIndex(0)
+        st._analyse()
+        single_ok = (st._last is not None and st._last[0] == "single" and st._last_fig is not None
+                     and st.tbl_group.model().rowCount() >= 2 and st.tbl_cmp.model().rowCount() >= 1)
+        # customize + live redraw must not crash and must keep a figure
+        st.palette_sel.setCurrentIndex(1); st.center_sel.setCurrentIndex(1)  # Set2 + median
+        st.error_sel.setCurrentIndex(2); st.alpha.setValue(0.8); st._redraw()
+        redraw_ok = st._last_fig is not None
+        # export everything → non-empty ZIP with report + run_config + a figure
+        zpath = os.path.join(_tmp.gettempdir(), "uitest_analyze.zip")
+        st._write_everything(zpath)
+        names = _zip.ZipFile(zpath).namelist()
+        zip_ok = (os.path.getsize(zpath) > 0
+                  and any(n.startswith("report_") and n.endswith(".md") for n in names)
+                  and any(n.startswith("run_config_") for n in names)
+                  and any(n.endswith(".png") for n in names))
+
+        # grouped control-comparison: samples that share a name but differ by 2nd factor
+        st._samples = []; st._plates = []
+        _add_sample("WT", "ctrl", [1.0, 1.02, 0.98])
+        _add_sample("WT", "treat", [0.80, 0.82, 0.78])
+        _add_sample("mut", "ctrl", [1.0, 1.01, 0.99])
+        _add_sample("mut", "treat", [0.95, 0.97, 0.93])
+        st._refresh_tree(); st.control_sel.setCurrentText("ctrl")
+        st._analyse()
+        grouped_ok = (st._last is not None and st._last[0] == "grouped" and st._last_fig is not None
+                      and st.tbl_cmp.model().rowCount() >= 1)
+        # regression: mutating the samples invalidates a prior analysis (no stale figure/exports)
+        st._refresh_tree()
+        inval_ok = st._last is None and st._last_fig is None and not st.savefig_btn.isEnabled()
+        # regression: auto replicate ids stay unique within a sample even after a Load-study restore
+        st._samples = [{"group": "WT", "subgroup": ""}]
+        st._plates = [{"group": "WT", "subgroup": "", "replicate": "plate%d" % i,
+                       "diam": [0.4, 0.5], "area": []} for i in (1, 2, 3)]
+        st._add_plate(0, [0.4, 0.5], [])
+        rep_ok = st._plates[-1]["replicate"] == "plate4"
+        study_ok = bool(single_ok and redraw_ok and zip_ok and grouped_ok and inval_ok and rep_ok)
+    except Exception as e:      # pragma: no cover
+        import traceback; print("UITEST study-check error:", e); traceback.print_exc()
+    ok = ok and study_ok
+
     print("UITEST", "OK" if ok else "FAIL", "| rows", measure.model.rowCount(),
-          "| precise_available", avail[0], "| fiji", fiji_ok)
+          "| precise_available", avail[0], "| fiji", fiji_ok, "| study", study_ok)
     return 0 if ok else 1

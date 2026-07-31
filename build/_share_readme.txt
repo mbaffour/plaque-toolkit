@@ -45,6 +45,16 @@ HOW TO MEASURE  (about 30 seconds)
   More tabs:
     * Batch    - measure a whole folder of plates at once
     * Compare  - turbidity comparison across phages
+    * Analyze  - a plotting workbench inside the app. CREATE A SAMPLE
+                 and ADD ITS PLATES into it (measured plate or CSVs) -
+                 three replicate plates of one sample sit under it.
+                 Analyze -> violin SuperPlot + the right stats on the
+                 plate means (ANOVA/Tukey, t-test, or control-comparison
+                 via a 2nd factor). Customize live (palette, mean/median,
+                 error bars, size, DPI...), see the summary + comparison
+                 tables in the app, and export the figure, the summary,
+                 the compiled data, or EVERYTHING as a ZIP. Save/Load
+                 the whole study. (Replicates welcome.)
     * Validate - score the engines against your own corrections
     * Help menu (top bar) - full guides, incl. the interactive
                             guide.html

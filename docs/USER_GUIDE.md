@@ -54,6 +54,10 @@ app from source with **`Plaque Toolkit.bat`** (see [INSTALL.md](INSTALL.md)). On
   scale bar → Save.
 - **Compare turbidity tab** — pick a folder of phages (+ optional blank/flat references) → optical‑density
   turbidity, clarity class, count/PFU titer, per‑phage stats table, and box/histogram figures.
+- **Analyze tab** — compile several plates (tag each with a **group**, an optional **2nd factor**, and a
+  **replicate**), then get the violin **SuperPlot** + statistics *inside the app* — one‑way ANOVA/Tukey (or
+  t‑test), or a control‑comparison when you use the 2nd factor. Stats treat the **plate** as the
+  experimental unit (no pseudoreplication). Save the study, figure, summary and a copy‑paste report.
 - **About tab** — versions and engine/validation notes.
 
 iPhone **HEIC works directly**. (Rebuilding the installers is covered in
@@ -140,6 +144,26 @@ red), and writes a ready‑to‑paste Methods sentence. New to the statistics? T
   stats and box/histogram figures (the publishable turbidity comparison).
 
   ![Compare turbidity tab](atlas_img/compare.png)
+
+- **Analyze** — a publication-grade plotting workbench inside the app. **Create a sample** and **add
+  its plates into it** (the plate you just measured, or saved per‑plaque CSVs) — three replicate plates
+  of one sample sit together under it in the Samples tree; give a sample an optional **2nd factor**
+  (e.g. host) to run a control‑comparison. Have a whole folder of plate CSVs? **Import & assign** picks
+  them all at once and maps each CSV → its sample in one table (**each CSV = one replicate plate**, so
+  replicates are real — no pseudoreplication), guessing the sample name from each file name. Click **Analyze** for the violin **SuperPlot** and the right
+  test on the **plate means** — one‑way ANOVA + Tukey (or Welch t / Mann–Whitney for two), or each 2nd‑
+  factor value vs a **control** you pick.
+  - **Customize** everything, live: palette/theme, title + axis labels, **mean vs median** and the
+    error bars (SEM / 95% CI / SD / IQR), point size, jitter, transparency, significance‑bracket mode,
+    legend, log‑Y, and the figure **size + export DPI**.
+  - **See the numbers**: the **Summary** and **Comparisons** sub‑tabs show the per‑sample and per‑plate
+    statistics and the pairwise/control tests right there.
+  - **Export**: **Save figure** (PNG/SVG/PDF/TIFF/EPS at your chosen size + DPI), **Save summary**,
+    **Save compiled data** (wide, or long/standalone‑ready), or **Export everything (ZIP)** — figure in
+    every format + summaries + pairwise + report + provenance, the same bundle as the standalone app.
+    **Save/Load study** keeps the whole tree.
+  It's the same engine as the standalone Plaque Stats app, so numbers and figures are identical. *(Full
+  build only — the Light build can compile samples but needs the Full build's SciPy for the statistics.)*
 
 - **Validate** — score the tool against your *own* ground‑truth labels (precision/recall + size agreement).
 
