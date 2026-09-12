@@ -94,13 +94,67 @@ def compute(tool, fiji):
     }
 
 
+# Wording bands kept identical to plaque_stats/agreement/agreement.py (PT-4).
+# This module is deliberately dependency-free, so the few lines are duplicated
+# rather than imported across the two packages.
+
+def icc_grade(icc):
+    """Koo & Li (2016) reliability bands."""
+    if icc != icc:
+        return "n/a"
+    return ("poor" if icc < 0.5 else "moderate" if icc < 0.75
+            else "good" if icc < 0.90 else "excellent")
+
+
+def agreement_phrase(icc):
+    if icc != icc:
+        return "could not be compared with"
+    if icc < 0.5:
+        return "did NOT agree at the individual level with"
+    if icc < 0.75:
+        return "agreed only moderately with"
+    if icc < 0.90:
+        return "agreed well with"
+    return "agreed closely with"
+
+
+def correlation_phrase(r):
+    if r != r:
+        return "not correlated (undefined)"
+    a = abs(r)
+    if a < 0.30:
+        strength = "essentially uncorrelated"
+    elif a < 0.50:
+        strength = "weakly correlated"
+    elif a < 0.70:
+        strength = "moderately correlated"
+    elif a < 0.90:
+        strength = "strongly correlated"
+    else:
+        strength = "very strongly correlated"
+    if r < 0 and a >= 0.30:
+        strength = "INVERSELY " + strength
+    return strength
+
+
 def report_sentence(s, unit="mm", what="diameters"):
-    return ("Plaque %s measured with Plaque Toolkit agreed with manual Fiji/ImageJ "
-            "measurements (n = %d): Pearson r = %.2f, ICC = %.2f. Bland-Altman analysis "
-            "showed a mean bias of %+.3f %s (%.1f%%) with 95%% limits of agreement of "
-            "%+.3f to %+.3f %s, and a regression slope of %.2f (1.0 = no proportional bias)."
-            % (what, s["n"], s["r"], s["icc"], s["bias"], unit, s["pct_bias"],
-               s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    """Sentence whose adjectives are derived from the statistics, never asserted.
+
+    See PT-4 in AUDIT-2026-09.md: the old wording claimed agreement even when
+    ICC was negative."""
+    icc = s["icc"]
+    sentence = ("Plaque %s measured with Plaque Toolkit %s manual Fiji/ImageJ "
+                "measurements (n = %d): %s, Pearson r = %.2f, ICC(A,1) = %.2f (%s agreement). "
+                "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%) with 95%% limits "
+                "of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
+                "(1.0 = no proportional bias)."
+                % (what, agreement_phrase(icc), s["n"], correlation_phrase(s["r"]),
+                   s["r"], icc, icc_grade(icc), s["bias"], unit, s["pct_bias"],
+                   s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    if icc == icc and icc < 0.5:
+        sentence += (" These two methods therefore cannot be used interchangeably for "
+                     "individual %s; a similar group MEAN does not imply agreement." % what)
+    return sentence
 
 
 def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):

@@ -19,7 +19,7 @@ _Generated 2026-07-28 17:58 | agreement.py v1.0.0_
 
 ## Paste-ready sentence
 
-> Plaque tiny area measured with Plaque Toolkit closely agreed with Fiji / ImageJ (n = 20): highly correlated (Pearson r = 0.004, R² = 0.000, p 0.988), with an intraclass correlation coefficient ICC(A,1) = 0.003 (95% CI -0.401-0.385) (poor agreement) and Lin's concordance correlation CCC = 0.003. Bland-Altman analysis showed a mean bias of +0.011 mm2 (7.6%; not significantly different from zero, paired t-test p = 0.227) with 95% limits of agreement of -0.066 to +0.087 mm2, and a regression slope of 0.00 (1.0 = no proportional bias).
+> Plaque tiny area measured with Plaque Toolkit did NOT agree at the individual level with Fiji / ImageJ (n = 20): not significantly correlated (Pearson r = 0.004, R² = 0.000, p 0.988), with an intraclass correlation coefficient ICC(A,1) = 0.003 (95% CI -0.401-0.385) (poor agreement) and Lin's concordance correlation CCC = 0.003. Bland-Altman analysis showed a mean bias of +0.011 mm2 (7.6%; not significantly different from zero, paired t-test p = 0.227) with 95% limits of agreement of -0.066 to +0.087 mm2, and a regression slope of 0.00 (1.0 = no proportional bias). These two methods therefore cannot be used interchangeably for individual tiny area; a similar group MEAN does not imply agreement, and any per-plaque claim needs a method that does agree.
 
 ## How to read it
 

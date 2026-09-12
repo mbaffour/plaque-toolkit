@@ -19,7 +19,7 @@ _Generated 2026-07-14 11:34 | agreement.py v1.0.0_
 
 ## Paste-ready sentence
 
-> Plaque diameter measured with Plaque Toolkit closely agreed with Fiji / ImageJ (n = 100): highly correlated (Pearson r = 0.979, R² = 0.958, p < 0.001), with an intraclass correlation coefficient ICC(A,1) = 0.974 (95% CI 0.963-0.982) (excellent agreement) and Lin's concordance correlation CCC = 0.974. Bland-Altman analysis showed a mean bias of -0.028 mm (-1.8%; significantly different from zero, paired t-test p < 0.001) with 95% limits of agreement of -0.146 to +0.089 mm, and a regression slope of 0.98 (1.0 = no proportional bias).
+> Plaque diameter measured with Plaque Toolkit agreed closely with Fiji / ImageJ (n = 100): very strongly correlated (Pearson r = 0.979, R² = 0.958, p < 0.001), with an intraclass correlation coefficient ICC(A,1) = 0.974 (95% CI 0.963-0.982) (excellent agreement) and Lin's concordance correlation CCC = 0.974. Bland-Altman analysis showed a mean bias of -0.028 mm (-1.8%; significantly different from zero, paired t-test p < 0.001) with 95% limits of agreement of -0.146 to +0.089 mm, and a regression slope of 0.98 (1.0 = no proportional bias).
 
 ## How to read it
 

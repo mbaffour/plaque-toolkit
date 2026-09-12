@@ -189,21 +189,78 @@ def icc_grade(icc):
             else "good" if icc < 0.90 else "excellent")
 
 
+# --- Honest wording bands (PT-4) ------------------------------------------- #
+# The "paste-ready" sentence used to hard-code "closely agreed" and "highly
+# correlated" regardless of the numbers. The repo ships a committed artefact where
+# that produced: "closely agreed ... highly correlated (Pearson r = -0.013 ...)
+# ICC(A,1) = -0.012 ... (poor agreement)" -- a sentence that contradicts itself, in
+# text explicitly labelled ready to paste into a manuscript. The adjectives are now
+# derived from the statistics they describe.
+
+def agreement_phrase(icc):
+    """Verb phrase for the ICC(A,1) band (Koo & Li 2016). Matches icc_grade()."""
+    if icc != icc:
+        return "could not be compared with"
+    if icc < 0.5:
+        return "did NOT agree at the individual level with"
+    if icc < 0.75:
+        return "agreed only moderately with"
+    if icc < 0.90:
+        return "agreed well with"
+    return "agreed closely with"
+
+
+def correlation_phrase(r, p=float("nan")):
+    """Describe the correlation by strength, direction and significance."""
+    if r != r:
+        return "not correlated (undefined)"
+    if p == p and p >= 0.05:
+        return "not significantly correlated"
+    a = abs(r)
+    if a < 0.30:
+        strength = "essentially uncorrelated"
+    elif a < 0.50:
+        strength = "weakly correlated"
+    elif a < 0.70:
+        strength = "moderately correlated"
+    elif a < 0.90:
+        strength = "strongly correlated"
+    else:
+        strength = "very strongly correlated"
+    if r < 0 and a >= 0.30:
+        strength = "INVERSELY " + strength
+    return strength
+
+
 def report_sentence(s, unit, what, label_tool, label_manual):
+    """A manuscript-ready sentence whose adjectives follow the actual statistics.
+
+    A poor result reads as a poor result: if ICC(A,1) < 0.5 the sentence says the
+    methods did NOT agree at the individual level and appends an explicit caveat.
+    """
     icc_ci = ("" if s.get("icc_lo") != s.get("icc_lo")
               else " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"]))
     bias_ns = ("not significantly different from zero" if s.get("t_p", 1) >= 0.05
                else "significantly different from zero")
-    return ("Plaque %s measured with %s closely agreed with %s (n = %d): highly correlated "
-            "(Pearson r = %.3f, R² = %.3f, p %s), with an intraclass correlation coefficient "
-            "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
-            "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test %s) "
-            "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
-            "(1.0 = no proportional bias)."
-            % (what, label_tool, label_manual, s["n"], s["r"], s.get("r2", s["r"] ** 2),
-               _pfmt(s.get("pearson_p", float("nan"))), s["icc"], icc_ci, icc_grade(s["icc"]),
-               s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
-               _pstr(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    icc = s["icc"]
+    r = s["r"]
+    p = s.get("pearson_p", float("nan"))
+    sentence = ("Plaque %s measured with %s %s %s (n = %d): %s "
+                "(Pearson r = %.3f, R² = %.3f, p %s), with an intraclass correlation coefficient "
+                "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
+                "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test %s) "
+                "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
+                "(1.0 = no proportional bias)."
+                % (what, label_tool, agreement_phrase(icc), label_manual, s["n"],
+                   correlation_phrase(r, p),
+                   r, s.get("r2", r ** 2), _pfmt(p), icc, icc_ci, icc_grade(icc),
+                   s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
+                   _pstr(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    if icc == icc and icc < 0.5:
+        sentence += (" These two methods therefore cannot be used interchangeably for "
+                     "individual %s; a similar group MEAN does not imply agreement, and any "
+                     "per-plaque claim needs a method that does agree." % what)
+    return sentence
 
 
 _TEAL, _AMB, _BLU, _OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
