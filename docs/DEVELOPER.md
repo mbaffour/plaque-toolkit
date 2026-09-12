@@ -102,6 +102,9 @@ conda run -n plaque python plaque_app.py --uitest
 conda run -n plaque python plaque_app.py --smoke
 
 # in-process Precise on the bundled sample (needs torch+ultralytics) — "PRECISE_SMOKE OK"
+# Exits non-zero unless the engine actually detects plaques (>= PRECISE_SMOKE_MIN,
+# default 1) AND writes its overlay. Before v1.1.0 the condition was `n_final >= 0`
+# on a count and the function returned 0 unconditionally, so this gate could not fail.
 conda run -n plaqueapp python plaque_app.py --precise-smoke
 
 # Precise pipeline imports cleanly

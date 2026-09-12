@@ -39,10 +39,27 @@ def _precise_smoke(extra=None):
         traceback.print_exc()
         print("PRECISE_SMOKE FAIL  (run_inprocess raised:", e, ")")
         return 1
+    # PT-6: this is a BUILD ACCEPTANCE GATE (build_macos.sh fails the build on a
+    # non-zero exit, and it is the only Precise check in CI). The old condition was
+    # `n >= 0` on a count -- always true -- followed by an unconditional `return 0`,
+    # so a build that loaded torch but detected nothing shipped as green.
+    # A working Precise engine MUST find plaques on the bundled sample.
+    min_n = int(os.environ.get("PRECISE_SMOKE_MIN", "1"))
     n = int(s.get("n_final", 0))
-    print("PRECISE_SMOKE", "OK" if n >= 0 else "FAIL",
-          "| n_final=%d | n_plaqseg=%s | overlay=%s" % (
-              n, s.get("n_plaqseg"), s.get("overlay")))
+    overlay = s.get("overlay")
+    problems = []
+    if n < min_n:
+        problems.append("n_final=%d < required %d" % (n, min_n))
+    if not overlay or not os.path.exists(overlay):
+        problems.append("overlay not written (%r)" % overlay)
+    ok = not problems
+    print("PRECISE_SMOKE", "OK" if ok else "FAIL",
+          "| n_final=%d | n_plaqseg=%s | overlay=%s" % (n, s.get("n_plaqseg"), overlay))
+    if not ok:
+        print("PRECISE_SMOKE FAIL reasons: " + "; ".join(problems))
+        print("  The Precise engine loaded but produced nothing usable on the bundled "
+              "sample. Do NOT ship this build.")
+        return 1
     return 0
 
 

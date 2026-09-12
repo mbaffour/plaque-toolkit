@@ -97,7 +97,13 @@ if ! QT_QPA_PLATFORM=offscreen "$BIN" --smoke; then
 fi
 echo "SMOKE OK"
 echo "Smoke-testing the BUNDLED Precise engine (torch + PlaqSeg, in-process) ..."
-if ! QT_QPA_PLATFORM=offscreen "$BIN" --precise-smoke; then
+# PT-6: check BOTH the exit status and the reported verdict. --precise-smoke now
+# returns non-zero when the engine finds nothing on the bundled sample; matching the
+# printed line as well means an exe that exits 0 for an unrelated reason still fails
+# this gate.
+PRECISE_OUT="$(QT_QPA_PLATFORM=offscreen "$BIN" --precise-smoke 2>&1)" && PRECISE_RC=0 || PRECISE_RC=$?
+echo "$PRECISE_OUT"
+if [[ "$PRECISE_RC" -ne 0 ]] || ! grep -q "PRECISE_SMOKE OK" <<<"$PRECISE_OUT"; then
   echo "ERROR: frozen --precise-smoke failed — the bundled Precise engine is broken." >&2
   echo "       Check the torch/torchvision/ultralytics/skimage collect_all + model datas in" >&2
   echo "       build/plaque_app_macos.spec." >&2
