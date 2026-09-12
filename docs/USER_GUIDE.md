@@ -434,6 +434,14 @@ different turbidity numbers** in this toolkit — use the right one:
    `--dark`+`--flat`); from iPhone HEIC/JPEG (tone‑mapped) it is an *apparent* OD — a within‑session
    relative measure. Use RAW/linear input for any absolute‑OD claim in a paper.
 
+   **Linearisation (`--transfer`).** 16‑bit TIFFs are now read at their native depth and treated
+   as **already linear** (scaled by the format full scale, 65535 — never by the brightest pixel
+   in the frame); 8‑bit files are treated as sRGB‑encoded and the gamma is undone. Override with
+   `--transfer srgb|linear` (or `--linear`). Whichever path was taken is written to `qc.csv`
+   (`BIT_DEPTH`, `TRANSFER`, `TRANSFER_SOURCE`, `READER`) and to `run_metadata.json`. Before
+   v1.1.0 every input was forced to 8 bits and gamma‑corrected unconditionally, which put
+   0.53–0.89 OD of error on exactly the linear‑TIFF workflow this section recommends.
+
 For the cross‑phage comparison you actually want, run **`Compare Turbidity.bat`** /
 `plaque_turbidity.py`, ideally with a `--blank` reference. Without `--blank` it reports only a
 relative `TRANSMITTANCE` (qualitative).

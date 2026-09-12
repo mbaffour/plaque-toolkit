@@ -81,45 +81,139 @@ def _srgb_lut():
     return _SRGB_LUT
 
 
-def to_linear_gray(bgr, assume_srgb=True):
-    """BGR -> linear-light grey in [0, 1]. Forces 8-bit before the sRGB LUT lookup."""
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    if gray.dtype != np.uint8:                       # e.g. a 16-bit TIFF
-        g = gray.astype(np.float64)
-        gray = np.clip(g / (g.max() or 1.0) * 255.0, 0, 255).astype(np.uint8)
-    if assume_srgb:
+# Transfer functions the reader knows how to undo. "auto" picks per image:
+#   8-bit  -> "srgb"   (a JPEG/PNG/phone photo is sRGB-encoded)
+#   >8-bit -> "linear" (a 16-bit TIFF is a scientific/raw capture; already linear light)
+TRANSFERS = ("auto", "srgb", "linear")
+
+# Full-scale value per dtype. Used INSTEAD of a per-image max: dividing by g.max()
+# makes the scale depend on the brightest pixel in the frame, which destroys the
+# cross-plate comparability the whole OD path exists for.
+_FULL_SCALE = {"uint8": 255.0, "uint16": 65535.0, "uint32": 4294967295.0}
+
+
+def full_scale(arr):
+    """Format full-scale for `arr` (255 for 8-bit, 65535 for 16-bit, 1.0 for float)."""
+    return _FULL_SCALE.get(str(arr.dtype), 1.0)
+
+
+def choose_transfer(bgr, override=None):
+    """Resolve the transfer function for an image. See TRANSFERS."""
+    if override and override != "auto":
+        if override not in TRANSFERS:
+            raise ValueError("unknown transfer %r (expected one of %s)" % (override, TRANSFERS))
+        return override
+    return "srgb" if bgr.dtype == np.uint8 else "linear"
+
+
+def to_linear_gray(bgr, transfer=None, assume_srgb=None):
+    """BGR (any bit depth) -> linear-light grey in [0, 1].
+
+    `transfer`:
+      "srgb"   undo the sRGB encoding gamma via a 256-entry LUT (8-bit input only).
+      "linear" the data is ALREADY linear light: just divide by the FORMAT full
+               scale (65535 for a 16-bit TIFF), never by the per-image maximum.
+      None / "auto"  decide from the bit depth (see TRANSFERS).
+
+    `assume_srgb` is the pre-1.1 boolean spelling, accepted for backwards
+    compatibility; prefer `transfer`.
+
+    Historically this function forced every input to 8 bits and then applied the
+    inverse-sRGB LUT unconditionally, so a linear 16-bit TIFF -- the input
+    docs/PUBLICATION.md prescribes for quantitative OD -- was truncated to 8 bits
+    and then gamma'd, producing 0.5-0.9 OD of error. See AUDIT-2026-09.md (PT-2).
+    """
+    if transfer is None and assume_srgb is not None:
+        transfer = "srgb" if assume_srgb else "linear"
+    mode = choose_transfer(bgr, transfer)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+    if mode == "srgb":
+        if gray.dtype != np.uint8:
+            # sRGB encoding is only defined against a known display range; map the
+            # format full scale (not the image max) onto 0-255 before the LUT.
+            gray = np.clip(gray.astype(np.float64) / full_scale(gray) * 255.0,
+                           0, 255).astype(np.uint8)
         return _srgb_lut()[gray]
-    return gray.astype(np.float64) / 255.0
+    return np.clip(gray.astype(np.float64) / full_scale(gray), 0.0, 1.0)
 
 
-def read_bgr(path):
-    """Read any supported image (incl. iPhone HEIC) to a BGR uint8 array.
+def _ensure_bgr_any_depth(img):
+    """3-channel BGR, PRESERVING bit depth (unlike pst._ensure_bgr, which is 8-bit)."""
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.ndim == 3 and img.shape[2] == 1:
+        return cv2.cvtColor(img[:, :, 0], cv2.COLOR_GRAY2BGR)
+    if img.ndim == 3 and img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    return img
 
-    Applies EXIF orientation so iPhone photos aren't analysed sideways. Raises a
-    normal exception on failure (so batch runs can skip a bad file, not abort).
+
+def to_8bit(bgr):
+    """Scale a BGR image of any depth to uint8 (for detection, overlays, MEAN_GRAY)."""
+    if bgr.dtype == np.uint8:
+        return bgr
+    return np.clip(bgr.astype(np.float64) / full_scale(bgr) * 255.0, 0, 255).astype(np.uint8)
+
+
+def read_bgr_raw(path):
+    """Read any supported image to BGR *at its native bit depth*, plus a provenance dict.
+
+    A 16-bit TIFF stays 16-bit: the old code used cv2.imread(path) with the default
+    IMREAD_COLOR, which silently downconverted it to 8 bits. Applies EXIF orientation
+    for the formats that carry it. Raises a normal exception on failure (so batch runs
+    can skip a bad file, not abort).
+
+    Returns (bgr, info) where info records how the file was read -- it ends up in
+    run_metadata.json and in the per-plate QC table, so a reader can tell which
+    photometric path produced an OD.
     """
     from PIL import Image, ImageOps
     ext = os.path.splitext(path)[1].lower()
-    # PIL for HEIC and for EXIF-orientation-carrying formats (HEIF/JPEG)
+    info = {"reader": "", "exif_transposed": False, "native_dtype": "", "bit_depth": 8}
+    # PIL for HEIC and for EXIF-orientation-carrying formats (HEIF/JPEG). These are
+    # all 8-bit sRGB display formats by construction.
     if ext in (".heic", ".heif", ".jpg", ".jpeg"):
         im = ImageOps.exif_transpose(Image.open(path).convert("RGB"))
-        return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
-    img = cv2.imread(path)
-    if img is not None:
-        return img
-    im = ImageOps.exif_transpose(Image.open(path).convert("RGB"))
-    return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+        bgr = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+        info.update(reader="PIL", exif_transposed=True)
+    else:
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        if img is not None:
+            bgr = _ensure_bgr_any_depth(img)
+            info.update(reader="cv2:IMREAD_UNCHANGED")
+        else:
+            im = ImageOps.exif_transpose(Image.open(path).convert("RGB"))
+            bgr = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+            info.update(reader="PIL:fallback", exif_transposed=True)
+    info["native_dtype"] = str(bgr.dtype)
+    info["bit_depth"] = int(round(math.log2(full_scale(bgr) + 1))) if bgr.dtype != np.float32 else 32
+    return bgr, info
+
+
+def read_bgr(path):
+    """Back-compatible 8-bit read (detection, overlays). Photometry uses read_bgr_raw."""
+    bgr, _info = read_bgr_raw(path)
+    return to_8bit(bgr)
 
 
 # --------------------------------------------------------------------------- #
 #  Detection (reuse the validated plaque_size_tool pipeline)
 # --------------------------------------------------------------------------- #
-def detect_plate(path, plate_size, small):
-    """Return dict with plaque hulls, dish geometry, dish & lawn masks."""
+def detect_plate(path, plate_size, small, transfer=None):
+    """Return dict with plaque hulls, dish geometry, dish & lawn masks.
+
+    `orig` is the 8-bit image used for DETECTION, overlays and MEAN_GRAY (the
+    validated pipeline is 8-bit and stays 8-bit). `raw` is the same image at its
+    NATIVE bit depth and is what the photometric OD path linearises, so a 16-bit
+    TIFF is no longer silently truncated (PT-2). `read_info` records the choice.
+    """
     pst.small_plaques = bool(small)
     pst.debug_mode = False
 
-    orig = read_bgr(path)
+    raw, read_info = read_bgr_raw(path)
+    read_info["transfer"] = choose_transfer(raw, transfer)
+    read_info["transfer_source"] = "explicit" if (transfer and transfer != "auto") else "auto"
+    orig = to_8bit(raw)
     # brightness + optional dimming, in-memory (matches pst.main, but HEIC-safe / no temp file)
     brightness = float(cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY).mean())
     image = orig
@@ -173,7 +267,8 @@ def detect_plate(path, plate_size, small):
             union = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
             lawn_mask[union > 0] = 0
 
-    return {"orig": orig, "shape": shape, "plaques": plaques, "plaque_masks": plaque_masks,
+    return {"orig": orig, "raw": raw, "read_info": read_info,
+            "shape": shape, "plaques": plaques, "plaque_masks": plaque_masks,
             "dish_center": dish_center, "dish_r": dish_r, "dish_mask": dish_mask,
             "lawn_mask": lawn_mask}
 
@@ -181,22 +276,26 @@ def detect_plate(path, plate_size, small):
 # --------------------------------------------------------------------------- #
 #  Reference handling: flat-field + blank-agar I0
 # --------------------------------------------------------------------------- #
-def load_linear(path, shape):
-    """Load an image, linearise, resize to `shape`. Used for flat / dark frames."""
+def load_linear(path, shape, transfer=None):
+    """Load an image, linearise, resize to `shape`. Used for flat / dark frames.
+
+    Uses the same native-depth read + transfer policy as the plates, so a 16-bit
+    linear flat field is not gamma'd against 8-bit plates (or vice versa)."""
     if not path:
         return None
-    img = to_linear_gray(read_bgr(path))
+    raw, _info = read_bgr_raw(path)
+    img = to_linear_gray(raw, transfer=transfer)
     if img.shape != shape:
         img = cv2.resize(img, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
     return img
 
 
-def make_flat(flat_path, shape, dark=None):
+def make_flat(flat_path, shape, dark=None, transfer=None):
     """Normalised illumination field F (mean 1.0) at the target shape, or None.
 
     With a dark frame, F is built from (flat - dark) so the correction is the proper
     quantitative form (I-dark)/(flat-dark)."""
-    flat = load_linear(flat_path, shape)
+    flat = load_linear(flat_path, shape, transfer=transfer)
     if flat is None:
         return None
     if dark is not None:
@@ -243,16 +342,21 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
     """Return (rows, qc) for one plate."""
     shape = det["shape"]
 
-    # saturation/clipping QC on the raw 8-bit dish pixels (Beer-Lambert needs unclipped data)
+    # saturation/clipping QC against the NATIVE full scale (Beer-Lambert needs unclipped
+    # data); on a 16-bit capture "254/255" is not the clipping point, 65534/65535 is.
     gray8 = cv2.cvtColor(det["orig"], cv2.COLOR_BGR2GRAY)
+    raw = det.get("raw", det["orig"])
+    gray_native = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY) if raw.ndim == 3 else raw
+    fs = full_scale(gray_native)
     dm = det["dish_mask"]
     if dm is not None and dm.any():
-        dpx = gray8[dm > 0]
-        frac_sat = float(np.mean((dpx >= 254) | (dpx <= 1)))
+        dpx = gray_native[dm > 0].astype(np.float64)
+        frac_sat = float(np.mean((dpx >= fs - 1) | (dpx <= 1)))
     else:
         frac_sat = float("nan")
 
-    gray = to_linear_gray(det["orig"])
+    transfer = (det.get("read_info") or {}).get("transfer")
+    gray = to_linear_gray(raw, transfer=transfer)
     if dark is not None:
         gray = np.clip(gray - dark, 0, None)
     if flat is not None:
@@ -334,10 +438,16 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
         frac_darker = round(float(np.mean([1.0 if v < lawn_I else 0.0 for v in plaque_I_vals])), 3)
         polarity_ok = frac_darker <= 0.5
 
+    _ri = det.get("read_info") or {}
     qc = {
         "PHAGE": phage,
         "PLATE": plate,
         "N_PLAQUES": len(rows),
+        # --- photometric provenance: WHICH path produced these OD values (PT-2) ---
+        "BIT_DEPTH": _ri.get("bit_depth", 8),
+        "TRANSFER": _ri.get("transfer", ""),
+        "TRANSFER_SOURCE": _ri.get("transfer_source", ""),
+        "READER": _ri.get("reader", ""),
         "DISH_FOUND": det["dish_center"] is not None,
         "I0_LEVEL": (round(i0_level, 4) if i0_level == i0_level else ""),
         "LAWN_I": (round(lawn_I, 4) if lawn_I == lawn_I else ""),
@@ -439,13 +549,25 @@ def write_metadata(out_dir, args_dict, images, qc_rows, errors):
         "n_failed": len(errors),
         "images": [],
     }
+    # Which photometric path each image actually took (PT-2). Without this a reader
+    # cannot tell whether an OD came from an sRGB-decoded 8-bit photo or a linear
+    # 16-bit capture -- a ~0.5-0.9 OD difference.
+    by_plate = {}
+    for q in (qc_rows or []):
+        by_plate[q.get("PLATE")] = q
     for path in images:
         try:
             with open(path, "rb") as fh:
                 h = hashlib.sha256(fh.read()).hexdigest()[:16]
         except Exception:
             h = ""
-        meta["images"].append({"file": os.path.basename(path), "sha256_16": h})
+        stem = os.path.splitext(os.path.basename(path))[0]
+        q = by_plate.get(stem, {})
+        meta["images"].append({"file": os.path.basename(path), "sha256_16": h,
+                               "bit_depth": q.get("BIT_DEPTH"),
+                               "transfer": q.get("TRANSFER"),
+                               "transfer_source": q.get("TRANSFER_SOURCE"),
+                               "reader": q.get("READER")})
     with open(os.path.join(out_dir, "run_metadata.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
@@ -495,7 +617,7 @@ def write_plots(df, out_dir):
 
 def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
               group_by_prefix=False, dark_path=None, core_frac=1.0, make_overlays=True,
-              dilution=None, volume_ul=None, make_plots=True):
+              dilution=None, volume_ul=None, make_plots=True, transfer="auto"):
     images = list_images(directory)
     if not images:
         raise SystemExit(f"No images found in {directory}")
@@ -507,17 +629,17 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
     dark = None
     blank_lin, blank_geo = None, None
     try:
-        sample0 = detect_plate(images[0], plate_size, small)
+        sample0 = detect_plate(images[0], plate_size, small, transfer=transfer)
         shape0 = sample0["shape"]
-        dark = load_linear(dark_path, shape0)
-        flat = make_flat(flat_path, shape0, dark)
+        dark = load_linear(dark_path, shape0, transfer=transfer)
+        flat = make_flat(flat_path, shape0, dark, transfer=transfer)
     except Exception as e:
         print(f"WARNING: could not pre-read {images[0]} ({e}); continuing.")
         sample0 = None
     if blank_path:
         try:
-            bdet = detect_plate(blank_path, plate_size, small)
-            blank_lin = to_linear_gray(bdet["orig"])
+            bdet = detect_plate(blank_path, plate_size, small, transfer=transfer)
+            blank_lin = to_linear_gray(bdet["raw"], transfer=bdet["read_info"]["transfer"])
             if bdet["dish_center"] is None:
                 print("WARNING: no dish detected in blank; using whole-image median as I0 "
                       "(absolute OD will be approximate).")
@@ -532,7 +654,8 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
         plate = os.path.splitext(os.path.basename(path))[0]
         phage = phage_label(plate, group_by_prefix)
         try:
-            det = sample0 if (sample0 is not None and path == images[0]) else detect_plate(path, plate_size, small)
+            det = (sample0 if (sample0 is not None and path == images[0])
+                   else detect_plate(path, plate_size, small, transfer=transfer))
             rows, qc = measure_plate(det, phage, plate, flat, blank_lin, blank_geo,
                                      dark=dark, core_frac=core_frac)
         except Exception as e:
@@ -570,7 +693,8 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
                              "flat": flat_path, "dark": dark_path, "core_frac": core_frac,
                              "group_by_prefix": group_by_prefix, "dilution": dilution,
                              "volume_ul": volume_ul, "published": pst.use_published,
-                             "watershed": pst.watershed_enabled}, images, qc_rows, errors)
+                             "watershed": pst.watershed_enabled, "transfer": transfer},
+                   images, qc_rows, errors)
 
     # consolidated QC summary so problems can't be missed
     _print_qc_summary(qc_rows, errors)
@@ -624,6 +748,16 @@ def parse_args():
                     help="dilution factor of the plated lysate (for PFU/mL titer)")
     ap.add_argument("--volume-ul", type=float,
                     help="plated volume in microlitres (for PFU/mL titer)")
+    ap.add_argument("--transfer", choices=list(TRANSFERS), default="auto",
+                    help="how to linearise pixel values before computing OD. "
+                         "'auto' (default): 8-bit input is treated as sRGB-encoded and the "
+                         "gamma is undone; deeper-than-8-bit input (e.g. a 16-bit TIFF) is "
+                         "treated as ALREADY linear and only scaled by the format full scale. "
+                         "'srgb' / 'linear' force one path. Getting this wrong costs ~0.5-0.9 "
+                         "OD, so the choice is recorded in qc.csv and run_metadata.json")
+    ap.add_argument("--linear", dest="transfer", action="store_const", const="linear",
+                    help="shorthand for --transfer linear (radiometrically linear input: "
+                         "camera RAW, linear TIFF, scientific camera)")
     ap.add_argument("--no-plots", action="store_true", help="skip distribution plots")
     ap.add_argument("--published", action="store_true",
                     help="use exact published Plaque Size Tool detection/sizing behaviour")
@@ -639,7 +773,8 @@ def main():
     run_batch(a.directory, a.plate_size, a.small_plaque, a.blank, a.flat, a.out,
               group_by_prefix=a.group_by_prefix, dark_path=a.dark,
               core_frac=a.core, make_overlays=not a.no_overlay,
-              dilution=a.dilution, volume_ul=a.volume_ul, make_plots=not a.no_plots)
+              dilution=a.dilution, volume_ul=a.volume_ul, make_plots=not a.no_plots,
+              transfer=a.transfer)
 
 
 if __name__ == "__main__":

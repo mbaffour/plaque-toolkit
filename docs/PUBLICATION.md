@@ -97,8 +97,15 @@ independent replicates inflates your n and your significance.
   TIFF, ideally with `--dark` + `--flat`). From tone-mapped iPhone **HEIC/JPEG** it is an
   **apparent** OD — a within-session relative measure. Use RAW/linear input for any absolute-OD
   claim.
+- **Which linearisation was applied is now recorded.** `qc.csv` carries `BIT_DEPTH`,
+  `TRANSFER` (`srgb` or `linear`), `TRANSFER_SOURCE` (`auto`/`explicit`) and `READER` for every
+  plate, and `run_metadata.json` repeats it per image. By default 8-bit input (JPEG/PNG/HEIC)
+  is sRGB-decoded and **>8-bit input (a 16-bit TIFF) is treated as already linear** and scaled
+  by the format full scale. Force either with `--transfer srgb|linear` (`--linear` is a
+  shorthand). Getting this wrong is worth roughly **0.5–0.9 OD**, so quote `TRANSFER` in Methods.
 - Check **`qc.csv`** every run: `POLARITY_OK = True` (clear plaques brighter than lawn),
-  `FRAC_SATURATED ≈ 0` (no clipped pixels), `ILLUM_CV` low (use `--flat` if high).
+  `FRAC_SATURATED ≈ 0` (no clipped pixels — now judged against the *native* full scale, so a
+  16-bit capture is not mis-flagged), `ILLUM_CV` low (use `--flat` if high).
 - Turbidity is **greyscale densitometry, not a separately validated assay** — say so.
 
 ---
@@ -112,7 +119,9 @@ independent replicates inflates your n and your significance.
 3. **Apply `--watershed` uniformly** across all compared groups, or not at all.
 4. **PFU counts are detected (accepted) plaques only** — confirm they fall in the countable
    30–300 range.
-5. **For quantitative OD, use RAW/linear input** with `--dark` / `--flat`.
+5. **For quantitative OD, use RAW/linear input** with `--dark` / `--flat`, and check that
+   `qc.csv` reports `TRANSFER = linear` for those plates (it is chosen automatically for
+   >8-bit input; `--linear` forces it).
 
 ---
 
