@@ -26,10 +26,16 @@ is the one thing the rest of the codebase is careful not to disturb (`docs/ENGIN
 What was **kept unchanged**:
 
 - The detection/sizing core in `plaque_size_tool.py`. When `use_published` is set, the
-  toolkit reproduces the original byte-for-byte, including its quirks: values stored as
+  toolkit reproduces the original *measurement* maths, including its quirks: values stored as
   2-decimal-place *strings*, `DIAMETER_MM` derived from the already-truncated `AREA_MM2`
-  string, and no warning when the dish is not found (`_calculate_size_mm_published`,
-  `plaque_size_tool.py:350`). This reproduces the literature to within ~0.04 mm.
+  string, and no warning when the dish is not found (`_calculate_size_mm_published`).
+  This reproduces the literature to within ~0.04 mm.
+
+  The image *read* path was NOT kept unchanged — EXIF orientation, HEIC support and
+  in-memory dimming replaced upstream's red-channel brightness gate and lossy temp-file
+  round trip. That is byte-identical to upstream on neutral-grey TIFF/PNG, and differs by up
+  to 0.5 mm on colour-cast or JPEG plates. `--upstream-exact` restores the original read
+  path bit for bit; see [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md).
 
 What was **extended** (all in-house, see §8 for the honesty caveat):
 
@@ -359,9 +365,11 @@ the numpy<2 pin at `app/engine_api.py:328`), and `--precise-smoke` (in-process P
 This is the most important section. Conflating the validated engine with the in-house
 extensions would be a real scientific error.
 
-- **Only `Published` is citable.** It reproduces a peer-reviewed method (Trofimova &
-  Jaschke 2021) byte-for-byte and may be described as such. Use it for any number that goes
-  into a paper.
+- **Only `Published` is citable.** It reproduces the peer-reviewed measurement method
+  (Trofimova & Jaschke 2021) and may be described as such. Use it for any number that goes
+  into a paper. If the plates are colour-cast or JPEG, note that Published's modernised read
+  path can shift diameters by up to 0.5 mm relative to the original program — run
+  `--upstream-exact` if you need the original bit for bit ([UPSTREAM_EXACT.md](UPSTREAM_EXACT.md)).
 
 - **`Current`, `Sensitive`, `Precise`, and the classifier are in-house extensions that have
   NOT been independently validated.** `Current` is a near-identical superset of Published;

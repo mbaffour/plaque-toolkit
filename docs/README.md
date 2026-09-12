@@ -40,6 +40,7 @@ index (and [`STRUCTURE.md`](STRUCTURE.md), the repo map) to navigate.
 | [DEVELOPER.md](DEVELOPER.md) | Two-env vs unified-env design, the ML classifier, rebuilding the installers, acceptance gates. |
 | [PLAQUE_SIZE_TOOL.md](PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
 | [CREDITS_AND_LINEAGE.md](CREDITS_AND_LINEAGE.md) | Lineage and credit to upstream projects (PST, PlaqSeg/OnePetri, datasets). |
+| [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md) | Exactly how **Published** differs from the original upstream *program*, the measured divergence, and the opt-in `--upstream-exact` flag. |
 | [UPSTREAM_README.md](UPSTREAM_README.md) | The original upstream Plaque Size Tool manual, preserved verbatim. |
 
 ## 4 · Related, outside this folder

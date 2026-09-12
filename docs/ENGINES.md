@@ -7,7 +7,7 @@ publication**.
 
 | Engine | Validation status | One-line summary |
 |---|---|---|
-| **Published** | ✅ Peer-reviewed & validated | The exact Trofimova & Jaschke 2021 algorithm — the only citable mode. |
+| **Published** | ✅ Peer-reviewed & validated | The exact Trofimova & Jaschke 2021 measurement algorithm — the only citable mode. |
 | **Current** | In-house (default) | Same algorithm, bug-fixes + corrected calibration + numeric values. |
 | **Sensitive** | In-house, **not** validated | Lowers the size gates to catch tiny plaques; more recall, more false positives. |
 | **Precise** | In-house, **not** validated | PST + PlaqSeg YOLO union — the best detector on dense plates. |
@@ -21,15 +21,34 @@ publication**.
 
 ## 1. Published (validated)
 
-The exact, byte-for-byte algorithm from:
+The exact **measurement** algorithm from:
 
 > Trofimova E, Jaschke PR. *Plaque Size Tool.* Virology 2021;561:1–5.
 > [doi:10.1016/j.virol.2021.05.011](https://doi.org/10.1016/j.virol.2021.05.011)
 
 - Adaptive-local thresholding → contour detection → keeps non-overlapping, roughly-circular
   contours → measures convex-hull area.
+- 2-decimal-place string values, `DIAMETER_MM` derived from the truncated `AREA_MM2`,
+  concentric-pair de-dup that drops **both** members, largest-contour dish — all preserved.
 - Reproduces the published literature **within ~0.04 mm**.
 - This is the **only** mode you may cite as a published, peer-reviewed method.
+
+### How Published differs from the original upstream *program*
+
+Published reproduces upstream's measurement maths exactly, but reads the image differently:
+EXIF orientation is honoured, HEIC is supported, brightness is BT.601 luma instead of
+upstream's (buggy) red-channel mean, and the 0.5× dimming of bright plates is done in memory
+instead of through a lossy temp-file re-encode.
+
+- On **neutral-grey TIFF/PNG** input — every bundled plate, and the Fiji validation set — the
+  two are **byte-identical** (verified: 19/19 plaques, Δdiameter 0.000 mm).
+- On a **colour-cast** plate (warm amber agar) the brightness statistic can straddle the
+  dimming threshold (58.03 luma vs 83.62 red), and individual diameters then differ by up to
+  **0.500 mm**.
+- On **JPEG** input the missing lossy round-trip shifts diameters by up to 0.030 mm.
+
+Use `--upstream-exact` (CLI only; implies `--published`) to restore the original read path
+bit for bit. Full detail and the measured table: [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md).
 
 **Use it for:** every number that goes into a paper.
 

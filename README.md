@@ -67,7 +67,7 @@ This is the core concept. Pick the engine for the job; only one is citable.
 
 | Engine | What it is | Validation status | Use it for |
 |---|---|---|---|
-| **Published** | The exact Trofimova & Jaschke 2021 algorithm, byte-for-byte. | **Peer-reviewed & validated.** The only citable mode. Reproduces the literature within ~0.04 mm. | Numbers that go in a paper. |
+| **Published** | The exact Trofimova & Jaschke 2021 measurement algorithm. Byte-identical to the original upstream tool on neutral-grey TIFF/PNG input; the image is *read* the modern way (EXIF-aware, HEIC-capable, in-memory dimming), which can shift diameters by up to ~0.5 mm on **colour-cast or JPEG** plates — see [docs/UPSTREAM_EXACT.md](docs/UPSTREAM_EXACT.md) and the opt-in `--upstream-exact` flag. | **Peer-reviewed & validated.** The only citable mode. Reproduces the literature within ~0.04 mm. | Numbers that go in a paper. |
 | **Current** | Same algorithm + bug-fixes + a corrected dish/calibration (picks the roundest large contour so the dark surround can't hijack the mm scale) + non-truncated values. | In-house. Differs from Published only by ≤ ~0.04 mm / count unchanged on the bundled plates. | Routine day-to-day measuring (the **default**). |
 | **Sensitive** | Current with the size gates lowered to catch sub-0.4 mm plaques. | **In-house, not validated.** Higher recall **but more false positives** — verify by eye. | Finding tiny plaques; exploratory counts. |
 | **Precise** | PST dish + calibration → artifact masks → **PlaqSeg YOLO** primary → density switch → gated PST-sensitive recall → union; optional learned plaque-vs-texture classifier gate. | **In-house, not validated;** PlaqSeg itself is not peer-reviewed. | The best detector on dense, countable plates. |
@@ -86,6 +86,7 @@ highlights:
 |---|---|
 | [**docs/USER_GUIDE.md**](docs/USER_GUIDE.md) | How to do each task: measure, edit, batch, compare turbidity, scale bars, outputs, troubleshooting. |
 | [**docs/ENGINES.md**](docs/ENGINES.md) | The four detection modes in depth: how each works, when to use it, and its validation status. |
+| [**docs/UPSTREAM_EXACT.md**](docs/UPSTREAM_EXACT.md) | Exactly how Published differs from the original upstream *program*, with measured numbers, and the opt-in `--upstream-exact` flag. |
 | [**docs/INSTALL.md**](docs/INSTALL.md) | Install on Windows / macOS / Linux: the two installers, run-from-source, and the optional Precise environment. |
 | [**docs/PUBLICATION.md**](docs/PUBLICATION.md) | The honest validation playbook: what to validate, how (Fiji ground truth, Bland-Altman/ICC, plate-level stats, negative control), and what to write in Methods. |
 | [**docs/DEVELOPER.md**](docs/DEVELOPER.md) | File map, the two-env vs unified-env design, the ML classifier, and how to rebuild the installers. |

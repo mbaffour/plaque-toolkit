@@ -1004,7 +1004,7 @@ DIAMETER_MM = 2 * sqrt(AREA_PXL * mm_per_px^2 / pi)</pre>
       Trofimova E, Jaschke PR. <em>Plaque Size Tool: An automated plaque analysis tool for simplifying and standardising bacteriophage plaque morphology measurements.</em> Virology. 2021;561:1&ndash;5. doi:10.1016/j.virol.2021.05.011
     </div>
   </div>
-  <div class="tip">&#128161; Only the <span class="engine-pill ep-pub">Published</span> engine mode reproduces this paper byte-for-byte. If you used Current with minor corrections, add "with minor numerical-precision corrections" to your methods.</div>
+  <div class="tip">&#128161; Only the <span class="engine-pill ep-pub">Published</span> engine mode reproduces this paper's measurement algorithm. If you used Current with minor corrections, add "with minor numerical-precision corrections" to your methods. Note: on colour-cast or JPEG plates Published's modernised image-read path can shift diameters by up to 0.5&nbsp;mm from the original upstream program &mdash; use <code>--upstream-exact</code> if you need that bit for bit (see docs/UPSTREAM_EXACT.md).</div>
 
   <h3>Statistics &mdash; avoid pseudoreplication</h3>
   <div class="warn">&#9888;&#65039; The <strong>plate is the biological replicate</strong>, not the individual plaque. Use <code>*_PLATE_MEAN</code> / <code>*_PLATE_SD</code> columns in <code>per_phage.csv</code>, with &ge;3 plates per phage. Compare phages with Mann&ndash;Whitney or Kruskal&ndash;Wallis on the per-plate means, or a mixed model with plate as a random effect.</div>

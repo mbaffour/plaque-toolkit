@@ -26,8 +26,11 @@ as the **Published** engine:
   detected Petri-dish diameter.
 - **How we use it:** the upstream detection/sizing algorithm lives essentially unchanged in
   `plaque_size_tool.py`. When run in **Published** mode it reproduces the original
-  byte-for-byte (including its quirks), so a citable run can never be altered by any in-house
-  feature. This is the **only** peer-reviewed, citable mode in the toolkit.
+  *measurement* algorithm (including its quirks), so a citable run can never be altered by any
+  in-house feature. This is the **only** peer-reviewed, citable mode in the toolkit. The
+  image-*reading* code was modernised (EXIF, HEIC, in-memory dimming); that is byte-identical
+  to upstream on neutral-grey TIFF/PNG but not on colour-cast or JPEG plates — see
+  [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md) and the opt-in `--upstream-exact` flag.
 - The original upstream manual is preserved verbatim at [UPSTREAM_README.md](UPSTREAM_README.md).
 
 **Credit:** all of the validated detection/sizing science is theirs, not ours.

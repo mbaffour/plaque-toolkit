@@ -60,6 +60,12 @@ watershed_enabled = False
 # Opt-in (--sensitive): lower the size gates to catch very small (<~0.4 mm) plaques.
 # Detects many more on dense small-plaque plates, at the cost of more false positives.
 sensitive = False
+# Opt-in (--upstream-exact): reproduce the ORIGINAL upstream image-read path as well as the
+# published measurement maths. --published alone keeps the toolkit's (better) read path --
+# EXIF transpose, BT.601 luma brightness, in-memory dimming with no lossy temp file -- which
+# is byte-identical to upstream on neutral-grey input but NOT on colour-cast or JPEG plates.
+# See docs/UPSTREAM_EXACT.md and AUDIT-2026-09.md (PT-1). Implies use_published.
+upstream_exact = False
 
 
 def parse_args():
@@ -73,13 +79,23 @@ def parse_args():
     ap.add_argument("-small", "--small_plaque", required=False,
                     help="for processing small plaques", action = "store_true")
     ap.add_argument("-published", "--published", required=False, action="store_true",
-                    help="reproduce the EXACT published Plaque Size Tool output (no corrections)")
+                    help="published Plaque Size Tool MEASUREMENT behaviour (2-dp string sizes, "
+                         "concentric-pair de-dup that drops both members, largest-contour dish). "
+                         "The image is still read the modern way (EXIF-aware, HEIC-capable, "
+                         "in-memory dimming); add --upstream-exact for the original read path too")
     ap.add_argument("-watershed", "--watershed", required=False, action="store_true",
                     help="opt-in: split touching/merged plaques via watershed and recover them "
                          "(adds a SOURCE column; ignored in --published mode)")
     ap.add_argument("-sensitive", "--sensitive", required=False, action="store_true",
                     help="opt-in: lower the size gates to catch very small (<~0.4 mm) plaques "
                          "(detects many more on dense plates, but more false positives; ignored in --published)")
+    ap.add_argument("--upstream-exact", dest="upstream_exact", required=False, action="store_true",
+                    help="bit-for-bit reproduction of the ORIGINAL upstream Plaque Size Tool, "
+                         "including its image-read path: red-channel ImageStat brightness gate, "
+                         "lossy temp-file re-encode when dimming, and NO EXIF transpose. Implies "
+                         "--published. Use this to reproduce a number produced by the upstream "
+                         "tool itself; see docs/UPSTREAM_EXACT.md. Cannot read HEIC.")
+    ap.add_argument("--version", action="version", version="plaque-toolkit %s" % __version__)
     ap.add_argument("-debug", "--debug", required=False, action = "store_true")
     args = vars(ap.parse_args())
     if args['image'] ==  None and args['directory'] == None:
@@ -418,11 +434,91 @@ def calculate_size_mm(plate_size, obj_df, plate_df):
 
     return obj_df
 
-def get_brightness( im_file ):
-   im = Image.open(im_file)
-   im.convert('L')
-   stat = ImageStat.Stat(im)
-   return stat.mean[0]
+def get_brightness(im_file):
+    """UPSTREAM-EXACT brightness statistic (only used by --upstream-exact).
+
+    This is upstream's function verbatim, quirk included: the result of
+    ``im.convert('L')`` is discarded, so ``stat.mean[0]`` is the mean of the
+    **red channel** of the RGB image, not the luma of a greyscale conversion.
+    On a neutral-grey plate that equals BT.601 luma; on a colour-cast plate
+    (warm agar, tungsten light) it does not, and the >70 dimming decision --
+    and therefore every measured diameter -- can differ. Preserved deliberately
+    so --upstream-exact reproduces the published tool bit for bit; the default
+    Current/Published paths use ``brightness_luma()`` instead. See PT-1/PT-21.
+    """
+    im = Image.open(im_file)
+    im.convert('L')                    # (no-op in upstream; kept for fidelity)
+    stat = ImageStat.Stat(im)
+    return stat.mean[0]
+
+
+def brightness_luma(bgr):
+    """The toolkit's brightness statistic: BT.601 luma of the whole frame.
+
+    Unlike upstream's red-channel mean this is colour-cast-insensitive. It is
+    what every mode except --upstream-exact uses."""
+    return float(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).mean())
+
+
+def _tmp_path_for(image_path):
+    """Upstream's temp-file name: '<path>.tmp<ext>' beside the input image."""
+    return image_path + '.tmp' + os.path.splitext(image_path)[1]
+
+
+def read_and_dim_upstream_exact(image_path):
+    """UPSTREAM-EXACT read + dim: cv2.imread with NO EXIF transpose, red-channel
+    brightness gate, and (when bright) PIL ImageEnhance re-encoded through a temp
+    file that is then re-read -- so lossy formats lose the same information they
+    lost upstream. Returns (working_image, original_image, brightness).
+
+    Raises ValueError for inputs upstream could not read at all (e.g. HEIC), rather
+    than silently falling back to a path upstream never had."""
+    def _unreadable():
+        return ValueError(
+            "--upstream-exact cannot read %r: the original Plaque Size Tool used a bare "
+            "cv2.imread() with no PIL/HEIC fallback, so this file is outside the behaviour "
+            "this mode reproduces. Convert it to TIFF/PNG first (heic_to_tiff.py), or drop "
+            "--upstream-exact." % os.path.basename(image_path))
+
+    if os.path.splitext(image_path)[1].lower() in ('.heic', '.heif'):
+        raise _unreadable()          # upstream had no HEIC support at all
+    brightness = float(get_brightness(image_path))
+    image = cv2.imread(image_path)
+    if image is None:
+        raise _unreadable()
+    original = _ensure_bgr(image).copy()
+    if brightness > 70:
+        tmp = _tmp_path_for(image_path)
+        try:
+            im = Image.open(image_path)
+            ImageEnhance.Brightness(im).enhance(0.5).save(tmp)
+            dimmed = cv2.imread(tmp)
+            if dimmed is not None:
+                image = dimmed
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+    return _ensure_bgr(image), original, brightness
+
+
+def read_and_dim(image_path):
+    """Default read + dim: HEIC-safe, EXIF-honouring, luma brightness gate, and the
+    0.5x dimming applied in memory (no lossy temp-file round trip).
+
+    Byte-identical to upstream on neutral-grey TIFF/PNG input; see
+    docs/UPSTREAM_EXACT.md for the cases where it deliberately differs.
+    Returns (working_image, original_image, brightness)."""
+    if upstream_exact:
+        return read_and_dim_upstream_exact(image_path)
+    image = read_image_bgr(image_path)
+    original = image.copy()            # true (undimmed) image, used for turbidity
+    brightness = brightness_luma(image)
+    if brightness > 70:
+        image = np.clip(image.astype(np.float32) * 0.5, 0, 255).astype(np.uint8)
+    return image, original, brightness
 
 def _mask_from_contour(shape, contour):
     mask = np.zeros(shape[:2], dtype="uint8")
@@ -515,13 +611,21 @@ def main():
     global use_published
     global watershed_enabled
     global sensitive
+    global upstream_exact
     small_plaques = args['small_plaque']
     debug_mode = args['debug']
-    use_published = args.get('published', False)
+    upstream_exact = args.get('upstream_exact', False)
+    # --upstream-exact is a superset of --published: it adds the original read path on
+    # top of the original measurement maths.
+    use_published = args.get('published', False) or upstream_exact
     watershed_enabled = args.get('watershed', False) and not use_published
     sensitive = args.get('sensitive', False) and not use_published
-    if use_published:
-        print("(running in --published mode: exact published Plaque Size Tool behaviour)")
+    if upstream_exact:
+        print("(running in --upstream-exact mode: original upstream read path -- red-channel "
+              "brightness gate, lossy temp-file dimming, no EXIF transpose -- plus --published maths)")
+    elif use_published:
+        print("(running in --published mode: published Plaque Size Tool measurement behaviour; "
+              "modernised read path -- add --upstream-exact for the original read path too)")
     if watershed_enabled:
         print("(watershed recovery ON: touching plaques will be split and recovered)")
     if sensitive:
@@ -530,12 +634,8 @@ def main():
     for image_path in image_paths:
         print("Processing " + image_path)
 
-        # read (HEIC-safe) and dim too-bright images in memory (no temp files)
-        image = read_image_bgr(image_path)
-        orig_image = image.copy()   # true (undimmed) image, used for turbidity
-        image_brightness = float(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).mean())
-        if image_brightness > 70:
-            image = np.clip(image.astype(np.float32) * 0.5, 0, 255).astype(np.uint8)
+        # read + dim (see read_and_dim / read_and_dim_upstream_exact)
+        image, orig_image, image_brightness = read_and_dim(image_path)
 
         binary_image, high_contrast, clr_high_contrast = process_image(image, 2.5)
         #       cv2.imshow("Binary image", binary_image)

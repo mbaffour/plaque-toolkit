@@ -11,7 +11,7 @@ number from this toolkit into a manuscript.
 
 | Component | Validated? | Can you cite it as published? |
 |---|---|---|
-| **Published** engine | ✅ Trofimova & Jaschke 2021 | **Yes.** |
+| **Published** engine | ✅ Trofimova & Jaschke 2021 (the *measurement* algorithm) | **Yes** — see the read-path caveat below. |
 | **Current** engine | ⚠️ in-house; ≤ ~0.04 mm from Published, count unchanged on bundled plates | Cite the paper "with minor numerical-precision corrections," or run `--published` for an exact match. |
 | **Sensitive** engine | ❌ in-house, not validated | **No** — validate it yourself first. |
 | **Precise** engine (PST + PlaqSeg) | ❌ in-house; PlaqSeg not peer-reviewed | **No** — validate it yourself first. |
@@ -20,6 +20,25 @@ number from this toolkit into a manuscript.
 
 If you used anything other than Published, you must **validate it on your own plates** and
 report that validation. It does **not** inherit the published validation.
+
+### The Published read-path caveat (read this if your plates are colour-cast or JPEG)
+
+Published reproduces the published *measurement* algorithm exactly, but it does **not** use
+upstream's image-reading code. The toolkit honours EXIF orientation, supports HEIC, measures
+brightness as BT.601 luma (upstream used the red-channel mean — an upstream bug), and dims
+bright plates in memory instead of through a lossy temp-file re-encode.
+
+- **Neutral-grey TIFF/PNG** (every bundled plate; the Fiji validation set): byte-identical to
+  upstream — 19/19 plaques, Δdiameter **0.000 mm**. Nothing to report.
+- **Colour-cast plates** (warm agar, tungsten/top light — the toolkit's own advertised use
+  case): the brightness statistic can straddle upstream's `> 70` dimming threshold
+  (58.03 luma vs 83.62 red on a measured amber plate), and individual diameters then differ
+  from the original program by up to **0.500 mm**.
+- **JPEG input**: up to 0.030 mm.
+
+For those cases either (a) state in Methods that you used Plaque Toolkit's Published engine
+with a modernised image-read path, or (b) run `--upstream-exact`, which restores upstream's
+read path bit for bit. Detail and the measured table: [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md).
 
 ---
 
