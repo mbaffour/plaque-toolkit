@@ -20,7 +20,12 @@ $ErrorActionPreference = 'Stop'
 
 $src = $PSScriptRoot
 
-$dst = 'C:\Users\mbaff\Downloads\Plaque Stats Analysis'
+# Destination of the standalone working copy. PT-5: no hard-coded personal path --
+# set $env:PLAQUE_STATS_DEST, pass it as the first argument, or accept the default
+# under the current user's Downloads folder.
+$dst = $env:PLAQUE_STATS_DEST
+if (-not $dst -and $args.Count -ge 1) { $dst = $args[0] }
+if (-not $dst) { $dst = Join-Path $env:USERPROFILE 'Downloads\Plaque Stats Analysis' }
 
 
 

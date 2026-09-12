@@ -11,8 +11,17 @@ rem  without them you get lawn-relative transmittance.
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 if "%~1"=="" (
   echo.
@@ -40,7 +49,7 @@ set /p "FLATPATH=Path to flat-field image (Enter to skip): "
 if not "%FLATPATH%"=="" set "FLAT=--flat "%FLATPATH%""
 
 cd /d "%SCRIPT_DIR%"
-"%PY%" "plaque_turbidity.py" -d "%FOLDER%" -p %PLATE% %SMALL% %BLANK% %FLAT%
+%PYCMD% "plaque_turbidity.py" -d "%FOLDER%" -p %PLATE% %SMALL% %BLANK% %FLAT%
 
 echo.
 echo Done. Results (plaques_all.csv, per_phage.csv, qc.csv, overlays) are in:

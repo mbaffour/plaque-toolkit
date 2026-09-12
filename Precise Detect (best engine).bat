@@ -10,8 +10,17 @@ rem  Output: out_precise\<name>\ (annotated overlay + per-plaque CSV + summary).
 rem  Note: needs the 'plaque' AND 'plaqseg' conda envs (already set up).
 rem ============================================================
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 if "%~1"=="" (
   echo.
@@ -27,7 +36,7 @@ set "OUT=%SCRIPT_DIR%out_precise\%~n1"
 cd /d "%SCRIPT_DIR%"
 echo.
 echo === Precise detection: %~nx1  (this runs PlaqSeg on CPU, give it a minute) ===
-"%PY%" "precise\run_precise.py" --image "%~1" --out "%OUT%" --tag "%~n1" --plate-mm %PLATE%
+%PYCMD% "precise\run_precise.py" --image "%~1" --out "%OUT%" --tag "%~n1" --plate-mm %PLATE%
 echo.
 echo Output folder: %OUT%
 start "" "%OUT%"

@@ -8,8 +8,17 @@ rem  HEIC (iPhone) is supported directly. Results go to the "out" folder.
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 if "%~1"=="" (
   echo.
@@ -35,7 +44,7 @@ cd /d "%SCRIPT_DIR%"
 if "%~1"=="" goto done
 echo.
 echo === Processing %~nx1 ===
-"%PY%" "plaque_size_tool.py" -i "%~1" -p %PLATE% %SMALL% %PUB%
+%PYCMD% "plaque_size_tool.py" -i "%~1" -p %PLATE% %SMALL% %PUB%
 shift
 goto loop
 

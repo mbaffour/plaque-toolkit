@@ -9,8 +9,17 @@ rem  HEIC (iPhone) is supported. Output: <name>_scaled.jpg next to the input.
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 if "%~1"=="" (
   echo.
@@ -28,7 +37,7 @@ cd /d "%SCRIPT_DIR%"
 if "%~1"=="" goto done
 echo.
 echo === Scaling %~nx1 ===
-"%PY%" "add_scale.py" -i "%~1" --plate-mm %PLATE%
+%PYCMD% "add_scale.py" -i "%~1" --plate-mm %PLATE%
 set "LAST=%~dpn1_scaled.jpg"
 if exist "%LAST%" start "" "%LAST%"
 shift

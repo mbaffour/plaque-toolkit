@@ -2,7 +2,8 @@
 # agreement_app.spec -- freeze the Agreement (tool vs manual) Shiny app into a standalone folder.
 #
 # Build (from agreement/build_exe/):
-#   & "C:/Users/mbaff/Miniconda3/envs/plaqueapp/python.exe" -m PyInstaller --noconfirm --clean agreement_app.spec
+#   python -m PyInstaller --noconfirm --clean agreement_app.spec
+#   (from the plaqueapp environment; build_app.ps1 finds that interpreter for you)
 # Output:
 #   dist/Plaque Agreement App/Plaque Agreement App.exe   (one-dir bundle; ship the whole folder)
 #

@@ -8,8 +8,17 @@ rem  -> one data-green-<plate>.csv per plate + summary.csv, in the 'out' folder.
 rem ============================================================
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 set "FOLDER=%~1"
 if "%FOLDER%"=="" set "FOLDER=%SCRIPT_DIR%plates"
@@ -31,10 +40,10 @@ set /p "PLATE=Petri dish diameter in mm [default 100]: "
 cd /d "%SCRIPT_DIR%"
 echo.
 echo === ORIGINAL published mode - measuring every plate in: %FOLDER% ===
-"%PY%" "plaque_size_tool.py" -d "%FOLDER%" -p %PLATE% %SMALL% --published
+%PYCMD% "plaque_size_tool.py" -d "%FOLDER%" -p %PLATE% %SMALL% --published
 echo.
 echo === Building summary.csv (one row per plate) ===
-"%PY%" "summarize_plates.py" -o "out"
+%PYCMD% "summarize_plates.py" -o "out"
 echo.
 echo Per-plate CSVs (data-green-*.csv) + summary.csv are in:
 echo   %SCRIPT_DIR%out

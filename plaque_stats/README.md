@@ -206,7 +206,9 @@ Double‑clicking the `.exe` starts the app and opens it in the browser — zero
 
 ### Keep the Downloads copy in sync
 
-A stand‑alone copy for day‑to‑day analysis lives in `C:\Users\mbaff\Downloads\Plaque Stats Analysis`.
+A stand‑alone copy for day‑to‑day analysis can live outside the repo (by default
+`%USERPROFILE%\Downloads\Plaque Stats Analysis`; set `$env:PLAQUE_STATS_DEST` or pass the
+destination as the first argument to point it elsewhere).
 After changing the code here, refresh it (your dropped `data\` and generated `results\` in the copy are
 never deleted):
 

@@ -11,8 +11,23 @@ $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Here
 
-$Py = "C:/Users/mbaff/Miniconda3/envs/plaqueapp/python.exe"
-if (-not (Test-Path $Py)) { throw "Interpreter not found: $Py" }
+# Resolve the interpreter portably (PT-5: no hard-coded personal paths).
+# Override with $env:PLAQUE_PY, else look for the plaqueapp conda env in the usual
+# places, else fall back to the py launcher / python on PATH.
+$Py = $null
+if ($env:PLAQUE_PY -and (Test-Path $env:PLAQUE_PY)) { $Py = $env:PLAQUE_PY }
+if (-not $Py) {
+    foreach ($base in @("$env:USERPROFILE\Miniconda3", "$env:USERPROFILE\Anaconda3",
+                        "$env:USERPROFILE\miniforge3", "$env:USERPROFILE\mambaforge",
+                        "$env:ProgramData\Miniconda3", "$env:ProgramData\Anaconda3")) {
+        $cand = Join-Path $base "envs\plaqueapp\python.exe"
+        if (Test-Path $cand) { $Py = $cand; break }
+    }
+}
+if (-not $Py) { $Py = (Get-Command py -ErrorAction SilentlyContinue)?.Source }
+if (-not $Py) { $Py = (Get-Command python -ErrorAction SilentlyContinue)?.Source }
+if (-not $Py) { throw "No Python interpreter found. Set $env:PLAQUE_PY to your python.exe." }
+Write-Host "==> Using interpreter: $Py"
 
 Write-Host "==> Building 'Plaque Stats App' with PyInstaller (this can take a few minutes)..."
 & $Py -m PyInstaller --noconfirm --clean "plaque_stats_app.spec"

@@ -143,7 +143,11 @@ locations and falls back to `winget install JRSoftware.InnoSetup`.
 env in common conda locations and fall back to `conda run`; force a specific interpreter with
 the `PLAQUE_PY` environment variable. `build_macos.sh` produces the Mac `.app`.
 
-The root `.bat` launchers (`Measure Plaques.bat`, etc.) hard-code the local
-`C:\Users\mbaff\Miniconda3\envs\plaque\python.exe` and fall back to `python` on PATH — they are
-this machine's drag-and-drop convenience scripts. The portable, cross-platform entry points are
+The root `.bat` launchers (`Measure Plaques.bat`, etc.) no longer hard-code an interpreter
+(PT-5). Each one does `call "%~dp0find_python.bat" plaque`, which resolves, in order:
+`%PLAQUE_PY%` → a `plaque` conda env under the usual install roots → `conda run -n plaque python`
+→ `py -3` → `python` on PATH, and leaves the result in `%PYCMD%` (already quoted where it is a
+path). A launcher now fails with an actionable message instead of an `ImportError` from the
+Microsoft Store stub. The `plaque_stats` and `labelling` launchers use the same chain inline
+(they are meant to be copyable on their own). The portable, cross-platform entry points remain
 the `Plaque Toolkit.*` launchers and the app itself.

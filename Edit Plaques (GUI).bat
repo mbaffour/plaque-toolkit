@@ -12,8 +12,17 @@ rem    and draws an orange circle around the detected dish (calibration check).
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
-set "PY=C:\Users\mbaff\Miniconda3\envs\plaque\python.exe"
-if not exist "%PY%" set "PY=python"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 
 cd /d "%SCRIPT_DIR%"
 
@@ -29,7 +38,7 @@ set "PLATE=100"
 set /p "PLATE=Petri dish diameter in mm [default 100]: "
 
 if "%~1"=="" (
-  "%PY%" "plaque_gui.py" -p %PLATE% %SMALL% %SENS%
+  %PYCMD% "plaque_gui.py" -p %PLATE% %SMALL% %SENS%
 ) else (
-  "%PY%" "plaque_gui.py" -i "%~1" -p %PLATE% %SMALL% %SENS%
+  %PYCMD% "plaque_gui.py" -i "%~1" -p %PLATE% %SMALL% %SENS%
 )

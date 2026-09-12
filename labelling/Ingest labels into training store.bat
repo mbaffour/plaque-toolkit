@@ -13,17 +13,24 @@ echo copy of its image + a catalog row, ready for retraining.
 echo.
 
 rem --- find a Python interpreter ------------------------------------------
-set "PYEXE=C:\Users\mbaff\Miniconda3\envs\plaqueapp\python.exe"
-if exist "%PYEXE%" (
-    set "PYCMD="%PYEXE%""
-    goto :run
+rem --- find a Python interpreter (portable: no hard-coded paths -- PT-5) ----
+set "PYCMD="
+if defined PLAQUE_PY if exist "%PLAQUE_PY%" set "PYCMD="%PLAQUE_PY%""
+if not defined PYCMD for %%B in (
+    "%USERPROFILE%\Miniconda3" "%USERPROFILE%\Anaconda3" "%USERPROFILE%\miniforge3"
+    "%USERPROFILE%\mambaforge" "%ProgramData%\Miniconda3" "%ProgramData%\Anaconda3"
+) do (
+    if not defined PYCMD if exist "%%~B\envs\plaqueapp\python.exe" set "PYCMD="%%~B\envs\plaqueapp\python.exe""
 )
-where conda >nul 2>nul
-if not errorlevel 1 (
-    set "PYCMD=conda run --no-capture-output -n plaqueapp python"
-    goto :run
+if not defined PYCMD (
+    where conda >nul 2>nul
+    if not errorlevel 1 set "PYCMD=conda run --no-capture-output -n plaqueapp python"
 )
-set "PYCMD=python"
+if not defined PYCMD (
+    where py >nul 2>nul
+    if not errorlevel 1 set "PYCMD=py -3"
+)
+if not defined PYCMD set "PYCMD=python"
 
 :run
 set "TARGET=%~1"

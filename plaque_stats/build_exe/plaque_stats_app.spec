@@ -2,7 +2,8 @@
 # plaque_stats_app.spec -- freeze the Shiny for Python app into a standalone Windows folder.
 #
 # Build (from build_exe/):
-#   & "C:/Users/mbaff/Miniconda3/envs/plaqueapp/python.exe" -m PyInstaller --noconfirm --clean plaque_stats_app.spec
+#   python -m PyInstaller --noconfirm --clean plaque_stats_app.spec
+#   (from the plaqueapp environment; build_app.ps1 finds that interpreter for you)
 # Output:
 #   dist/Plaque Stats App/Plaque Stats App.exe   (one-dir bundle; ship the whole folder)
 #

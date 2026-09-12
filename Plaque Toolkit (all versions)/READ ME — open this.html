@@ -219,7 +219,10 @@
 </div>
 
 <script>
-  var PY = '"C:\\\\Users\\\\mbaff\\\\Miniconda3\\\\envs\\\\plaque\\\\python.exe"';
+  // PT-5: no hard-coded personal interpreter path. `conda run -n plaque python`
+  // works on any machine that followed docs/INSTALL.md; override the whole prefix
+  // by editing PY below if your environment is named differently.
+  var PY = 'conda run -n plaque python';
   function q(s){return document.querySelector(s);}
   function qa(s){return Array.prototype.slice.call(document.querySelectorAll(s));}
   function val(name){var el=document.querySelector('input[name="'+name+'"]:checked');return el?el.value:'';}
@@ -241,11 +244,11 @@
 
     var cmd, lnote='';
     if(iface==='app'){
-      cmd = '& '+PY+' "plaque_app.py"';
+      cmd = PY+' "plaque_app.py"';
       lnote = 'Or just double-click  →  7 - Plaque Toolkit app (everything).bat   (then pick options inside the app).';
     } else {
       var script = (iface==='gui') ? '"plaque_gui.py"' : '"plaque_size_tool.py"';
-      var parts = ['& '+PY+' '+script];
+      var parts = [PY+' '+script];
       var tgt = (iface==='gui') ? 'image' : target;     // GUI is single-image only
       var pathTok = path ? path : (tgt==='folder' ? 'PATH\\TO\\FOLDER' : 'PATH\\TO\\IMAGE');
       parts.push((tgt==='folder' ? '-d' : '-i') + ' "' + pathTok + '"');

@@ -14,7 +14,7 @@ developer-oriented, load-bearing detail see [STRUCTURE.md](STRUCTURE.md); this p
 
 ---
 
-## 1. On your machine (the runnable stuff, in `C:\Users\mbaff\Downloads\`)
+## 1. On your machine (the runnable stuff, wherever you keep it — `~/Downloads/` in this example)
 
 ```
 Downloads\

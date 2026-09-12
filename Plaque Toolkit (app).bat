@@ -3,7 +3,16 @@ rem Launch the unified Plaque Toolkit app from source (no packaging needed).
 rem The standalone build is dist\PlaqueToolkit.exe once you've run PyInstaller.
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "PYW=C:\Users\mbaff\Miniconda3\envs\plaque\pythonw.exe"
-if not exist "%PYW%" set "PYW=pythonw"
+rem --- Find a Python interpreter (portable; see find_python.bat) -------------
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo.
+  echo   No usable Python was found.
+  echo   Install the toolkit environment first:  conda env create -f environment.yml
+  echo   or set PLAQUE_PY to your python.exe.
+  echo.
+  pause
+  exit /b 1
+)
 cd /d "%SCRIPT_DIR%"
-start "" "%PYW%" "plaque_app.py"
+start "" %PYWCMD% "plaque_app.py"

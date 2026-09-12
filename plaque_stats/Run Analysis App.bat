@@ -32,7 +32,17 @@ echo.
 
 rem --- Find a Python interpreter --------------------------------------------
 
-set "PYEXE=C:\Users\mbaff\Miniconda3\envs\plaqueapp\python.exe"
+rem --- resolve the env interpreter portably (no hard-coded paths -- PT-5) ---
+
+set "PYEXE="
+
+if defined PLAQUE_PY if exist "%PLAQUE_PY%" set "PYEXE=%PLAQUE_PY%"
+
+if not defined PYEXE for %%B in ("%USERPROFILE%\Miniconda3" "%USERPROFILE%\Anaconda3" "%USERPROFILE%\miniforge3" "%USERPROFILE%\mambaforge" "%ProgramData%\Miniconda3" "%ProgramData%\Anaconda3") do (
+
+    if not defined PYEXE if exist "%%~B\envs\plaqueapp\python.exe" set "PYEXE=%%~B\envs\plaqueapp\python.exe"
+
+)
 
 if exist "%PYEXE%" (
 
@@ -65,6 +75,16 @@ if not errorlevel 1 (
 
 
 echo conda not found either; falling back to 'python' on your PATH...
+
+where py >nul 2>nul
+
+if not errorlevel 1 (
+
+    set "PYCMD=py -3"
+
+    goto :run
+
+)
 
 set "PYCMD=python"
 

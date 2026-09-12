@@ -59,8 +59,8 @@
   <p class="sub">You only do this once. It creates the <code>plaque</code> environment with the right packages.</p>
   <div class="card">
     <h3>Already set up on this PC ✅</h3>
-    <p>If you're reading this in <code>C:\Users\mbaff\Downloads\Plaque Size Tool</code>, the environment
-    already exists — skip to step 2. To recreate it elsewhere:</p>
+    <p>If the <code>plaque</code> environment already exists on this PC, skip to step 2.
+    To create it (anywhere you have checked the toolkit out):</p>
     <pre><button class="copy">copy</button><code>conda env create -f environment.yml</code></pre>
     <p class="sub">(or <code>conda create -n plaque python=3.9 -y</code> then
     <code>conda run -n plaque pip install -r requirements.txt</code>) — <b>numpy stays &lt; 2</b>.</p>
@@ -103,7 +103,8 @@
   <div class="step"><div class="num">A</div><div class="body"><b>Launcher way:</b> double‑click the
     <code>Run My Plates.bat</code> you downloaded (in the project folder).</div></div>
   <div class="step"><div class="num">B</div><div class="body"><b>Command way:</b> open a terminal, run
-    <code>cd "C:\Users\mbaff\Downloads\Plaque Size Tool"</code>, then paste the command above.</div></div>
+    <code>cd</code> into the toolkit folder (the one containing <code>plaque_size_tool.py</code>),
+    then paste the command above.</div></div>
   <p class="sub">Either way, the <b><code>out\</code></b> folder opens with your results.</p>
 
   <h2>5 · Your results (in <code>out\</code>)</h2>
@@ -134,7 +135,8 @@
 
 <script>
 const $=id=>document.getElementById(id);
-const PYPATH = String.raw`C:\Users\mbaff\Miniconda3\envs\plaque\python.exe`;
+// PT-5: no hard-coded personal interpreter path. The generated .bat calls the
+// repo's find_python.bat, which resolves a conda env / py -3 / python at run time.
 const state={folder:"plates",dish:"100",size:"",mode:"",sum:true};
 
 function seg(id,key){ $(id).querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
@@ -161,11 +163,17 @@ function render(){
   let b =
 `@echo off
 cd /d "%~dp0"
-set "PY=${PYPATH}"
-if not exist "%PY%" set "PY=python"
-"%PY%" "plaque_size_tool.py" ${flags()}
+rem Resolve a Python interpreter portably (conda env -> conda run -> py -3 -> python).
+rem Put this file in the toolkit folder, next to find_python.bat.
+call "%~dp0find_python.bat" plaque
+if not defined PYCMD (
+  echo No usable Python found. Run:  conda env create -f environment.yml
+  pause
+  exit /b 1
+)
+%PYCMD% "plaque_size_tool.py" ${flags()}
 `;
-  if(state.sum) b += `"%PY%" "summarize_plates.py" -o "out"\n`;
+  if(state.sum) b += `%PYCMD% "summarize_plates.py" -o "out"\n`;
   b += `start "" "%~dp0out"\npause\n`;
   $("bat").textContent = b;
   // download link
