@@ -40,7 +40,7 @@ locally, cite it. Roughly a day of work.
 - [ ] Keep the honest caveat: Sensitive/Precise are in-house, not independently validated.
 
 ### 5. Make the tool citable (get a DOI) — 4 clicks, do once
-1. On GitHub: **Releases → Draft a new release**, tag to match `CITATION.cff` (currently **`v1.0.5`**), publish.
+1. On GitHub: **Releases → Draft a new release**, tag to match `CITATION.cff` + `_version.py` (currently **`v1.1.0`**), publish.
 2. Go to **https://zenodo.org** → log in with GitHub → **Settings → GitHub** → flip the switch **ON** for `mbaffour/plaque-toolkit`.
 3. (Zenodo only archives releases created *after* the switch is on — so create/re-publish the release *after* step 2.)
 4. Zenodo mints a **DOI**. Paste it into `CITATION.cff` (`doi:` line) and cite that DOI in your paper.

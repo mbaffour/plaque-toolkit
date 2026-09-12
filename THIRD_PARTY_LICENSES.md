@@ -10,7 +10,7 @@ Legend — **Build**: L = shipped in the Light installer, F = Full only. SPDX id
 
 | Component | Version | Licence (SPDX) | Build | Source / copyright |
 |---|---|---|---|---|
-| **Plaque Toolkit** (this project) | 1.0.x | Apache‑2.0 | L,F | © 2026 Michael Baffour Awuah · https://github.com/mbaffour/plaque-toolkit |
+| **Plaque Toolkit** (this project) | 1.1.x | Apache‑2.0 | L,F | © 2026 Michael Baffour Awuah · https://github.com/mbaffour/plaque-toolkit |
 | **Plaque Size Tool** (Trofimova & Jaschke 2021) — the detection/sizing algorithm behind the Published/Current/Sensitive engines; **modified** (see [`NOTICE`](NOTICE)) | — | Apache‑2.0 | L,F | © Ellina Trofimova, Ilya Trofimov · https://github.com/ellinium/plaque_size_tool |
 
 ## Deep‑learning stack (Full build only)

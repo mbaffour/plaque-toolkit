@@ -53,7 +53,10 @@ import pandas as pd
 
 import plaque_size_tool as pst
 
-__version__ = "2.0"
+try:                                    # one source of truth: repo-root _version.py
+    from _version import __version__
+except Exception:                       # pragma: no cover - standalone/partial installs
+    __version__ = "0.0.0+unknown"
 
 # enable reading iPhone HEIC/HEIF (computational-photography caveats apply -- see docstring)
 try:

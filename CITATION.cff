@@ -9,7 +9,7 @@ abstract: >-
   a fused PST + PlaqSeg detector, a manual-correction editor, millimetre calibration,
   batch processing, count/PFU, and optical-density turbidity comparison.
 type: software
-version: 1.0.5
+version: 1.1.0
 date-released: '2026-07-09'
 # The archived repository as a whole is AGPL-3.0: it includes the Full/Precise engine (built on
 # Ultralytics YOLO, AGPL-3.0) and the CC-BY-NC-SA 4.0 model weights. Our own source code and the

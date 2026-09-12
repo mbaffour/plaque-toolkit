@@ -44,7 +44,10 @@ def read_image_bgr(path):
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
 
 
-__version__ = "1.0.0"
+try:                                    # one source of truth: repo-root _version.py
+    from _version import __version__
+except Exception:                       # pragma: no cover - standalone/partial installs
+    __version__ = "0.0.0+unknown"
 out_dir_path = './out'
 small_plaques = False
 debug_mode = False
