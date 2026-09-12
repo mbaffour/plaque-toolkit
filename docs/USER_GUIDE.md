@@ -397,6 +397,12 @@ heic_to_tiff.py  -d FOLDER  [-o OUTFOLDER]
 | `OVERLAP` *(app)* | yes/no | `yes` = touches/overlaps another plaque, so its size is unreliable (see the Exclude‑overlaps toggle) |
 | `SOURCE` *(GUI / `--watershed` only)* | – | `auto` / `manual` / `freehand` / `watershed` |
 
+A plate with **zero** plaques still writes this CSV, with the header row and no data rows —
+"0 plaques" is a real observation (negative control, empty dilution) and must not disappear from
+a count or titer experiment. `summarize_plates.py` lists it with `N_PLAQUES = 0`; pass
+`-i <input folder>` as well and any image that produced **no** CSV at all is listed with
+`CSV_FOUND = False`, so a processing failure is not mistaken for a genuine zero.
+
 - **`out_<name>.<ext>`** — annotated image (plaques circled + numbered; watershed‑recovered in cyan).
 
 ### Turbidity batch tool → `out_turbidity\`

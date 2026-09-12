@@ -261,17 +261,29 @@ def write_data(out_dir, image_path, green_df, red_df, other_df):
     #write_one_data(out_dir, image_path, 'other', other_df)
 
 
+MEASUREMENT_COLUMNS = ['INDEX_COL', 'AREA_PXL', 'DIAMETER_PXL', 'AREA_MM2', 'DIAMETER_MM',
+                       'MEAN_GRAY', 'TURBIDITY_REL']
+
+
 def write_one_data(out_dir, image_path, prefix, df):
+    """Write the per-plate measurement CSV.
+
+    ALWAYS writes the file, even for a plate with zero plaques: "0 plaques" is a real
+    observation (a negative control, or a dilution that came up empty), and dropping it
+    biases every mean count and titer computed downstream. The old `if df.empty != True`
+    guard made such plates vanish from summarize_plates.py entirely. See PT-3.
+    """
     image_file_name = os.path.split(image_path)[1]
     image_name = os.path.splitext(image_file_name)[0]
-    if df.empty != True:
-        cols = ['INDEX_COL', 'AREA_PXL', 'DIAMETER_PXL', 'AREA_MM2', 'DIAMETER_MM',
-                'MEAN_GRAY', 'TURBIDITY_REL']
-        if 'SOURCE' in df.columns:
-            cols.append('SOURCE')
-        df.to_csv(path_or_buf=f'{out_dir}/data-{prefix}-{image_name}.csv', index=False,
-                  columns=cols)
-                  #columns=['INDEX_COL', 'AREA_PXL', 'PERIMETER_PXL', 'ENCL_CENTER', 'ENCL_DIAMETER_PXL'])
+    cols = list(MEASUREMENT_COLUMNS)
+    if 'SOURCE' in df.columns:
+        cols.append('SOURCE')
+    out = df.copy()
+    for c in cols:                      # an empty frame may never have gained a column
+        if c not in out.columns:
+            out[c] = []
+    out.to_csv(path_or_buf=f'{out_dir}/data-{prefix}-{image_name}.csv', index=False,
+               columns=cols)
 
 
 def calc_AREA_PXL_diff(contour_df):
