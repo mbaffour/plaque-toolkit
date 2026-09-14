@@ -48,6 +48,10 @@ try:                                    # one source of truth: repo-root _versio
     from _version import __version__
 except Exception:                       # pragma: no cover - standalone/partial installs
     __version__ = "0.0.0+unknown"
+try:                                    # run_metadata.json writer (PT-9); optional
+    import provenance
+except Exception:                       # pragma: no cover - standalone installs
+    provenance = None
 out_dir_path = './out'
 small_plaques = False
 debug_mode = False
@@ -395,6 +399,11 @@ def check_duplicate_plaques(obj_df):
             kept_centers.append((cx, cy))
     return obj_df.drop(drop_idx)
 
+# Last computed pixel->mm calibration, so the provenance record can report it
+# without changing any function's return type. Reset per image in main().
+last_calibration = {'mm_per_px': None}
+
+
 def _calculate_size_mm_published(plate_size, obj_df, plate_df):
     # exact published behaviour: values stored as 2-dp strings; DIAMETER_MM derived
     # from the truncated AREA_MM2 string; no warning if the dish isn't found.
@@ -403,6 +412,7 @@ def _calculate_size_mm_published(plate_size, obj_df, plate_df):
             lambda x: f"{np.sqrt(float(x['AREA_PXL'])/np.pi)*2:.2f}", axis=1)
     if plate_size and obj_df.size > 0:
         mpp = float(plate_size) / float(plate_df['ENCL_DIAMETER_PXL'].max())
+        last_calibration['mm_per_px'] = mpp
         obj_df['ENCL_DIAMETER_MM'] = obj_df.apply(lambda x: f"{x['ENCL_DIAMETER_PXL']*mpp:.2f}", axis=1)
         obj_df['AREA_MM2'] = obj_df.apply(lambda x: f"{x['AREA_PXL']*mpp*mpp:.2f}", axis=1)
         obj_df['DIAMETER_MM'] = obj_df.apply(lambda x: f"{np.sqrt(float(x['AREA_MM2'])/np.pi)*2:.2f}", axis=1)
@@ -431,6 +441,7 @@ def calculate_size_mm(plate_size, obj_df, plate_df):
                           if (plate_df is not None and not plate_df.empty) else float('nan'))
     if plate_size and float(max_plate_diameter) > 0:
         mm_per_px = float(plate_size) / float(max_plate_diameter)
+        last_calibration['mm_per_px'] = mm_per_px
         obj_df['ENCL_DIAMETER_MM'] = obj_df['ENCL_DIAMETER_PXL'].apply(lambda d: round(float(d) * mm_per_px, 2))
         obj_df['AREA_MM2'] = obj_df['AREA_PXL'].apply(lambda a: round(float(a) * mm_per_px * mm_per_px, 2))
         # diameter from the TRUE area (not a 2-dp-truncated AREA_MM2 string)
@@ -643,9 +654,11 @@ def main():
     if sensitive:
         print("(sensitive mode ON: detecting very small plaques - expect more, and some false positives)")
 
+    run_images = []                      # provenance rows, one per image (PT-9)
     for image_path in image_paths:
         print("Processing " + image_path)
 
+        last_calibration['mm_per_px'] = None
         # read + dim (see read_and_dim / read_and_dim_upstream_exact)
         image, orig_image, image_brightness = read_and_dim(image_path)
 
@@ -717,8 +730,35 @@ def main():
         # format float values
         # green_df_copy['ENCL_DIAMETER_MM'] = green_df_copy['ENCL_DIAMETER_MM'].apply(lambda x: f"{x:.2f}")
         write_data(out_dir_path, image_path, green_df_copy, red_df_copy, other_df)
+        try:                             # provenance must never break a measurement run
+            run_images.append({
+                "file": os.path.basename(image_path),
+                "path": image_path,
+                "sha256_16": provenance.file_digest(image_path) if provenance else "",
+                "n_plaques": int(len(green_df_copy)),
+                "brightness": round(float(image_brightness), 4),
+                "dimmed": bool(image_brightness > 70),
+                "mm_per_px": last_calibration['mm_per_px'],
+                "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
+                "csv": "data-green-%s.csv" % os.path.splitext(os.path.basename(image_path))[0],
+            })
+        except Exception as exc:         # pragma: no cover - defensive only
+            run_images.append({"file": os.path.basename(image_path),
+                               "provenance_error": str(exc)})
         print("Process completed successfully")
         print(str(len(green_df_copy)) + ' plaques were found\n')
+
+    # Provenance: which engine, which settings, which version produced these CSVs.
+    if provenance is not None:
+        provenance.write_metadata(
+            out_dir_path, "plaque_size_tool.py",
+            provenance.engine_name(published=use_published, upstream_exact=upstream_exact,
+                                   sensitive=sensitive),
+            {"plate_size_mm": plate_size, "small_plaque": bool(small_plaques),
+             "published": bool(use_published), "upstream_exact": bool(upstream_exact),
+             "sensitive": bool(sensitive), "watershed": bool(watershed_enabled),
+             "image": args.get('image'), "directory": args.get('directory')},
+            run_images)
 
 
 def renumerate_df(df):

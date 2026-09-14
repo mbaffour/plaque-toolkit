@@ -225,6 +225,25 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
     summary_df.to_csv(os.path.join(out_dir, "per_plate.csv"), index=False)
     all_df.to_csv(os.path.join(out_dir, "all_plaques.csv"), index=False)
 
+    # Provenance sibling: which engine, settings and toolkit version made these
+    # CSVs (PT-9). Purely additive -- no measurement column changes.
+    try:
+        import provenance
+        provenance.write_metadata(
+            out_dir, "app/batch_measure.py",
+            provenance.engine_name(published=(mode == "published"),
+                                   sensitive=(mode == "sensitive"),
+                                   precise=(mode == "precise")),
+            {"mode": mode, "plate_size_mm": plate_mm, "small": bool(small),
+             "watershed": bool(watershed), "crops": bool(crops), "folder": folder},
+            [{"file": r.get("image"), "n_plaques": r.get("n_plaques"),
+              "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),
+              "tilt_flag": r.get("tilt_flag"), "error": r.get("error")}
+             for r in plate_rows],
+            {"n_failed": len(errors)})
+    except Exception as exc:
+        print("  (could not write run_metadata.json: %s)" % exc)
+
     return {
         "summary_df": summary_df,
         "all_df": all_df,

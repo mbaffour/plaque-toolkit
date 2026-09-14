@@ -539,10 +539,18 @@ def write_metadata(out_dir, args_dict, images, qc_rows, errors):
     meta = {
         "tool": "plaque_turbidity.py",
         "version": __version__,
+        # Same key name the size tool's and the batch runner's run_metadata.json use
+        # (provenance.py), so one reader can find the version in all three (PT-9).
+        "toolkit_version": __version__,
         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
         "args": args_dict,
         "python": sys.version.split()[0],
+        # PT-9/PT-13: this is now the toolkit version, i.e. the code that actually
+        # produced the data, not a stale hand-maintained module string.
         "engine_size_tool": getattr(pst, "__version__", "?"),
+        "engine": ("Published (--upstream-exact)" if getattr(pst, "upstream_exact", False)
+                   else "Published" if pst.use_published
+                   else "Sensitive" if getattr(pst, "sensitive", False) else "Current"),
         "library_versions": {"opencv": cv2.__version__, "numpy": np.__version__,
                              "pandas": pd.__version__},
         "n_images": len(images),
