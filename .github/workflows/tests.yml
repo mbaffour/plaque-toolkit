@@ -1,0 +1,46 @@
+name: Tests
+
+# Runs the pytest suite (tests/) on every push and pull request. Before this job
+# existed, build-macos.yml was the only workflow and it ran no tests at all --
+# see AUDIT-2026-09.md (PT-7). The suite is headless and Qt-free by design, so it
+# needs only the engine dependencies, not PySide6 / torch / ultralytics.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    name: pytest (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor declared in pyproject.toml and the version the engine
+        # was validated on; 3.12 catches anything that only breaks on new Pythons.
+        python-version: ['3.9', '3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Headless OpenCV: the runner has no display and the suite never shows a window.
+          # pillow-heif is required: --smoke measures the bundled sample.heic and
+          # fails if it detects nothing.
+          pip install opencv-python-headless "numpy<2" pandas Pillow pillow-heif \
+                      imutils "matplotlib>=3.9" scipy pytest
+
+      - name: Run the test suite
+        run: python -m pytest
+
+      - name: Engine smoke test
+        run: python plaque_app.py --smoke

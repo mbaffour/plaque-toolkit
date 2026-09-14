@@ -5,5 +5,8 @@ opencv-python>=4.6,<5
 imutils>=0.5.4
 pandas>=1.3,<3
 Pillow>=9
-matplotlib>=3.5
+# matplotlib MUST stay >= 3.9: plaque_turbidity.write_plots uses boxplot(tick_labels=),
+# added in 3.9. On 3.5-3.8 it raises TypeError inside a broad except, so the comparison
+# plots were silently skipped and the run still reported success. See AUDIT-2026-09.md (PT-10).
+matplotlib>=3.9
 pillow-heif>=0.13

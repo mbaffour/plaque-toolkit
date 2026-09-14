@@ -18,6 +18,6 @@ dependencies:
       - imutils>=0.5.4
       - pandas>=1.3,<3
       - Pillow>=9
-      - matplotlib>=3.5
+      - matplotlib>=3.9        # tick_labels= in write_plots needs 3.9 (AUDIT-2026-09.md, PT-10)
       - pillow-heif>=0.13
       - PySide6>=6.4,<6.8       # Qt GUI (the app)
