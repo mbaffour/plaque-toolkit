@@ -9,7 +9,7 @@ the conditions. A release with no such heading changed no number.
 
 ---
 
-## 1.1.0 — 2026-09-14
+## 1.1.0 — 2026-10-13
 
 The 2026-09 audit release. Every change below is traceable to a finding in
 [`AUDIT-2026-09.md`](AUDIT-2026-09.md).
@@ -70,6 +70,36 @@ the bundled `Test_plates` set, in both modes; this was verified by diffing every
   just in `pyproject.toml`/`setup.py` (PT-10). On 3.5–3.8 the turbidity comparison
   plots raised `TypeError` inside a broad `except` and were silently skipped while the
   run still reported success.
+
+### Also in this release (landed on `main` after v1.0.6, before the audit)
+
+These changes predate the audit and are not covered by the audit's measurement-identity
+check above. None of them touch `plaque_size_tool.py` or `plaque_turbidity.py` (verified with
+`git log -- plaque_size_tool.py plaque_turbidity.py`).
+
+* **Analyze tab**: an in-app, publication-grade plotting workbench.
+* **`plaque_stats`**: a grouped control-comparison mode (second factor vs a control), case-insensitive
+  column auto-detection with a warning when replicate == subgroup, per-violin *n* and
+  mean/median value labels (toggleable), and the stats/comparison guides surfaced inside the
+  running tools. The standalone (no-Python) build now bundles `GUIDE.html`, and the launchers
+  free their port before starting.
+* **Agreement tool** (`plaque_stats/agreement`): tool-vs-manual method comparison with rigorous
+  agreement statistics, a browser app, download-all, built-in area→diameter conversion,
+  legible regression equation and line keys on both panels, and clean p-value formatting
+  (`p < 0.001`). The real *n* = 100 tool-vs-Fiji dataset and a tiny-plaque check (*n* = 20) are
+  archived under `validation/` with regenerated figures and reports; the sub-0.5 mm
+  resolution floor is documented.
+* **Web app** (`webapp/`): a browser measurement app (Precise engine online) with a Hugging Face
+  Spaces deploy.
+* **Labelling pipeline** (`labelling/`, `label_store.py`): app export → ingester → training store,
+  a Fiji helper, and docs; the Full build bundles `label_store` so the installed app auto-files
+  ground truth.
+* **Docs and citation**: classifier-training methodology (OnePetri + LOO/hard-negative loops),
+  genuinely educational interactive HTML guides, PlaqSeg (Carbon16/PlaqSegDesktop `app-v0.2.1`)
+  cited as the Precise engine's detector, and co-author Jolene Ramsey (PI) added to
+  `CITATION.cff` and `.zenodo.json`.
+* **Privacy**: the author's sample plate photos were removed from the repository. This rewrote
+  the public history, so the `v1.0.1`–`v1.0.6` tags are not ancestors of `main`.
 
 ### Known issues
 
