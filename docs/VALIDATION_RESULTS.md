@@ -7,7 +7,8 @@
 
 - **Date:** 2026-07-07 · updated 2026-07-08 with the **n = 100 independent Fiji method comparison** (§2B)
 - **Operator:** in-house (JRR Micro Lab)
-- **App:** Plaque Toolkit (repo tag `v1.0.2`), engines Published / Current / Sensitive / Precise
+- **App:** Plaque Toolkit, measured with the v1.0.2 code (that tag is no longer on main; size outputs
+  were verified byte-identical at 1.1.0, see CHANGELOG), engines Published / Current / Sensitive / Precise
   (PST + PlaqSeg YOLO + ResNet gate). Only **Published** is the peer-reviewed algorithm
   (Trofimova & Jaschke 2021); Precise/Sensitive/Current are in-house.
 - **Reference software:** Fiji / ImageJ **2.16.0 / 1.54p** (headless).
@@ -21,11 +22,11 @@ A single-operator but **multi-pronged** local validation on the authors' own pla
 | # | What was validated | Data | Headline result |
 |---|---|---|---|
 | 1 | **Hand-corrected ground truth** | plates labelled in-app (WT / 2-4 / G12E / DTR + the `IMG_39xx` sets) | the human reference the rest is scored against |
-| 2 | **Detection + sizing** vs the hand labels | dense GT plates (185 + 89 plaques) | Precise **precision 1.00**, diameter **r ≥ 0.99**, MAE ≤ 0.0025 mm (§2A) |
+| 2 | **Detection** vs the hand labels | **9 GT plates, 745 plaques** (`validation/ground_truth/validate_*.csv`) | pooled Precise **precision 0.95 / recall 0.53 / F1 0.68** (21 FP); per-plate precision 0.00–1.00; the two densest plates (IMG_3907, IMG_3912) precision 1.00 at recall 0.40 / 0.28 (§2A). Matched-diameter r ≥ 0.99 is a *self-consistency* figure, not human agreement |
 | 3 | **Size** vs **independent Fiji** tracing | **100 plaques** traced blind in Fiji | **ICC 0.97**, r 0.98, bias −1.8%, LoA −0.15…+0.09 mm, no proportional bias (§2B) |
-| 4 | **False positives** on negative controls | **17 blank** plates | Precise **3.1 ± 3.0 FP/blank** (Sensitive 12.4) (§2C) |
+| 4 | **False positives** on negative controls | **17 blank** plates | Precise **3.1 ± 3.0 FP/blank** (Sensitive 12.4) (§2C) — a second run with different settings gives 3.35 / 40.4 (TESTING_AND_VALIDATION.md); not yet reconciled, see §2C |
 | 5 | **Agreement statistics** (Bland–Altman + ICC) | 3 comparisons | independent Fiji ICC 0.97; hand labels ICC 0.99; same-outline consistency ICC 1.00 / r 0.9999 (§2D) |
-| 6 | **The ML classifier gate, on vs off** | WT/2-4/G12E/DTR, threshold sweep | precision **0.67 → 0.70** at the operating point — a working precision filter (§2E) |
+| 6 | **The ML classifier gate, on vs off** | WT/2-4/G12E/DTR (4 plates), threshold sweep | precision **+0.03** (0.67 → 0.70), recall −0.01, F1 unchanged at the operating point — a working precision filter (§2E) |
 | 7 | **Resolution floor** — tiny plaques | **20** plaques ~0.3–0.5 mm, tool vs Fiji | means agree (bias ~4%) but per-plaque **ICC ≈ 0** — a shared imaging limit below ~0.5 mm, not a tool defect (§2F) |
 
 **Boundary (stated plainly):** this is a **real local validation performed by the authors** — not an
@@ -42,7 +43,7 @@ Two independent checks:
 **(A) Detection + sizing vs hand-labelled ground truth.** Ground-truth plaque sets were made in
 the app (auto-detect → hand-corrected) and exported as `labels_<img>.json` (schema
 `plaque-groundtruth-v1`). Each engine's detections are matched to the ground truth **by position**
-(a detection matches a GT plaque if their centres are within `0.5 ×` the GT radius), then scored:
+(a detection matches a GT plaque if their centres are within `max(4 px, 0.5 ×` the GT radius`)`), then scored:
 
 - **Precision / recall / F1** on detection (a detected plaque is a true positive only if it lands
   on a GT plaque);
@@ -65,22 +66,46 @@ A separate *consistency* check re-measured the tool's **own** exported outlines 
 
 ### (A) vs hand-labelled ground truth
 
-| Plate | Plaques (GT) | Engine | Detected | Precision | Recall | Diameter agreement (matched) |
-|---|---:|---|---:|---:|---:|---|
-| IMG_3907 | 185 | **Precise** | 74 | **1.00** | 0.40 | r = 0.99, MAE 0.0025 mm, bias +0.0025 mm |
-| IMG_3907 | 185 | Sensitive | 177 | 0.55 | 0.52 | r = 0.62 (noisier) |
-| IMG_3912 | 89 | **Precise** | 25 | **1.00** | 0.28 | r = 1.00, MAE 0.000 mm |
-| IMG_3912 | 89 | Sensitive | 117 | 0.33 | 0.44 | r = 0.79 |
+Detection was scored on **9 hand-labelled plates** (IMG_3900 … IMG_3917; **745 plaques**). The
+score tables are archived as `validation/ground_truth/validate_permode.csv` (pooled) and
+`validate_perplate.csv` (per plate); the label files for the two densest plates (IMG_3907, IMG_3912)
+are archived alongside them.
+
+**Pooled (all 9 plates):**
+
+| Engine | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| **Precise** | 397 | **21** | 348 | **0.95** | 0.53 | **0.68** |
+| Current | 125 | 99 | 620 | 0.56 | 0.17 | 0.26 |
+| Sensitive | 273 | 881 | 472 | 0.24 | 0.37 | 0.29 |
+
+**Per plate (Precise):** precision ranged **0.00 – 1.00** and recall **0.00 – 0.90** (0.10 – 0.90
+excluding IMG_3913, where no engine found any of its 32 plaques). The two densest plates:
+
+| Plate | Plaques (GT) | Engine | Detected | Precision | Recall |
+|---|---:|---|---:|---:|---:|
+| IMG_3907 | 185 | **Precise** | 74 | **1.00** | 0.40 |
+| IMG_3907 | 185 | Sensitive | 177 | 0.55 | 0.52 |
+| IMG_3912 | 89 | **Precise** | 25 | **1.00** | 0.28 |
+| IMG_3912 | 89 | Sensitive | 117 | 0.33 | 0.44 |
 
 *Current and Published detected very few plaques on these dense, small-plaque plates (≤10) and did
 not align with the ground truth under position matching — a combination of stricter size/circularity
 gates and calibration differences; reported here for completeness, not as a like-for-like number.*
 
-**Interpretation.** On these plates **Precise has perfect precision (no false positives)** and its
-**diameters match the hand labels to r ≈ 0.99 (MAE ≤ 0.0025 mm)** — what it reports is trustworthy.
-It is **conservative on very dense plates** (recall ≈ 0.3–0.4 at 89–185 plaques/plate): it
-under-counts rather than guessing. **Sensitive** lifts recall (≈ 0.44–0.52) at the cost of precision
-and noisier sizes — appropriate for dense plates when followed by manual pruning.
+**Matched-diameter agreement is a self-consistency check, not human agreement.** The scorer also
+reports diameter agreement on matched pairs (r ≥ 0.99, MAE ≤ 0.0025 mm; `size_mae_mm` ≈ 1e-17 on 7
+of 9 plates). In the label files, plaques with `source = auto` or `region` are the **engine's own
+contours** kept by the labeller, so a matched ground-truth contour is usually the engine's contour
+and the comparison is engine-vs-itself. Sizing agreement with a **human** is given by the Fiji
+comparison in §2B (n = 100), not by this number.
+
+**Interpretation.** Across the 9 plates **Precise is highly precise (0.95; 21 false positives in
+total)** — when it reports a plaque it is almost always real — but **conservative** (recall 0.53
+pooled; ≈ 0.3–0.4 on the densest plates at 89–185 plaques/plate): it under-counts rather than
+guessing, and on one plate (IMG_3913) it found nothing. **Sensitive** lifts recall on the dense
+plates (≈ 0.44–0.52) at the cost of precision and noisier sizes — appropriate for dense plates when
+followed by manual pruning.
 
 ### (B) vs independent manual Fiji measurement — method comparison (n = 100)
 
@@ -130,6 +155,12 @@ i.e. the empirical false-positive floor of the pipeline on this imaging setup.
 
 <sub>*mean + 1.96·SD, a per-plate false-positive threshold.</sub>
 
+> **Note.** Two blank-plate runs with different settings exist: this one, and the one quoted in
+> [TESTING_AND_VALIDATION.md](TESTING_AND_VALIDATION.md) §2 (Published 0.88, Precise 3.35, Current
+> 4.24, Sensitive 40.4 FP/blank over the same 17 plates). The per-plate data for neither is in the
+> repository (`validation/` holds no blank-plate results), so the maintainer must archive one run
+> under `validation/` and reconcile the two [owner to confirm: which run is canonical].
+
 **Interpretation.** Precise has a **low but non-zero** false-positive floor (~3 per blank plate) —
 round mid-grey lawn artifacts (bubbles, condensation droplets, specular glare, dust) that pass the
 detector. **Sensitive is ~4× noisier** (~12 FP/plate, never zero) and should not be used for counting
@@ -149,21 +180,22 @@ absolute agreement, not just correlation):
 | Comparison | n | Mean Ø | Bias (Toolkit − ref) | 95% limits of agreement | ICC | r |
 |---|---:|---:|---:|---|---:|---:|
 | **Toolkit vs independent Fiji traces** *(primary — §2B)* | 100 | 1.55 mm | **−0.028 mm** (−1.8%) | **−0.146 … +0.089 mm** | **0.974** | 0.979 |
-| Toolkit vs hand labels — pooled IMG_3907+3912 | 99 | 0.50 mm | +0.0018 mm | −0.034 … +0.038 mm | 0.991 | 0.991 |
+| Toolkit vs hand labels — pooled IMG_3907+3912 *(self-consistency; many labels are engine contours, §2A)* | 99 | 0.50 mm | +0.0018 mm | −0.034 … +0.038 mm | 0.991 | 0.991 |
 | Toolkit vs Fiji, *same* outlines *(consistency)* | 95 | 1.42 mm | +0.0006 mm | −0.006 … +0.007 mm | 1.000 | 1.000 |
 
 **Interpretation.** The **independent n = 100 comparison** (ICC 0.97, LoA ≈ ±0.1 mm) is the headline for
 the paper. The two supporting checks isolate *where* the small offset comes from: measuring the tool's
 *own* outlines in Fiji is essentially exact (ICC 1.00 — the calibration + area math are right), and the
-tool's boundaries match careful hand labels closely (ICC 0.99). So the **~1.8% Toolkit−Fiji difference**
+tool's boundaries match the hand-label set closely (ICC 0.99 — largely because many of those labels
+are the tool's own contours, so this row is a self-consistency check). So the **~1.8% Toolkit−Fiji difference**
 in the primary comparison reflects the honest gap between an *auto-detected* boundary and a *human's
 manual trace*, not a calibration error — and it is small and size-independent (slope ≈ 1.0).
 
 **Count-level (pseudoreplication note).** Plaque counts should be analysed with the **plate** as the
-experimental unit, but only **2** ground-truth plates were available — too few for a plate-level count
-correlation. The two plates show systematic under-counting on dense plates (Precise 74 vs 185; 25 vs
-89), consistent with the recall in §2A. A defensible count-level validation needs **≥ 5–6 plates
-spanning densities** (still to do).
+experimental unit. The 9 ground-truth plates show systematic under-counting on dense plates (Precise
+74 vs 185 on IMG_3907; 25 vs 89 on IMG_3912), consistent with the recall in §2A. A plate-level count
+correlation / Bland–Altman on per-plate counts across those 9 plates has **not yet been computed**
+(still to do).
 
 ### (E) The ML classifier gate — on vs off (`_research/clf/val/`, `val_gate.py`)
 
@@ -177,10 +209,13 @@ The Precise engine was scored **with and without** its ResNet-18 `--clf` gate on
 
 The gate **raises precision** — it removes a handful of PlaqSeg/PST false positives per plate (the
 per-plate `n_clf_dropped` records which detector each drop came from) — at a **small recall cost**,
-leaving F1 essentially unchanged on these plates. That is the intended behaviour of a **precision
-filter**, not a recall booster, and it is why it ships **on by default in the app** but **off by
-default in the CLI**. (Recall here is dominated by Precise's deliberate under-counting on very dense
-plates, §2A — not by the gate.)
+leaving F1 essentially unchanged on these plates (precision +0.03, recall −0.01, F1 unchanged on
+4 plates). That is the intended behaviour of a **precision filter**, not a recall booster, and it is
+why it ships **on** wherever Precise runs in-process (the Full installer, the unified `plaqueapp`
+env, the web app — `pipeline.run_inprocess(clf=True)`) but **off by default on the CLI**
+(`precise/run_precise.py --clf` / `PRECISE_CLF=1`) and in the two-env run-from-source app path,
+which launches that CLI; `summary_<tag>.json` records `clf_gate` either way. (Recall here is
+dominated by Precise's deliberate under-counting on very dense plates, §2A — not by the gate.)
 
 ### (F) Resolution floor — tiny plaques (n = 20)
 
@@ -225,15 +260,16 @@ evidence that the cross-tool validation is doing real work.
 
 ## 4. Limitations
 
-- **Small sample.** Detection/sizing was scored on **2** ground-truth plates (185 + 89 plaques);
-  the Fiji cross-check on **1** plate. Not yet enough for a strong published claim.
+- **Small sample.** Detection was scored on **9** ground-truth plates (745 plaques) from one
+  imaging set-up; the independent Fiji size comparison is n = 100 plaques from [owner to confirm: N]
+  plates. Not yet enough for a strong published claim.
 - **Resolution floor below ~0.5 mm.** On very small plaques (~0.3–0.5 mm, ~10 px across) the tool and
   manual Fiji agree on the *mean* size (~4% bias) but not plaque-by-plaque (ICC ≈ 0, n = 20; §2F) — a
   single-pixel boundary difference is 20–40% of the area, so measurement noise exceeds the true size
   differences in *both* methods. Report sub-0.5 mm sizes as group means, not per-plaque.
-- **Precise under-detects on very dense plates** (recall ≈ 0.3–0.4). What it *does* report is highly
-  accurate; use Sensitive + manual tools (Add / Draw shape / Detect area) for coverage on crowded
-  plates.
+- **Precise under-detects on very dense plates** (recall ≈ 0.3–0.4; 0.53 pooled over 9 plates, and
+  0 on IMG_3913). What it *does* report is almost always a real plaque (precision 0.95); use
+  Sensitive + manual tools (Add / Draw shape / Detect area) for coverage on crowded plates.
 - **Only Published is peer-reviewed.** Precise/Sensitive/Current are in-house and must not be
   described as "validated methods" in the literature sense.
 - **The ground truth is the authors' own hand labelling** (single operator), not an external gold
@@ -245,14 +281,16 @@ evidence that the cross-tool validation is doing real work.
 (see `docs/PUBLISHING_CHECKLIST.md`)
 
 1. **Size validation vs Fiji** — **done (§2B, n = 100 independent plaques; ICC 0.97).** Strong
-   enough to cite. Optional strengthening: a **second labeller** on a subset for inter-observer
-   agreement, and reporting how many plates the 100 plaques came from.
-2. ~~**Negative controls** — false-positive rate on blank plates.~~ **Done (§2C):** Precise
-   3.1 ± 3.0 FP/plate, Sensitive 12.4 ± 4.4. Still to do: density-match the blanks to the test
-   plates, and repeat per imaging batch (the FP floor is setup-specific).
+   enough to cite, reported as "n = 100 plaques from [owner to confirm: N] plates". Optional
+   strengthening: a **second labeller** on a subset for inter-observer agreement.
+2. **Negative controls** — false-positive rate on blank plates. **Measured (§2C):** Precise
+   3.1 ± 3.0 FP/plate, Sensitive 12.4 ± 4.4 — but a second run with different settings exists
+   (TESTING_AND_VALIDATION.md §2) and neither run's per-plate data is in the repository; archive
+   one under `validation/` and reconcile [owner to confirm]. Still to do: density-match the blanks
+   to the test plates, and repeat per imaging batch (the FP floor is setup-specific).
 3. **Statistics** — size-agreement Bland–Altman + ICC is **done (§2D)**. Still to do:
    **count** validation at the **plate** level (count correlation + Bland–Altman on per-plate median
-   Ø) once ≥ 5–6 ground-truth plates exist, and mixed-effects handling if plates are nested in
+   Ø) across the 9 ground-truth plates, and mixed-effects handling if plates are nested in
    biological replicates.
 4. **A frozen validation script + data DOI** (Zenodo) so the numbers are reproducible from the
    archived inputs.
@@ -264,7 +302,10 @@ evidence that the cross-tool validation is doing real work.
   per-engine score tables, and the agreement figures **regenerated from that data** by the repo's own
   tool. See [`validation/README.md`](../validation/README.md).
 - **(A)** Validate tab → load `Verifications/labels_*.json` → score each engine; or
-  `python -c "from app import validate; print(validate.score_label_file('Verifications/labels_IMG_3907.json', mode='precise'))"`.
+  `python app/validate.py Verifications --modes precise,current,sensitive,published` (the archived
+  score tables are `validation/ground_truth/validate_permode.csv` / `validate_perplate.csv`; the
+  images themselves are not in the repository, so the scorer cannot be re-run from the archive
+  alone).
 - **(B)** `Export ▸ Fiji registration bundle`, then in Fiji (headless) open the crop, load the
   RoiSet, measure each ROI, and compare with the app's `_registration.csv` (or the in-app
   **Compare vs Fiji…**). Matcher: `app/fiji_match.py`.

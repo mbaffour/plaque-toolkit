@@ -86,9 +86,10 @@ real plaque or lawn texture.
   **CC BY-NC-SA (non-commercial)** obligations (§2).
 - **Honesty note:** its *training* labels are partly **detector-derived** (not a blinded manual
   ground truth), so the training set can carry detector biases. Its **outputs, in the Precise
-  engine, were validated locally by the authors** (precision 1.00 vs hand labels; ICC 0.97 vs
-  independent Fiji — [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)); it is **not** independently
-  or peer-reviewed. Opt-in, default OFF on the CLI.
+  engine, were validated locally by the authors** (pooled precision 0.95 / recall 0.53 over 9
+  hand-labelled plates; ICC 0.97 vs independent Fiji — [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md));
+  it is **not** independently or peer-reviewed. Default OFF on the CLI, ON in in-process runs (Full
+  installer, web app).
 - **Full details:** exact architecture, hyperparameters, training data, and evaluation are in the
   [**model card**](MODEL_CARD.md) and [TRAINING_AND_MODELS.md](TRAINING_AND_MODELS.md). Key facts:
   the deployed `plaque_clf.pt` is the leave-one-plate-out fine-tune (**LOO F1 ≈ 0.95**), and the
@@ -137,7 +138,8 @@ in `environment.yml` / `requirements.txt`, `environment-precise.yml`, and
 
 - **pandas** — per-plaque / per-phage tables and CSV output.
 - **Pillow** and **pillow-heif** — image decoding, including **HEIC** (iPhone) support.
-- **tifffile / Pillow** — reading/writing **Fiji-calibrated TIFF** plate crops.
+- **Pillow** — writing the **Fiji-calibrated TIFF** plate crops (`tifffile` is not a dependency of
+  the toolkit; it was credited here in error).
 
 **App and figures**
 
@@ -186,8 +188,9 @@ peer-reviewed validation — see [PUBLICATION.md](PUBLICATION.md) and §7.)
   ground-truth scoring harnesses used to measure the in-house engines.
 
 The **Current** and **Sensitive** engines are also in-house: near-identical refinements of the
-published algorithm (bug-fixes, numeric values, corrected roundest-contour dish calibration,
-lowered size gates).
+published algorithm (bug-fixes, numeric values, lowered size gates, and — in the desktop app /
+click-editor / Precise front end only — a corrected roundest-contour dish calibration; the size CLI
+and the turbidity tool keep upstream's largest-contour rule).
 
 ---
 

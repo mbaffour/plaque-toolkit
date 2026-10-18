@@ -14,11 +14,20 @@ published validation — they are this study's own evidence, on this study's own
 
 ---
 
-## 1. Automated end-to-end test suite
+## 1. Automated test suite
 
-An automated end-to-end suite exercises the whole toolkit — every engine, calibration, the
-edge cases, all bundled plates, the editor, every export, and both batch tools. It ran
-**21 checks; all 21 passed.**
+The repository's automated tests are **the pytest suite in `tests/`**, run by
+`.github/workflows/tests.yml` on Python 3.9 and 3.12 on every push and pull request, followed
+by `python plaque_app.py --smoke` (detects the bundled sample plate and fails if nothing is
+found). The suite is headless and Qt-free; it covers the engine-level invariants recorded in
+AUDIT-2026-09.md — PT-1 to PT-6 and PT-9 (upstream-exact byte identity, zero-plaque output,
+turbidity linearity, provenance records, the Precise smoke gate, agreement wording) — plus the
+no-hard-coded-paths rule. It does **not** exercise the GUI, the editor, the export paths, the
+Validate tab or the Precise pipeline end to end; those are covered only by manual runs.
+
+The table below records a **one-off manual end-to-end run** of 21 checks (all passed). It is
+not repeated by CI, so treat it as a dated snapshot, not a standing guarantee
+[owner to confirm: date of that run, or delete the table].
 
 | # | Check | Result |
 |---|---|---|
@@ -40,11 +49,12 @@ edge cases, all bundled plates, the editor, every export, and both batch tools. 
 | 16 | Turbidity run | pass |
 | 17–21 | Remaining engine / calibration / edge-case / export permutations covered above | pass |
 
-**Read:** the suite confirms that all four engines run on both lab and iPhone plates, that
-calibration and the grayscale / no-dish edge cases are handled without crashing, that all 17
-bundled plates detect, that the editor and **every** export path work (including the Fiji crop's
-mm round-trip), and that the batch, validate, and turbidity pipelines all run. This is a
-functional / regression guarantee, **not** an accuracy claim — accuracy is §2–§5.
+**Read:** the manual run confirmed that all four engines ran on both lab and iPhone plates, that
+calibration and the grayscale / no-dish edge cases were handled without crashing, that all 17
+bundled plates detected, that the editor and **every** export path worked (including the Fiji crop's
+mm round-trip), and that the batch, validate, and turbidity pipelines all ran. The pytest suite
+is the standing regression guarantee for the engine layer. Neither is an accuracy claim — accuracy
+is §2–§5.
 
 ---
 
@@ -60,6 +70,12 @@ table is **mean false positives per plate** across the 17 blank plates.
 | **Precise** | 3.35 |
 | **Current** | 4.24 |
 | **Sensitive** | 40.4 |
+
+> **Note on these figures.** Two blank-plate runs with different settings exist (this one, and the
+> one quoted in [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md): Precise 3.1 ± 3.0, Sensitive
+> 12.4 ± 4.4 over the same 17 plates); the per-plate data for neither is in the repository, so the
+> maintainer must archive one run under `validation/` and reconcile the two
+> [owner to confirm: which run is canonical].
 
 **Interpretation.**
 
@@ -92,19 +108,20 @@ agreement.
 
 | Metric | Result |
 |---|---|
-| Precise size error on matched plaques (MAE) | **~0.00 mm** |
+| Precise size error on matched plaques (MAE) | **~0.00 mm** — a self-consistency figure: many label contours are the engine's own (`source` = `auto` / `region`), so this is engine-vs-itself; human sizing agreement is the Fiji comparison, n = 100 (VALIDATION_RESULTS.md §2A/§2B) |
 
 ### Per-plate recall (Precise)
 
 | | Value |
 |---|---|
-| Per-plate recall range | **0.10 – 0.90** |
+| Per-plate recall range | **0.00 – 0.90** (0.10 – 0.90 excluding IMG_3913, where no engine found any of its 32 plaques) |
 | High recall | on clean plates |
 | Low recall | on plates where many **faint** plaques had to be hand-added |
 
 **Finding.** Precise is **highly precise** — when it flags a plaque, it is almost always real
-(P = 0.95; only 21 false positives across 9 plates) — and it sizes matched plaques essentially
-perfectly (MAE ~0.00 mm). Its limitation is **recall**: it **misses faint plaques**, not that it
+(P = 0.95; only 21 false positives across 9 plates). The ~0.00 mm matched-size MAE is a
+self-consistency check (see the table note), not human agreement. Its limitation is **recall**: it
+**misses faint plaques**, not that it
 invents false ones. Recall is high on clean plates and drops where the gold standard contained
 many faint, hand-added plaques. Current and Sensitive were both clearly worse on this set
 (Current P 0.56 / R 0.17; Sensitive P 0.24 / R 0.37).
@@ -120,10 +137,11 @@ deliberately loosened to try to recover the missed faint plaques.
 |---|---|---|
 | Default Precise | 0.53 | 0.95 |
 | Loosened gates | 0.61 | 0.59 |
-| Classifier gate | no-op (no measurable change) | no-op |
+| Classifier gate (4 plates) | −0.01 | +0.03 (F1 unchanged) |
 
 **Outcome.** Loosening the gates raised recall only **0.53 → 0.61** while precision **collapsed
-0.95 → 0.59**. The learned classifier gate was a **no-op** — it did not change the result. Trading
+0.95 → 0.59**. The learned classifier gate moved precision by +0.03 and recall by −0.01 with F1
+unchanged on the 4 plates it was tested on (see [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md) §4). Trading
 away almost all of the precision to gain ~0.08 recall is a bad deal for a size study, where a
 clean, trustworthy set of plaques matters more than catching every faint one.
 
@@ -177,14 +195,15 @@ regression.
 
 ## 7. Bottom line for a paper or lab record
 
-- The toolkit is **functionally complete and regression-tested**: 21/21 automated end-to-end
-  checks pass across all four engines, calibration, edge cases, all 17 bundled plates, the
-  editor, every export (including the Fiji crop mm round-trip), and the batch / validate /
-  turbidity pipelines (§1).
+- The engine layer is **regression-tested** by the pytest suite (`tests/`) on every push (Python
+  3.9 and 3.12) plus an engine smoke test; the GUI, editor, exports and Precise pipeline were
+  checked by a one-off manual run of 21 end-to-end checks, not by CI (§1).
 - On this study's imaging, **Precise is the engine to use for a size study**: it almost never
-  invents plaques (0.95 precision; ~3.35 false positives per blank plate; 21 false positives
-  across 9 hand-labelled plates) and sizes matched plaques with ~0.00 mm MAE. Its recall is 0.53
-  pooled (0.10–0.90 per plate), limited by **genuinely faint** plaques (§2–§4).
+  invents plaques (0.95 precision; ~3.35 false positives per blank plate in the run quoted in §2 —
+  see the note there about the second, unreconciled run; 21 false positives across 9 hand-labelled
+  plates) and sizes matched plaques with ~0.00 mm MAE (a self-consistency figure, see
+  [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md) §2A). Its recall is 0.53 pooled (0.00–0.90 per
+  plate), limited by **genuinely faint** plaques (§2–§4).
 - **Sensitive is unusable on this imaging** (~40 false positives per blank plate; P 0.24) and
   **Current** is markedly weaker than Precise here (§2–§3).
 - The mm scale is trustworthy: a ruler check across 6 photos and 3 independent methods agreed to

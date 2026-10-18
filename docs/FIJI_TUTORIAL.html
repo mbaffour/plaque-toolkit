@@ -97,8 +97,10 @@
       <tr><td><b>Intensity / gray value</b> (no scale needed)</td><td>Mean/Min/Max/StdDev gray, Integrated density</td><td><code>MEAN_GRAY</code>, <code>TURBIDITY_REL</code></td></tr>
     </table>
     <div class="ok"><b>Match definitions.</b> The tool's diameter is the <b>area‑equivalent</b> <span class="eq">d = 2√(A/π)</span>,
-    and its turbidity is <b>plaque mean gray ÷ lawn mean gray</b>. Measure <b>Area</b> and <b>Mean gray value</b> in Fiji and
-    you can reproduce both exactly.</div>
+    and its turbidity index is <b>plate‑relative</b>: <span class="eq">TURBIDITY_REL = 1 − |plaque mean gray − lawn mean gray| ÷ max over the plate of |plaque mean gray − lawn mean gray|</span>,
+    clipped to 0–1 (0 = the clearest plaque on <i>this</i> plate, 1 = indistinguishable from the lawn; direction‑agnostic, so it works whether plaques
+    read brighter or darker than the lawn). Measure <b>Area</b> and <b>Mean gray value</b> of <b>every</b> plaque plus a lawn patch in Fiji and
+    you can reproduce both.</div>
     <div class="tip"><b>Same orientation.</b> Rotate/flip the plate the same way in Fiji and in Plaque Toolkit (use the
     tool's <b>Orient ▾</b> menu) so plaque #1 is the same in both.</div>
   </section>
@@ -212,7 +214,7 @@
 
     <h3>Turn it into <i>relative</i> turbidity (like the tool)</h3>
     <div class="step"><div class="n">2</div><div class="b">Select a clean patch of the surrounding <b>lawn</b> (no plaques) → <kbd>Ctrl</kbd>+<kbd>M</kbd> → note its <b>Mean</b> = lawn brightness.</div></div>
-    <div class="step"><div class="n">3</div><div class="b">Compute <b>relative turbidity = plaque Mean ÷ lawn Mean</b>. ~1 → as opaque as the lawn (<b>turbid</b>); much lower (transmitted light) → <b>clear</b>. This mirrors <code>TURBIDITY_REL</code>.</div></div>
+    <div class="step"><div class="n">3</div><div class="b">For <b>every</b> plaque on the plate compute <b>|plaque Mean − lawn Mean|</b>, find the <b>largest</b> of those deviations on the plate, then <b>TURBIDITY_REL = 1 − |plaque Mean − lawn Mean| ÷ (plate maximum)</b>. 0 → the clearest plaque on this plate; ~1 → as opaque as the lawn (<b>turbid</b>). The index is plate‑relative (it needs all plaques on the plate) and direction‑agnostic, so it works for top‑lit (darker) and transmitted‑light (brighter) plaques alike.</div></div>
     <figure>
       <svg width="440" height="150" viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI">
         <rect width="440" height="150" rx="10" fill="#0e1216"/>
@@ -227,10 +229,10 @@
         <text x="300" y="135" fill="#9fe6c4" font-size="11" text-anchor="middle">Mean ≈ 120</text>
         <text x="383" y="30" fill="#ffd23f" font-size="10" text-anchor="middle">Mean ≈ 90</text>
       </svg>
-      <figcaption>Measure each plaque's Mean gray and a lawn patch; ratio = relative turbidity (transmitted‑light example).</figcaption>
+      <figcaption>Measure each plaque's Mean gray and a lawn patch; 1 − |plaque − lawn| ÷ plate max = relative turbidity (transmitted‑light example).</figcaption>
     </figure>
-    <div class="tip">Doing a whole plate? Add the lawn patch and every plaque to the <b>ROI Manager</b>, <b>Measure</b> once,
-    then divide each plaque's Mean by the lawn Mean in your spreadsheet.</div>
+    <div class="tip">The index needs the whole plate: add the lawn patch and every plaque to the <b>ROI Manager</b>, <b>Measure</b> once,
+    then in your spreadsheet take <code>ABS(plaque Mean − lawn Mean)</code> per plaque, divide by the <code>MAX</code> of that column, and subtract from 1.</div>
   </section>
 
   <section id="profile">
@@ -294,7 +296,7 @@ saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
     <p>Measure the same plate in Plaque Toolkit and <span class="path">Export all</span> → <code>data_&lt;plate&gt;.csv</code>. In a spreadsheet:</p>
     <ol>
       <li><b>Size:</b> convert Fiji Area → <code>=2*SQRT(Area/PI())</code>; match by number; difference vs the tool's <code>DIAMETER_MM</code> → mean bias + 95% limits (Bland–Altman).</li>
-      <li><b>Turbidity:</b> Fiji (plaque Mean ÷ lawn Mean) vs the tool's <code>TURBIDITY_REL</code> — check they trend together.</li>
+      <li><b>Turbidity:</b> Fiji (1 − |plaque Mean − lawn Mean| ÷ plate max) vs the tool's <code>TURBIDITY_REL</code> — check they trend together.</li>
       <li><b>Detection (optional):</b> your Fiji ROI count vs the tool's count on the same plate.</li>
     </ol>
     <div class="ok">Those two sentences — size agreement and turbidity agreement — are the <b>validation</b> for your Methods.
@@ -364,9 +366,9 @@ saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
       <label><input type="checkbox"> Scale set to mm (Image → Properties confirms)</label>
       <label><input type="checkbox"> Set Measurements: Area, Mean, Min/Max, StdDev, IntDen, Feret, Fit ellipse, Shape, Centroid, Label</label>
       <label><input type="checkbox"> Each plaque traced into the ROI Manager (Show All + Labels)</label>
-      <label><input type="checkbox"> A lawn patch measured for the turbidity ratio</label>
+      <label><input type="checkbox"> A lawn patch measured for the turbidity index</label>
       <label><input type="checkbox"> ROIs (RoiSet.zip) + Results (.csv) saved</label>
-      <label><input type="checkbox"> Area → d=2√(A/π); plaque Mean ÷ lawn Mean computed</label>
+      <label><input type="checkbox"> Area → d=2√(A/π); 1 − |plaque Mean − lawn Mean| ÷ plate max computed</label>
       <label><input type="checkbox"> Compared to the tool's DIAMETER_MM &amp; TURBIDITY_REL</label>
       <label><input type="checkbox"> Same orientation used in Fiji and Plaque Toolkit</label>
     </div>
@@ -393,8 +395,10 @@ saveAs("Results", getDirectory("home") + "fiji_results.csv");</pre>
     <p>You're measuring an RGB image. Convert to <b>8‑bit</b> (or split channels) first so "gray value" is a single, defined
     number. RGB "brightness" depends on <span class="path">Edit → Options → Conversions</span> (weighted vs unweighted).</p>
     <h3>Should turbidity be a ratio or a difference?</h3>
-    <p>Plaque Toolkit uses the <b>ratio</b> (plaque ÷ lawn), so use that to compare. A difference (lawn − plaque) is also
-    fine if you're consistent and state it.</p>
+    <p>Plaque Toolkit's <code>TURBIDITY_REL</code> is a normalised <b>difference</b>: 1 − |plaque − lawn| ÷ (the largest |plaque − lawn| on that plate).
+    Use that to compare with the tool. A plain ratio (plaque ÷ lawn) or raw difference (lawn − plaque) is also fine for your own
+    analysis if you're consistent and state it — but note the tool's index is plate‑relative, so it is not comparable across plates;
+    for cross‑plate turbidity use the Compare‑turbidity OD instead.</p>
     <h3>Uneven lighting is skewing my means.</h3>
     <p><span class="path">Process → Subtract Background…</span> on a duplicate, and/or always measure a <b>local</b> lawn patch
     next to each plaque rather than one global lawn value.</p>

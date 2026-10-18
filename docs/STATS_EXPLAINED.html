@@ -98,7 +98,7 @@
   <p>Every number in your Toolkit‑vs‑Fiji validation, from first principles — with the arithmetic
      worked out on your real 100 plaques so you can check it by hand and never take it on faith.</p>
   <div class="meta">
-    <span><b>Dataset:</b> 100 plaques, 2 plates</span>
+    <span><b>Dataset:</b> n = 100 plaques from [owner to confirm: N] plates</span>
     <span><b>Measured:</b> Plaque Toolkit vs manual Fiji/ImageJ</span>
     <span><b>Quantity:</b> area‑equivalent diameter (mm)</span>
     <span><b>Numbers verified:</b> 3 independent ways, agree to 1e‑9</span>
@@ -124,7 +124,7 @@
     <li><a href="#s7">ICC — one number for "do they agree?"</a></li>
     <li><a href="#s8">Pearson r and its famous trap</a></li>
     <li><a href="#s9">RMSE &amp; MAE — the typical miss</a></li>
-    <li><a href="#s10">Why 2 plates is the soft spot</a></li>
+    <li><a href="#s10">Why the plate count is the soft spot</a></li>
     <li><a href="#s11">Report it · reproduce it yourself</a></li>
   </ol>
 </div>
@@ -358,10 +358,10 @@ also land on the <em>same value</em>. All three pointing the same way is what ma
 single headline number.</p>
 
 <!-- ===================================================================== -->
-<h2 id="s10"><span class="k">10</span>Why 2 plates is the soft spot (pseudoreplication)</h2>
+<h2 id="s10"><span class="k">10</span>Why the plate count is the soft spot (pseudoreplication)</h2>
 <p>Everything above uses <b>n = 100 plaques</b>, which is a strong sample — it makes all these numbers
 tight and trustworthy <em>for the size question</em>. The caveat is not the plaque count; it's that those
-100 plaques sit on only <b>2 plates</b>.</p>
+100 plaques come from only <b>[owner to confirm: N] plates</b>.</p>
 <p>Plaques on the same plate share one calibration, one focus, one lighting, one operator session — so
 they aren't 100 fully independent draws. Statisticians call leaning on that
 <b>pseudoreplication</b>. Two consequences:</p>
@@ -369,12 +369,12 @@ they aren't 100 fully independent draws. Statisticians call leaning on that
   <li><b>For size agreement</b> (this page): it matters <em>less</em>, because both methods measure the
       <b>same pixels on the same image</b> — you're comparing two rulers on identical objects, so a
       shared plate can't fake agreement.</li>
-  <li><b>For generalisation and for plaque counts</b>: it matters <em>more</em> — 2 plates can't show the
+  <li><b>For generalisation and for plaque counts</b>: it matters <em>more</em> — a handful of plates can't show the
       result holds across the range of conditions you'll actually meet.</li>
 </ul>
 <div class="callout good">
   <span class="eyebrow">Recommendation</span>
-  Report it honestly as <b>“n = 100 plaques from 2 plates”</b> — that's a legitimate local size
+  Report it honestly as <b>“n = 100 plaques from [owner to confirm: N] plates”</b> — that's a legitimate local size
   validation. To make it bulletproof for a reviewer, spread a similar total across <b>≥ 5 plates</b>
   covering your real range (sparse→crowded, small→large), and ideally have a <b>second person</b> trace
   some in Fiji. The <b>plate</b> is the experimental unit; plaque <b>counts</b> need plate‑level replicates
@@ -386,7 +386,7 @@ they aren't 100 fully independent draws. Statisticians call leaning on that
 <h3>The one‑sentence result for your paper</h3>
 <div class="callout">
   Plaque diameters from Plaque Toolkit agreed with independent manual Fiji/ImageJ tracing
-  (<span class="num">n = 100</span> plaques from 2 plates): Pearson <span class="num">r = 0.98</span>,
+  (<span class="num">n = 100</span> plaques from [owner to confirm: N] plates): Pearson <span class="num">r = 0.98</span>,
   <span class="num">ICC = 0.97</span>; Bland–Altman mean bias <span class="num">−0.03 mm (≈1.8%)</span>,
   95% limits of agreement <span class="num">−0.15 to +0.09 mm</span>, with no proportional bias
   (difference‑vs‑mean slope +0.006, p = 0.78).
@@ -420,9 +420,9 @@ plot above (with the red outliers), and writes the paste‑ready sentence — th
 <p class="sr"><b>References.</b> Bland JM &amp; Altman DG (1986) <i>Statistical methods for assessing agreement
 between two methods of clinical measurement.</i> Lancet 327:307–310. · Koo TK &amp; Li MY (2016) <i>A
 guideline of selecting and reporting intraclass correlation coefficients for reliability research.</i>
-J Chiropr Med 15:155–163. · Trofimova E &amp; Jaschke PR (2021) <i>An improved and open‑source method for
-plaque size and titer quantification.</i> Virology 561:1–5.</p>
-<p class="sr">Plaque Toolkit · validation companion · numbers from your n=100, 2‑plate dataset.</p>
+J Chiropr Med 15:155–163. · Trofimova E &amp; Jaschke PR (2021) <i>Plaque Size Tool: an automated plaque analysis tool for
+simplifying and standardising bacteriophage plaque morphology measurements.</i> Virology 561:1–5.</p>
+<p class="sr">Plaque Toolkit · validation companion · numbers from the n = 100 plaques from [owner to confirm: N] plates dataset.</p>
 
 </div></div>
 </body>

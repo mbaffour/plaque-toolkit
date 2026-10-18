@@ -11,7 +11,7 @@ archived, reproducible evidence.
 
 ## Primary result — Toolkit vs manual Fiji/ImageJ (n = 100)
 
-**`paired_toolkit_vs_fiji.csv`** — 100 plaques, **sampled randomly across plates**, each measured by both
+**`paired_toolkit_vs_fiji.csv`** — n = 100 plaques from [owner to confirm: N] plates (sampled randomly), each measured by both
 the Plaque Toolkit and by independent manual tracing in Fiji/ImageJ. One row per plaque; these are pairs
 only — plaque identity/coordinates are not needed for a method comparison.
 
@@ -50,11 +50,16 @@ The same result also appears as [`docs/PlaqueToolkit_vs_Fiji_BlandAltman.png`](.
 
 `ground_truth/`:
 
-- `labels_IMG_3907.{json,csv}`, `labels_IMG_3912.{json,csv}` — hand-corrected ground-truth plaque sets
-  (schema `plaque-groundtruth-v1`; plaque positions + areas, **no image pixels**). The two dense plates
-  scored in §2A of the write-up (185 + 89 plaques).
-- `validate_permode.csv` — detection/sizing precision · recall · F1 · size-MAE per engine across the GT plates.
-- `validate_perplate.csv` — the same, per plate.
+- `validate_permode.csv` — detection precision · recall · F1 · size-MAE per engine, pooled over the
+  **9 hand-labelled plates** (IMG_3900 … IMG_3917; 745 plaques) scored in §2A of the write-up: Precise
+  tp 397 / fp 21 / fn 348 → precision 0.95, recall 0.53, F1 0.68.
+- `validate_perplate.csv` — the same, per plate (Precise precision 0.00–1.00, recall 0.00–0.90;
+  IMG_3913 has 0 true positives in every mode).
+- `labels_IMG_3907.{json,csv}`, `labels_IMG_3912.{json,csv}` — the ground-truth plaque sets for the
+  **two densest** of those 9 plates (185 + 89 plaques; schema `plaque-groundtruth-v1`; plaque positions +
+  areas, **no image pixels**). The other 7 label files are not archived [owner to confirm: add them].
+  Labels with `source = auto` / `region` are engine-made contours kept by the labeller, so the
+  `size_mae_mm` column is a self-consistency figure (≈ 0 on 7 of 9 plates), not human agreement.
 
 ## Resolution floor — tiny plaques (n = 20)
 

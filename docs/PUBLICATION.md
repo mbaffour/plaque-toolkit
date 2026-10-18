@@ -77,11 +77,17 @@ independent replicates inflates your n and your significance.
 - Use **≥ 3 plates per phage / condition**.
 - Aggregate to **per-plate means** first. In the turbidity output use the **`*_PLATE_MEAN` /
   `*_PLATE_SD`** columns of `per_phage.csv`, **not** the pooled `*_PLAQUE_MEAN`.
-- Compare conditions with a **non-parametric test on the per-plate means** (Mann–Whitney /
-  Kruskal–Wallis), or a **mixed model with plate as a random effect**.
-- The bundled analysis scripts already do this: `make_figure.py` / `plot_sensitive_violin.py`
-  draw the pooled violin **plus per-plate medians** so the experimental-unit-level data is
-  visible.
+- Compare conditions on the **per-plate means**. The bundled `plaque_stats` does this: its default
+  `auto` rule is a **parametric** test on plate means (Welch t for two groups; one-way ANOVA +
+  Tukey HSD for more, or Welch's ANOVA + Games-Howell when Levene rejects equal variances)
+  whenever any group has fewer than 8 plates; with ≥ 8 plates per group it consults Shapiro–Wilk
+  + Levene and switches to Mann–Whitney / Kruskal–Wallis + Dunn if either fails. Override with
+  `--parametric parametric|nonparametric`. A **mixed model with plate as a random effect** is the
+  other defensible option.
+- The bundled plotting scripts keep the experimental unit visible: `make_figure.py` draws the
+  pooled violin **plus per-plate medians** (white dots); `plot_sensitive_violin.py` draws the
+  pooled violin with individual plaque points and prints n / plate count / pooled median per
+  sample (it does not overlay per-plate medians).
 
 ---
 

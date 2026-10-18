@@ -130,6 +130,6 @@ Then open `out\data-green-Plate_2.csv` and `out\out_Plate_2.tif`.
 > standardising bacteriophage plaque morphology measurements.* Virology. 2021;561(April):1–5.
 > doi:10.1016/j.virol.2021.05.011
 
-Tool version: `plaque_size_tool.__version__` = 1.0.0 (this build). The mm‑precision/de‑dup
+Tool version: `python plaque_size_tool.py --version` (reads `_version.py`; 1.1.0 at time of writing). The mm‑precision/de‑dup
 corrections, HEIC reading, `--watershed`, `--published`, and `TURBIDITY_REL` are additions to that
 validated tool; the default detection/sizing algorithm is unchanged.

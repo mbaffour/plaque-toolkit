@@ -18,7 +18,9 @@ PICK THE ENGINE FOR YOUR GOAL   (dropdown at the top of the Measure tab)
   * Best detection on hard / dense plates ....  Precise (PST + PlaqSeg)
   * Numbers for a PAPER  (citable, validated)   Published (validated)
   * Routine day-to-day measuring  (default) ..  Current (corrected)
-  * Lots of tiny (<2.5 mm) plaques ...........  Sensitive
+  * Sub-0.4 mm plaques (unvalidated; prune by eye)  Sensitive
+    (plaques < 2.5 mm are the engine's -small gate, which
+     Current already uses in the app)
 
 
 HOW TO MEASURE  (about 30 seconds)

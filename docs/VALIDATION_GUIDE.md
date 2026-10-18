@@ -161,8 +161,12 @@ reference) and keep its per-plaque output:
 - **Launchers / CLI:** `Measure Plaques.bat` / `Precise Detect (best engine).bat`, or
   `plaque_gui.py <img> -p 100 [--sensitive]`, Precise via `precise/run_precise.py`.
 
-Each engine CSV has `X, Y` (centre, px) and `DIAMETER_MM` per detected plaque — the same coordinate
-frame as the labels, so they match directly. Keep one engine CSV per plate per engine.
+The engine CSVs (`data-green-<name>.csv`; columns `INDEX_COL, AREA_PXL, DIAMETER_PXL, AREA_MM2,
+DIAMETER_MM, MEAN_GRAY, TURBIDITY_REL` [, `SOURCE`]) carry **no centre coordinates**, so they cannot
+be matched to the labels by position after the fact. The scorer (`app/validate.py`, used by the
+Validate tab) therefore **re-runs each engine on the labelled image** and matches detections to the
+gold standard by centre, with match radius `max(4 px, 0.5 × gold radius)`. Keep the engine CSVs
+anyway for the size columns and for your records.
 
 **Apply settings uniformly.** If you use `--watershed`, use it for *every* compared group or none
 (see ENGINES.md). Whatever calibration / dish diameter you used to build the gold standard, use the
@@ -225,76 +229,35 @@ your false-positive rate — the number that matters most for Sensitive and Prec
 - [ ] Report the count per engine (ideally on ≥ 2–3 negative plates): e.g. "0, 0, 1 detections."
 - [ ] If an engine lights up an uninfected lawn, **do not report counts from it** without saying so.
 
-### 4.6 Standalone scorer (the app's **Validate** tab already does this)
+### 4.6 Running the scorer from the command line (the app's **Validate** tab does the same)
 
 The app has a built-in **Validate** tab: point it at the folder of `labels_*.json` you exported,
 tick the engines to score, and click **Run validation** — it reports precision / recall / F1 and
-size agreement per engine (and per plate), using `app/validate.py`. The script below is only for
-when you'd rather compute the metrics yourself from the exported files. Run it from the project
-root (it reads the gold-standard `labels_*.json` and one engine CSV per plate; adjust the glob):
+size agreement per engine (and per plate). The same scorer is a script, so you can run it from
+the project root without the GUI:
 
-```python
-# validate_quick.py — score engine CSVs against plaque-groundtruth-v1 labels
-import json, glob, os, numpy as np, pandas as pd
-from scipy.spatial.distance import cdist
-
-GT_DIR  = "groundtruth"          # holds labels_<plate>.json
-ENG_DIR = "out"                  # holds <plate>.csv from the engine (cols X,Y,DIAMETER_MM)
-
-def match(gt_xy, gt_r, det_xy):
-    if len(gt_xy)==0 or len(det_xy)==0: return [], list(range(len(det_xy))), list(range(len(gt_xy)))
-    D = cdist(det_xy, gt_xy)                      # detections x gold
-    tol = np.minimum(0.5*gt_r, 25.0)             # per-gold tolerance (px)
-    used_g, pairs = set(), []
-    for di in np.argsort(D.min(axis=1)):         # nearest detections first
-        gi = int(np.argmin(D[di]))
-        if gi not in used_g and D[di, gi] <= tol[gi]:
-            used_g.add(gi); pairs.append((di, gi))
-    matched_d = {d for d,_ in pairs}
-    fp = [d for d in range(len(det_xy)) if d not in matched_d]
-    fn = [g for g in range(len(gt_xy))  if g not in used_g]
-    return pairs, fp, fn
-
-rows, diffs = [], []
-for jf in glob.glob(os.path.join(GT_DIR, "labels_*.json")):
-    gt = json.load(open(jf)); P = gt["plaques"]
-    plate = os.path.splitext(gt["meta"]["image"])[0]
-    csv = os.path.join(ENG_DIR, plate + ".csv")
-    if not os.path.exists(csv): print("no engine CSV for", plate); continue
-    det = pd.read_csv(csv); det.columns = [c.upper() for c in det.columns]
-    gt_xy = np.array([[p["x_px"], p["y_px"]] for p in P], float)
-    gt_r  = np.array([p["r_px"] for p in P], float)
-    gt_mm = np.array([p.get("diam_mm") or np.nan for p in P], float)
-    det_xy = det[["X","Y"]].to_numpy(float)
-    det_mm = det["DIAMETER_MM"].to_numpy(float)
-    pairs, fp, fn = match(gt_xy, gt_r, det_xy)
-    tp = len(pairs)
-    prec = tp/(tp+len(fp)) if tp+len(fp) else 0.0
-    rec  = tp/(tp+len(fn)) if tp+len(fn) else 0.0
-    f1   = 2*prec*rec/(prec+rec) if prec+rec else 0.0
-    rows.append(dict(plate=plate, TP=tp, FP=len(fp), FN=len(fn),
-                     precision=prec, recall=rec, f1=f1))
-    for d,g in pairs:
-        if np.isfinite(det_mm[d]) and np.isfinite(gt_mm[g]):
-            diffs.append(det_mm[d]-gt_mm[g])
-
-df = pd.DataFrame(rows)
-print(df.round(3).to_string(index=False))
-print("\nPER-PLATE  P=%.3f±%.3f  R=%.3f±%.3f  F1=%.3f±%.3f  (mean±SD, n=%d plates)"
-      % (df.precision.mean(), df.precision.std(ddof=1), df.recall.mean(), df.recall.std(ddof=1),
-         df.f1.mean(), df.f1.std(ddof=1), len(df)))
-TP,FP,FN = df.TP.sum(), df.FP.sum(), df.FN.sum()
-mp, mr = TP/(TP+FP), TP/(TP+FN)
-print("POOLED(micro)  P=%.3f  R=%.3f  F1=%.3f" % (mp, mr, 2*mp*mr/(mp+mr)))
-d = np.array(diffs)
-if len(d):
-    print("SIZE  bias=%.3f mm  LoA=[%.3f, %.3f]  MAE=%.3f mm  (n=%d matched)"
-          % (d.mean(), d.mean()-1.96*d.std(ddof=1), d.mean()+1.96*d.std(ddof=1),
-             np.abs(d).mean(), len(d)))
+```bash
+python app/validate.py <labels folder> --modes precise,current,sensitive,published
 ```
 
-Run once per engine (point `ENG_DIR` at that engine's CSVs). For **ICC**, feed the matched
-(engine, gold) diameter pairs to `pingouin.intraclass_corr` (ICC2/ICC3, "agreement").
+`<labels folder>` is a directory of `labels_*.json` files (or a single file); `--modes` is a
+comma-separated subset of `precise,current,published,sensitive` (default `precise,current`);
+`--match-frac` sets the match radius `max(4 px, match_frac × gold radius)` (default 0.5). The
+script re-runs each engine on the image named in each label file, prints a per-mode table
+(`n_plates, tp, fp, fn, precision, recall, f1, mean_size_mae_mm`); the Validate tab shows the same
+per-mode and per-plate tables on screen. Neither writes a CSV itself — the tables archived in
+`validation/ground_truth/validate_permode.csv` / `validate_perplate.csv` are this scorer's output
+[owner to confirm: how they were saved — e.g. by calling `app.validate.validate()` and writing its
+`per_mode_df` / `per_plate_df`]. The
+matched-size statistics compare the
+engine's diameter with the **label's** diameter; where a label was itself engine-made
+(`source` = `auto` or `region`) that is a self-consistency check, not human agreement (see
+VALIDATION_RESULTS.md §2A).
+
+For **ICC / Bland–Altman** on matched diameter pairs use the bundled agreement tool —
+`python plaque_stats/agreement/agreement.py pairs.csv --tool <engine col> --manual <gold col>`
+(or the app's **Fiji agreement** tab) — which prints which two columns it compared and writes
+the plot plus ICC, CCC, bias and limits of agreement. No extra package is needed.
 
 ---
 
@@ -306,10 +269,14 @@ is pseudoreplication; it inflates *n* and fabricates significance.
 - [ ] Compute P, R, F1 **per plate** (§4.3).
 - [ ] Report **mean ± 95% CI across plates** (CI = mean ± t · SD/√n_plates). With ≥ 3 plates you
       have a CI; with 2 report both plates' values explicitly and call it preliminary.
-- [ ] When you later **compare conditions/phages**, use **per-plate means** and a non-parametric
-      test (Mann–Whitney / Kruskal–Wallis) or a mixed model with **plate as a random effect** —
-      not pooled plaque counts. (PUBLICATION.md §"Statistics"; the bundled `make_figure.py` /
-      `plot_sensitive_violin.py` already overlay per-plate medians.)
+- [ ] When you later **compare conditions/phages**, use **per-plate means** — the bundled
+      `plaque_stats` defaults to a parametric test on plate means (Welch t / ANOVA + Tukey, or
+      Welch ANOVA + Games-Howell under unequal variances) when any group has < 8 plates and only
+      switches to Mann–Whitney / Kruskal–Wallis + Dunn at ≥ 8 plates per group if Shapiro–Wilk or
+      Levene fails (`--parametric` overrides) — or a mixed model with **plate as a random
+      effect**; never pooled plaque counts. (PUBLICATION.md §"Statistics"; `make_figure.py`
+      overlays per-plate medians, `plot_sensitive_violin.py` plots individual plaques and prints
+      the plate count.)
 
 The **pooled micro** F1 is a fine headline, but the **plate-level mean ± CI** is the defensible
 result.

@@ -2,7 +2,10 @@
 
 This documents **exactly** how the deep-learning components of the Plaque Toolkit were built,
 trained, tuned, and evaluated, so the work is reproducible and correctly credited. Every number
-below is taken from a file in the repo (cited inline); where something is not recorded, it says so.
+below is taken from a file in the **authors' local `_research/` tree** (cited inline) — that tree is
+gitignored and, apart from `_research/clf/plaque_clf.pt` + `infer.py`, **not in the public repo**
+(`_research/autoresearch/`, `_research/autotune/`, `_research/neg_control.py`, the training logs and
+ground-truth folders are author-local); where something is not recorded, it says so.
 
 > For a one-page summary of the classifier, see the [**model card**](MODEL_CARD.md).
 >
@@ -145,7 +148,11 @@ A dedicated round tried to push the classifier/gates to cut false positives on *
 hard constraint: don't reduce real counts.
 
 **Baseline false positives per blank plate:** Published **0.88**, Precise **3.35**, Current 4.24,
-Sensitive 40.4 (Precise end-to-end held-out ≈ 2.6). Then:
+Sensitive 40.4 (Precise end-to-end held-out ≈ 2.6). *Note:* a second blank-plate run with different
+settings (Precise 3.1 ± 3.0, Sensitive 12.4 ± 4.4 over the same 17 plates) is quoted in
+[VALIDATION_RESULTS.md](VALIDATION_RESULTS.md); the per-plate data for neither run is in the
+repository, so the maintainer must archive one under `validation/` and reconcile the two
+[owner to confirm: which run is canonical]. Then:
 - **Retraining** with +574 blank hard-negatives reached **98–99.5 % crop-level rejection**, but
   **end-to-end blank FP barely moved (2.6 → 2.4)** while real counts dipped — the surviving FPs are
   genuinely *plaque-like* (bubbles with dark rings, debris), not cleanly separable from real plaques.

@@ -37,16 +37,18 @@ what lets the loop learn the boundary you actually want.
 - **Spread across phages**: a couple per phage so the model isn't tuned to one morphology.
 - **Include the hard cases**: plates with bubbles/condensation (so the loop sees real plaques
   *next to* real artifacts and learns to tell them apart in context).
-- (I run a density catalog of your plates and recommend a specific balanced list — see the
-  session notes / `_research/autoresearch/label_catalog.csv`.)
+- (The authors built a density catalog of their own plates to pick a balanced list — their
+  `_research/autoresearch/label_catalog.csv`, which is author-local and not in the public repo.
+  Rank your own plates by plaque count from the Batch tab's `per_plate.csv` to do the same.)
 
 ## When you're done
 1. Point the app's **Validate** tab at the labels folder → it scores every engine
    (precision / recall / F1 + size agreement) against your gold standard — your publication numbers.
-2. Tell me the folder path → I run the **two‑sided autotune** (`_research/autotune/` +
-   `_research/autoresearch/`): maximize recall on your labelled plaques **while** minimizing the
-   false positives measured on your 17 blank controls. *That* round can produce a validated,
-   deployable improvement — the one this round couldn't, for lack of labels.
+2. With enough labels, a **two‑sided tuning** round becomes possible — maximize recall on the
+   labelled plaques **while** minimizing the false positives measured on blank control plates.
+   The authors' scripts for this (`_research/autotune/`, `_research/autoresearch/`) are
+   author-local and not in the public repo; the Validate tab's per-plate scores plus a batch run
+   over blank plates give the two numbers such a round needs.
 
 ## Optional: labelling in Fiji instead
 If you prefer Fiji, use **Export → Cropped plate for Fiji** (calibrated TIFF), mark plaques there,

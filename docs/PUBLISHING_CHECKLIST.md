@@ -21,7 +21,7 @@ locally, cite it. Roughly a day of work.
 - [ ] Correct **≥ 5–9 plates** by hand in the editor (spanning sparse → dense), then **Export → Ground-truth labels**.
 - [ ] Run the **Validate** tab on that label folder → record, per engine: **precision, recall, F1** (per-plate mean ± 95% CI).
 - [ ] **Size agreement** on matched plaques: Bland–Altman bias + 95% limits of agreement, and/or ICC vs manual Fiji diameters.
-- [ ] **Negative control**: run a few **uninfected-lawn** plates → report the false-positive count (`_research/neg_control.py` or the app).
+- [ ] **Negative control**: run a few **uninfected-lawn** plates → report the false-positive count (the app's Batch tab, or `plaque_size_tool.py -d`; the authors' `_research/neg_control.py` script is author-local and not in the public repo).
 - [ ] Decide the engine for the paper: **Published** (citable-as-validated) *or* **Precise** (report the local numbers above).
 
 ### 2. Calibration & imaging (say these in Methods)
@@ -31,7 +31,7 @@ locally, cite it. Roughly a day of work.
 
 ### 3. Statistics (the #1 reviewer trap)
 - [ ] **Plate = biological replicate, not the plaque.** Aggregate per-plaque values to **per-plate means/medians** first.
-- [ ] **≥ 3 plates per condition**; compare with non-parametric tests (Mann–Whitney / Kruskal–Wallis) or a mixed model with plate as a random effect.
+- [ ] **≥ 3 plates per condition**; compare per-plate means with the bundled `plaque_stats` (its `auto` rule is a parametric test on plate means — Welch t / one-way ANOVA + Tukey, or Welch ANOVA + Games-Howell when Levene rejects equal variances — whenever any group has < 8 plates, and consults Shapiro–Wilk + Levene to switch to Mann–Whitney / Kruskal–Wallis + Dunn only at ≥ 8 plates per group; `--parametric nonparametric` forces the rank tests) or a mixed model with plate as a random effect.
 - [ ] Never treat individual plaques as independent *n* (pseudoreplication inflates significance).
 
 ### 4. Write it up
@@ -48,8 +48,13 @@ locally, cite it. Roughly a day of work.
 > The repo ships a **`.zenodo.json`** that pre-fills the record (title, description, **AGPL‑3.0**
 > licence, keywords, and the PST + OnePetri citations); Zenodo reads it automatically on release.
 > Add your **ORCID + affiliation** there (or in the Zenodo form) before publishing. The model
-> weights are **Git‑LFS**, so the source tarball holds an LFS *pointer* — attach the real `.pt` to
-> the Release if the model must be reproducible straight from the archive.
+> weights (`_plaqseg/models/*.pt`, `_research/clf/plaque_clf.pt`) are committed as **ordinary git
+> blobs** — `.gitattributes` declares an LFS rule for `*.pt`, but git-lfs was never installed when
+> they were added, so they are not LFS pointers. A Zenodo source archive will therefore **include the
+> CC BY-NC-SA 4.0 weights** (see LICENSING.md); decide whether that is acceptable before flipping the
+> switch. Contributors adding *new* large binaries should still use LFS or a Release asset — but note
+> that pushing a `.pt` through LFS would break the Hugging Face Space's shallow clone
+> (`webapp/Dockerfile`, `git clone --depth 1`) unless a `git lfs pull` step is added there.
 
 - [ ] DOI obtained and added to `CITATION.cff`.
 - [ ] Confirm author list + affiliations + ORCID iDs in `CITATION.cff`.
@@ -74,7 +79,7 @@ Only when you want the tool itself to be the contribution. Pick the venue by how
 
 ### Reproducibility / open-source  *(you're ~80% here already ✓)*
 - [x] Public repo, OSI license (Apache-2.0), extensive docs (guide, **Tool Atlas**, methods, validation, credits), cross-platform installers, macOS build CI.
-- [ ] **Automated tests wired into CI** (you have `plaque_app.py --uitest`, `--smoke`, `_research/full_test.py`; add a GitHub Actions test workflow that runs them on push).
+- [x] **Automated tests wired into CI**: the pytest suite in `tests/` runs on every push via `.github/workflows/tests.yml` (Python 3.9 and 3.12) together with `python plaque_app.py --smoke`. It covers the engine layer (PT-1..PT-6, PT-9, no hard-coded paths) but **not** the GUI, editor, export paths, Validate tab or the Precise pipeline — add those before a JOSS submission.
 - [ ] `CITATION.cff` ✓ (added) · add `CONTRIBUTING.md` · a Zenodo DOI (above).
 
 ### Venue options

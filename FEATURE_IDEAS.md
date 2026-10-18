@@ -15,8 +15,8 @@ sit *around* detection and never alter the validated numbers.
 ## 1. Per-plaque QC / uncertainty flag in the CSV
 
 **What.** Add a `QC_FLAG` column (and a short `QC_REASON`) to the per-plaque output written
-by `plaque_size_tool.save_data()` (`plaque_size_tool.py:249`, cols list) and the GUI's
-`save_results()` (`plaque_gui.py:425`). Each plaque gets an at-a-glance quality tag such as
+by `plaque_size_tool.write_one_data()` (`MEASUREMENT_COLUMNS` list) and the GUI's
+`save_results()` (`plaque_gui.py`). Each plaque gets an at-a-glance quality tag such as
 `OK`, `EDGE` (touches the dish rim / image border), `TINY` (below the size gate — only
 present in Sensitive), `MERGED?` (very high area vs. median → likely two plaques), or
 `LOW_CONF` when the optional plaque-vs-texture classifier

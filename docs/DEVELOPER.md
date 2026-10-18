@@ -18,8 +18,8 @@ and how to rebuild the apps and installers.
 | `summarize_plates.py` | Aggregates `data-green-*.csv` → `summary.csv` (no re-detection). |
 | `measure_samples.py` | Walks a sample-folder tree → per-photo normal + sensitive results + dish-check images + `SUMMARY.csv`. |
 | `compile_excel.py` | Compiles per-photo PST results into one Excel workbook. |
-| `make_figure.py`, `plot_sensitive_violin.py` | Publication violin figures (pooled distribution + per-plate medians). |
-| `run_viralplaque.py` | Drives the external ImageJ ViralPlaque macro (cross-tool comparison; uses `_imagej/`). |
+| `make_figure.py`, `plot_sensitive_violin.py` | Publication violin figures. `make_figure.py` overlays per-plate medians (white dots); `plot_sensitive_violin.py` draws individual plaque points and prints n / plate count / pooled median per sample. Both take `--order`. |
+| `run_viralplaque.py` | Drives the external ImageJ ViralPlaque macro (cross-tool comparison; expects an `_imagej/` folder, which is author-local, gitignored and not in the public repo). |
 | `plaque_app.py` | Desktop-app entry point + headless self-tests (`--smoke`, `--uitest`, `--precise-smoke`). |
 | `app/` | The PySide6 desktop app (see below). |
 | `precise/` | The Precise pipeline (see below). |
@@ -30,10 +30,19 @@ and how to rebuild the apps and installers.
 
 | Module | Role |
 |---|---|
-| `app/ui.py` | Builds and launches the main window; `launch()`, `uitest()`. |
+| `app/ui.py` | Builds and launches the main window (seven tabs: Measure, Batch, Compare turbidity, Analyze, Validate, Fiji agreement, About); `launch()`, `uitest()`. |
 | `app/engine_api.py` | **The only module that imports the validated engine.** Funnels every engine call through a lock so the process-global flags are set atomically; exposes `detect_single`, `measure_table`, `save_single`, `detect_precise`, `run_compare`, `precise_available`, `smoke`. |
 | `app/workers.py` | Qt worker threads (detection/compare run off the UI thread). |
 | `app/canvas_editor.py` | The editable image canvas (zoom, add/remove, dish circle). |
+| `app/plaque_canvas.py` | The native-Qt plaque editor used by the Measure tab (QGraphicsView): detect-in-area, add/erase/trace, scale bar, Save / Export all (writes `data_<stem>.csv` + `run_metadata.json`), ground-truth label export. |
+| `app/study_tab.py` | The Analyze tab: samples → replicate plates → violin / stats figures inside the app. |
+| `app/validate.py` | The Validate tab's scorer (also a CLI): re-runs each engine on labelled plates and matches by centre, `max(4 px, 0.5 × gold radius)`. |
+| `app/agreement.py` | Method-comparison statistics (Bland–Altman, ICC(A,1), Pearson r, regression slope) behind the Fiji agreement tab. |
+| `app/fiji_dialog.py` | "Compare vs Fiji…" dialog: pairs a Fiji Results CSV to the app's plaques by position. |
+| `app/fiji_export.py` | Writes the Fiji bundle (calibrated `_plate.tif` crop, `RoiSet.zip`, matching CSV). |
+| `app/fiji_match.py` | Pairs app plaques with Fiji measurements by centroid. |
+| `app/imagej_roi.py` | Dependency-free writer for ImageJ `.roi` files / `RoiSet.zip`. |
+| `app/batch_measure.py` | Headless (Qt-free) batch folder processor behind the Batch tab; writes `out_batch/<name>/` and `all_plaques.csv`. |
 | `app/widgets.py`, `app/style.py` | Reusable widgets and theming. |
 | `app/env_paths.py` | **Portable** discovery of the `plaque` / `plaqseg` conda interpreters (replaces the old hard-coded paths). |
 | `app/resources/` | Bundled icon + sample images (also packaged into the frozen app). |

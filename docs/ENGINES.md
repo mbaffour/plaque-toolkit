@@ -31,7 +31,10 @@ The exact **measurement** algorithm from:
 - 2-decimal-place string values, `DIAMETER_MM` derived from the truncated `AREA_MM2`,
   concentric-pair de-dup that drops the **first-visited** member of each pair and keeps the second
   (verified against upstream's own loop; it was previously described as dropping both), largest-contour dish — all preserved.
-- Reproduces the published literature **within ~0.04 mm**.
+- **Byte-identical** to the upstream program on neutral-grey TIFF/PNG input (`--upstream-exact`
+  verified); on colour-cast or JPEG plates individual diameters can differ from upstream by up to
+  **0.5 mm** (see [UPSTREAM_EXACT.md](UPSTREAM_EXACT.md)). The "≤ ~0.04 mm" figure quoted elsewhere
+  is **Current vs Published**, not Published vs the literature.
 - This is the **only** mode you may cite as a published, peer-reviewed method.
 
 ### How Published differs from the original upstream *program*
@@ -67,10 +70,14 @@ The same published detection/sizing **algorithm**, with two classes of fix:
 
 1. **Bug-fixes + numeric values** — measurements are kept numeric instead of being truncated
    to 2 decimal places.
-2. **Corrected dish / calibration** — the dish is chosen as the **roundest large contour**, so
+2. **Corrected dish / calibration** — in the desktop app, the click-editor and the Precise front
+   end (`plaque_gui.run_detection`) the dish is chosen as the **roundest large contour**, so
    the dark surround around the dish can no longer hijack the mm scale (a real failure mode of
    the original on top-lit photos). The corrected calibration is `mm_per_px = plate_mm /
-   dish_diameter_px`.
+   dish_diameter_px`. **Not on the CLI:** `plaque_size_tool.py` (and the Measure / Batch `.bat`
+   launchers that call it) and `plaque_turbidity.py` still select the **largest** contour, as
+   upstream does (AUDIT PT-8, deferred), so Current-on-the-CLI can calibrate differently from
+   Current-in-the-app on such photos.
 
 On the 17 bundled test plates this leaves the plaque **count unchanged**; individual-plaque
 `DIAMETER_MM` differs from Published by **≤ ~0.04 mm** (below imaging resolution — the
@@ -121,7 +128,8 @@ segmentation model and a series of precision gates:
    passes a center-vs-ring contrast floor on a float flat-fielded lawn.
 6. **Optional blob recovery** (sparse only, off by default — over-detects on textured lawns).
 7. **Union + dedup** of PlaqSeg + gated-PST + gated-blob, by match radius.
-8. **Optional learned classifier gate** (`--clf`, default **OFF**) — see below.
+8. **Optional learned classifier gate** (`--clf`; default **OFF on the CLI**, **ON** in any
+   in-process run — Full installer, unified env, web app) — see below.
 9. **Sizing + output** — per-plaque CSV, a colored overlay (green = PlaqSeg, blue = recovered,
    cyan lawn ring, dish circle, physical scale bar) and a one-line JSON summary.
 
@@ -146,14 +154,20 @@ the model judges to be real plaques.
 
 - **Architecture / data:** a ResNet-18 trained on detector-union labels plus an independent
   vision ground-truth set and OnePetri real-phage data (15,659 boxes total).
-- **Performance:** leave-one-plate-out **F1 ≈ 0.95** on held-out plates.
-- **Opt-in, default OFF** (`PRECISE_CLF=1` or `run_precise.py --clf`) — so the validated,
-  hand-tuned-contrast path is unchanged unless you ask for the gate.
+- **Performance:** leave-one-plate-out **F1 0.954** on held-out plates. Gate on vs off inside the
+  Precise engine, on 4 plates: precision +0.03, recall −0.01, F1 unchanged.
+- **Default depends on how Precise is launched.** **OFF** on the CLI (`PRECISE_CLF=1` or
+  `run_precise.py --clf` turns it on) and in the two-env run-from-source app path, which launches
+  that CLI — so the validated, hand-tuned-contrast path is unchanged unless you ask for the gate.
+  **ON** in the Full installer and any in-process run (`precise/pipeline.run_inprocess(clf=True)`,
+  which the app uses whenever torch imports) and in the web app. `summary_<tag>.json` records
+  `clf_gate` so you can tell which you got.
 - **Validation status:** **locally validated by the authors, not independently/peer-reviewed.**
-  Its outputs — inside the Precise engine — were validated on the authors' own plates (detection
-  precision 1.00 and diameter *r* ≥ 0.99 vs hand-labelled ground truth; ICC 0.97 vs independent
-  Fiji tracing — see [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)). Its *training* labels are
-  partly detector-derived, so treat the training set (not the validation) with that caveat.
+  Its outputs — inside the Precise engine — were validated on the authors' own plates (pooled
+  detection precision 0.95 / recall 0.53 / F1 0.68 over 9 hand-labelled plates, 21 false positives;
+  ICC 0.97 vs independent Fiji tracing — see [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)). Its
+  *training* labels are partly detector-derived, so treat the training set (not the validation)
+  with that caveat.
 
 The model and inference code live in `_research/clf/` (`plaque_clf.pt` + `infer.py`), which the
 Precise pipeline loads when `--clf` is enabled.
@@ -191,4 +205,13 @@ to **pixel-only** output and warn.
   distance-transform watershed and tags recovered plaques `SOURCE=watershed`. It recovers
   real-sized plaques on dense plates and **nothing** on well-separated ones (no
   over-segmentation). Apply it **uniformly** across all compared groups or not at all.
-- The Precise classifier gate (`--clf`) is **off by default**.
+- The Precise classifier gate (`--clf`) is **off by default on the CLI** and on in in-process runs
+  (see §4).
+
+### App vs CLI (the `-small` gates)
+
+In the desktop app, **Current and Sensitive always run with the engine's `-small` gates** — so
+"Current" in the app equals the CLI's `plaque_size_tool.py -small`, not the bare CLI default — while
+**Published runs without `-small`** unless the Batch tab's **Small plaques** box is ticked (the
+Measure tab and the CLI never add `-small` to Published). Say which you used when you report a
+run: the app's `run_metadata.json` and the CLI's provenance record both store the flag.

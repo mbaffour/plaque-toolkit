@@ -9,6 +9,128 @@ the conditions. A release with no such heading changed no number.
 
 ---
 
+## Unreleased — the 2026-10 audit (branch `claude/audit-2026-10`)
+
+A second audit, this time of the desktop app, the statistics packages, the Precise/ML
+engine, the web app, packaging and every document, plus a fresh pass over the engines.
+Every change is traceable to a finding in [`AUDIT-2026-10.md`](AUDIT-2026-10.md)
+(PT-23 … PT-85). Before any change, v1.1.0 was frozen in
+[`releases/v1.1.0/`](releases/v1.1.0/MANIFEST.md) and every fix was checked against it:
+**every `data-green-*.csv` in every engine mode, and every turbidity measurement file, is
+byte-identical to v1.1.0 on the bundled plates.**
+
+### Numbers that change
+
+None of these touches `plaque_size_tool.py --published` output.
+
+* **Turbidity, 16-bit input (PT-27).** Detection now runs on the same 8-bit conversion
+  `plaque_size_tool.py` uses, so both tools find the same plaque set on a 16-bit TIFF
+  (1.1.0 could differ by 10 plaques on one plate; 1.0.x matched). 8-bit input is unchanged.
+* **Turbidity with `--blank` plus `--flat`/`--dark` (PT-28).** The flat/dark correction is
+  applied to the blank in its own frame before alignment; previously it cancelled out of
+  every OD whenever the blank dish was not exactly where the sample dish is. Blank-only and
+  lawn-relative runs are unchanged.
+* **Desktop app, Batch tab, Published (PT-33).** No longer runs the engine with `-small`
+  unless the new "Small plaques" box is ticked; Batch Published now equals the Measure tab
+  and the CLI cell for cell (it differed on every bundled plate).
+* **Desktop app and editor, Published `DIAMETER_MM` (PT-30).** Uses the Published rounding
+  (diameter from the 2-dp area), as the CLI does: 0.01 mm on about 3 % of plaques.
+* **Precise (PT-36).** PlaqSeg boxes cut by an internal tile edge are dropped (they
+  double-counted a plaque straddling a seam and added a spurious small diameter).
+  `PLAQSEG_KEEP_EDGE=1` restores the old behaviour.
+* **Statistics (PT-41, PT-42, PT-44).** LONG files with several metrics now require
+  `--value <metric>` (they were pooled across metrics); Welch's ANOVA + Games–Howell replace
+  ANOVA + Tukey when Levene rejects equal variances; grouped control comparisons are
+  Holm-adjusted within each group (raw p kept as `p_raw`).
+
+### Output files that change (columns added, no cell changed)
+
+* `summary.csv`: `MM_CALIBRATED`; plates in natural order (`Plate_2` before `Plate_10`);
+  dish-less plates show blank mm cells instead of averaged zeros.
+* `qc.csv`: `NATIVE_MAX`, `FULL_SCALE`, `FLAT_APPLIED`, `DARK_APPLIED`; with
+  `--dilution`/`--volume-ul` also `PFU_PER_ML_CI95_LO/HI` and `COUNT_IN_RANGE_30_300`.
+* `run_metadata.json`: `run_id`, `n_failed`, `previous_runs`, per-image `error`.
+* `summary_<tag>.json` (Precise): `settings`, `yolo`, `library_versions`, `toolkit_version`.
+* `pairwise`/grouped CSVs: `p_raw`; agreement stats: `ba_slope`, `ba_slope_p`,
+  `loa_ci_halfwidth`.
+
+### Added
+
+* `plaque_size_tool.py -o/--out`; `summarize_plates.py -r/--recursive` (also reads the
+  app's `data_<plate>.csv` and the Batch tab's `out_batch/<plate>/`); `--order` on
+  `compile_excel.py`, `plot_sensitive_violin.py`, `make_figure.py` (PT-22); `--no-small` on
+  `measure_samples.py`, `run_viralplaque.py`, `add_scale.py`; `run_viralplaque.py --plate`.
+* The Batch tab's "Small plaques" checkbox.
+* Provenance (`run_metadata.json`) from the editor's Save and the app's Export all, with
+  `edited: true` when hand edits are present.
+* `tests/test_audit_2026_10.py`: 32 regression tests (85 in total).
+* `releases/v1.1.0/`: the frozen record of the previous release and its outputs.
+
+### Fixed
+
+* Same-named images in different sub-folders of a `-d` batch no longer overwrite each
+  other (named `<subfolder>__<stem>` on collision); the same for turbidity plate labels.
+* A corrupt file no longer aborts a `-d` batch: it is recorded in `run_metadata.json`, the
+  rest is measured, and the run exits non-zero. Provenance is flushed after every image and
+  earlier runs in the same folder are kept under `previous_runs` instead of overwritten.
+* `-p 0` / `-p 90mm` are rejected (they produced all-zero mm columns / a traceback).
+* Every walker skips the toolkit's own output folders and files (a second run ingested
+  `out/out_<plate>.tif` as a plate).
+* Turbidity: a named `--dark`/`--flat` that cannot be read stops the run (it used to drop
+  both silently and record them as applied); references of another size are fitted per
+  plate (mixed-size folders crashed); zero-plaque runs write header-only CSVs (the app's
+  Compare tab raised on the 1-byte files); the console no longer reports "polarity passed"
+  in lawn-relative mode; `FRAC_SATURATED` is per channel; `--dilution < 1` is rejected
+  (it is the reciprocal factor); a Sensitive measurement earlier in the app session no
+  longer leaks its size gates into a "Published" turbidity batch.
+* `cv2.imwrite` failures (non-ASCII paths on Windows) can no longer pass silently: a
+  checked writer encodes with the same encoder and raises if the file is not written.
+* App: Precise never shows another engine's plaques under its label; Orient works on an
+  `out/<stem>_oriented.png` copy so exported labels validate (they scored 0 % recall);
+  the pasted-Fiji parser takes the value, not the row number; "Compare vs Fiji" on an
+  uncalibrated plate uses pixel diameters instead of 0 mm; an editor error can no longer
+  leave the Measure tab locked; the frozen build no longer launches itself as "python".
+* Editor: a drag released over a button no longer adds a plaque; Undo restores the
+  Sensitive state as well as the plaques.
+* Statistics: groups with one plate report "n/a" instead of crashing or "ns"; a Tukey p
+  that underflows to 0 is significant in bracket selection; the two-group sentence quotes
+  plate means ± SEM when the test ran on plate means; the browser app's replicate selector
+  no longer defaults to the group column; "p 0.958" → "p = 0.958".
+* Agreement: columns are matched by whole tokens and never the same column twice (the
+  CLI compared the **area** columns in a "diameters" report on the repo's own validation
+  file); the chosen pair is always printed; proportional bias and limits-of-agreement
+  confidence intervals are reported.
+* Precise: engine globals are restored after its PST passes; the smoke gate writes to a
+  temp folder (it wrote inside the `.app` that was then uploaded); `run_precise.py`
+  explains a missing `plaqseg` env instead of a raw `ModuleNotFoundError`.
+* Packaging: the macOS bundle ships the licence texts and reads its version from
+  `_version.py` (it said 1.0.0); installers say 1.1.0; `pip install .` includes
+  `provenance.py` and the other run-time modules; `pillow-heif` and `openpyxl` declared.
+* `label_store`: ids cannot collide (digest in the id, refuse to overwrite); stored labels
+  keep the image's name and digest, not the user's absolute path.
+* Web app: temp folders are purged between requests.
+* Helper scripts: `run_viralplaque.py` records a failed/timed-out ImageJ run as
+  `count = None` with a note (not 0) and no longer hard-codes a 100 mm dish;
+  `measure_samples.py` flags a dish-less plate `NO DISH` and keeps errors in their own
+  column; `compile_excel.py` / `plot_sensitive_violin.py` give a clear message on an empty
+  tree; `scalebar.py` relabels a bar it had to shorten; `heic_to_tiff.py` honours EXIF
+  orientation and no longer claims the engines cannot read HEIC.
+* Documentation: the real test suite is described (not "21 checks"); `PUBLICATION.md`
+  describes the test rule the code uses; `TURBIDITY_REL` is defined correctly in the HTML
+  guides; the Precise ground truth is reported from the 9-plate scoring in `validation/`
+  (precision 0.95, recall 0.53), and the engine-vs-itself sizing claim is relabelled; the
+  de-dup rule, the dish rule, the classifier default, the seven app tabs, the version
+  citations and the `qc.csv` columns are stated as the code has them.
+
+### Known issues / owner decisions
+
+See `AUDIT-2026-10.md` → "Owner decisions": the release bump, `TURBIDITY_REL` (PT-17),
+the sRGB luma order (PT-80), the negative-control figures (PT-63), the weights licence
+(PT-68/PT-16), the web app's deployment pin, and the still-open items from 2026-09
+(PT-1 default flip, PT-7 table date, PT-8, PT-12 column rename).
+
+---
+
 ## 1.1.0 — 2026-10-13
 
 The 2026-09 audit release. Every change below is traceable to a finding in
@@ -104,7 +226,7 @@ check above. None of them touch `plaque_size_tool.py` or `plaque_turbidity.py` (
 ### Known issues
 
 See `AUDIT-2026-09.md` for the full disposition of all 22 findings, including the
-ones deliberately left open (PT-8, PT-10 through PT-12, PT-14 through PT-22) and the
+ones deliberately left open (PT-8, PT-11, PT-12, PT-14 through PT-22) and the
 maintainer decisions that are not the toolkit's to make.
 
 ---

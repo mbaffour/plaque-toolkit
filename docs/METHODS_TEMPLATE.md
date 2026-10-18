@@ -2,8 +2,10 @@
 
 A ready-to-adapt **Methods** section for a manuscript that **measures plaque size** (not just
 counts) with this toolkit. Copy the prose below into your paper and replace every
-`[SQUARE-BRACKET]` placeholder with your own specifics. The numbers already written in are the
-toolkit's own verified values — do not change them; only fill the brackets.
+`[SQUARE-BRACKET]` placeholder with your own specifics. The mm/px scale is **computed per image**
+from the detected dish (or from the Set-plate circle / a ruler), so there is no toolkit-wide
+calibration constant — every scale figure below is a placeholder for *your* ruler check; the
+developers' own value appears only as an example.
 
 This template is deliberately conservative about what you may claim. Read
 [PUBLICATION.md](PUBLICATION.md) (what is and isn't defensible) and
@@ -54,8 +56,10 @@ routes and delete the other.
 > scale (mm per pixel) was read directly from a known distance along the ruler.
 
 > **Validation of the scale.** The spatial calibration was validated against a physical ruler,
-> which gave a true scale of **0.040 mm/px (25 px/mm)**, consistent to within **+/-1% across 6
-> photographs** of the same setup.
+> which gave a true scale of **`[YOUR mm/px]` mm/px (`[YOUR px/mm]` px/mm)**, consistent to within
+> **`[+/-X]`% across `[N]` photographs** of the same setup. *(Example from the developers' rig:
+> 0.040 mm/px, 25 px/mm, +/-1% across 6 photographs — see TESTING_AND_VALIDATION.md §5. Your
+> camera and distance will differ; measure your own.)*
 
 **The calibration subtlety you must get right (state it):** the vendor's nominal "90 mm / 100 mm"
 figure is the **lid** diameter, but plaques form on the **~85 mm agar base**, not the lid.
@@ -111,12 +115,15 @@ validation — the numbers below are yours to fill in from
 [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md).
 
 > **A first local validation has been recorded** in
-> [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md) (2026-07-07): against hand-labelled ground truth,
-> Precise scored **precision 1.00** with **diameter agreement r ≈ 0.99 (MAE ≤ 0.0025 mm)**, at
-> lower recall (≈ 0.3–0.4) on very dense plates; an independent cross-check in real Fiji/ImageJ gave
-> **app-vs-Fiji size agreement r = 0.9999**. Treat that as the *foundation* — it is a small sample
-> (2 GT plates + 1 Fiji plate) and still needs more plates, negative controls, and plate-level
-> statistics before publication (see VALIDATION_RESULTS §5).
+> [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md): detection was scored on **9 hand-labelled plates
+> (745 plaques)**; pooled Precise **precision 0.95 / recall 0.53 / F1 0.68** (21 false positives),
+> per-plate precision 0.00–1.00 and recall 0.00–0.90; the two densest plates (IMG_3907, IMG_3912)
+> gave precision 1.00 at recall 0.40 / 0.28. The matched-diameter agreement in that scoring
+> (r ≥ 0.99, MAE ≤ 0.0025 mm) is a **self-consistency** check — many label contours are the
+> engine's own — not agreement with a human; human sizing agreement comes from the Fiji comparison
+> (n = 100 plaques, r = 0.9999, see VALIDATION_RESULTS §2B). Treat that as the *foundation* — it
+> still needs negative controls archived in the repository and plate-level statistics before
+> publication (see VALIDATION_RESULTS §5).
 
 **"Validated" here means _your own local validation_, not an independent / peer-reviewed stamp.**
 Precise can reach high detection precision on a given setup — on the developers' own plates it scored
@@ -147,10 +154,17 @@ Jaschke, 2021).
 > **The plate — not the individual plaque — was treated as the biological replicate.**
 > Per-plaque measurements were first aggregated to **per-plate means** (`[which summary, e.g. mean
 > or median plaque size per plate]`), and all comparisons were made on these plate-level values,
-> with **>= 3 plates per condition**. Conditions were compared using non-parametric tests
-> (`[Mann-Whitney U for two groups / Kruskal-Wallis for more than two]`) `[or: a linear mixed model
-> with plate as a random effect]`. `[STATE n plates per condition, the exact test, and the software
-> / package used.]`
+> with **>= 3 plates per condition**. Conditions were compared using `[Welch's t-test for two
+> groups / one-way ANOVA with Tukey HSD for more than two — or Welch's ANOVA with Games-Howell
+> post-hoc where Levene's test rejected equal variances]` on the plate means `[or, with >= 8 plates
+> per group and a failed Shapiro-Wilk or Levene test: Mann-Whitney U / Kruskal-Wallis with Dunn
+> post-hoc]` `[or: a linear mixed model with plate as a random effect]`. `[STATE n plates per
+> condition, the exact test, and the software / package used.]`
+
+The bundled `plaque_stats` applies exactly that rule by default (`--parametric auto`): a parametric
+test on plate means whenever any group has fewer than 8 plates, switching to the rank tests only
+at >= 8 plates per group when Shapiro-Wilk or Levene fails. `--parametric parametric|nonparametric`
+overrides it; report whichever test was actually used (it is printed in the report).
 
 Treating individual plaques as independent replicates is pseudoreplication: it inflates *n* and
 manufactures significance. Aggregate to the plate first.
@@ -180,16 +194,18 @@ a validated method (Trofimova & Jaschke, 2021; doi:10.1016/j.virol.2021.05.011) 
 
 ---
 
-## 7. Worked examples (with the real calibration numbers)
+## 7. Worked examples (fill in your own calibration numbers)
 
-Two short sentences you can adapt, using the toolkit's verified scale:
+Two short sentences you can adapt. The figures shown are the developers' rig (0.040 mm/px) and
+serve only as an example of the arithmetic — substitute the scale from *your* ruler check:
 
-> *"At the validated scale of 0.040 mm/px (25 px/mm), a plaque with a convex-hull area of 5000 px^2
-> has an area-equivalent diameter of d = 2*sqrt(5000/pi) = 79.8 px = 3.19 mm (halo included)."*
+> *"At the validated scale of `[0.040]` mm/px (`[25]` px/mm), a plaque with a convex-hull area of
+> 5000 px^2 has an area-equivalent diameter of d = 2*sqrt(5000/pi) = 79.8 px = `[3.19]` mm (halo
+> included)."*
 
-> *"The spatial calibration agreed with a physical ruler at 0.040 mm/px (25 px/mm) to within +/-1%
-> across 6 photographs, so a 100 px feature corresponds to 4.0 mm with an uncertainty of about
-> +/-0.04 mm."*
+> *"The spatial calibration agreed with a physical ruler at `[0.040]` mm/px (`[25]` px/mm) to within
+> `[+/-1]`% across `[6]` photographs, so a 100 px feature corresponds to `[4.0]` mm with an
+> uncertainty of about `[+/-0.04]` mm."*
 
 ---
 

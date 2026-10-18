@@ -14,20 +14,20 @@ developer-oriented, load-bearing detail see [STRUCTURE.md](STRUCTURE.md); this p
 
 ---
 
-## 1. On your machine (the runnable stuff, wherever you keep it — `~/Downloads/` in this example)
+## 1. On a user's machine (the runnable stuff, wherever it is kept — a `Downloads/` folder in this example)
 
 ```
 Downloads\
-├── Plaque Size Tool\              ← THE REPO (everything below is here; also the GitHub repo)
-├── Plaque Stats Analysis\         ← standalone stats workspace (synced copy) — double-click launchers,
+├── Plaque Size Tool\              ← THE REPO (a clone of github.com/mbaffour/plaque-toolkit; everything below is here)
+├── Plaque Stats Analysis\         ← optional standalone stats workspace (a synced copy of plaque_stats/ made by
+│                                     plaque_stats/sync_to_downloads.ps1) — double-click launchers,
 │                                     plus  "Standalone App (no Python needed)\"  (the frozen .exe)
-├── Output\                        ← the installers (gitignored):
+├── Output\                        ← the built installers, if you build them (gitignored):
 │     PlaqueToolkitSetup.exe (Light) · PlaqueToolkitFullSetup.exe (Full, Precise built-in)
-└── (your data folders — Plaques to measure\, calibration plates, etc. — never in git)
+└── (data folders — e.g. the authors' `Plaques to measure\`, calibration plates — never in git)
 ```
-- **GitHub:** `github.com/mbaffour/plaque-toolkit` (public). Pushed through the docs/plaque_stats work;
-  the newest batches (rigorous agreement stats, browser apps, educational guides) are committed locally
-  and pushed when you say so.
+- **GitHub:** `github.com/mbaffour/plaque-toolkit` (public) is the canonical copy; releases are tagged
+  there and built by CI (see `docs/PUBLISHING_CHECKLIST.md`).
 
 ---
 
@@ -61,7 +61,7 @@ Utility scripts at root: `add_scale.py`, `scalebar.py`, `heic_to_tiff.py`, `summ
 
 | File | Role |
 |---|---|
-| `ui.py` | Main window: **Measure · Batch · Compare turbidity · Validate · Fiji agreement · About** tabs. |
+| `ui.py` | Main window: **Measure · Batch · Compare turbidity · Analyze · Validate · Fiji agreement · About** tabs (seven). |
 | `plaque_canvas.py` | The interactive editor (add/erase/trace, ROI re-scan, scale bar) + **labelling export** (`export_groundtruth` → `labels_*.json` + CSV). |
 | `engine_api.py` | The one locked door to the engines (Published/Current/Sensitive/Precise). |
 | `validate.py` · `agreement.py` · `fiji_*.py` | On-your-plates validation + tool-vs-Fiji agreement stats. |
@@ -97,8 +97,8 @@ plaque_stats\
 |---|---|
 | `_plaqseg\models\small.pt`, `nano.pt` | The **PlaqSeg** YOLO detector — external, inference only (not trained here). |
 | `_research\clf\plaque_clf.pt` + `infer.py` | The **deployed classifier** (the only committed `_research` artifacts). |
-| `_research\clf\` (train_clf, loop/, external/…) | Classifier **training** code + data (gitignored bulk). |
-| `_research\autoresearch\`, `groundtruth\`, `autotune\` | The FP-reduction study, ground-truth building, Precise tuning. |
+| `_research\clf\` (train_clf, loop/, external/…) | Classifier **training** code + data — author-local, gitignored, not in the public repo. |
+| `_research\autoresearch\`, `groundtruth\`, `autotune\`, `neg_control.py` | The FP-reduction study, ground-truth building, Precise tuning, blank-plate counting — **author-local, gitignored, not in the public repo** (the docs cite their outputs). |
 | **Labels for training** | A persistent, catalogued store: **`training_data\`** (labels + image copies + `catalog.csv` + metadata). Feed it from the app (**Export ▾ → Ground-truth labels**, auto-filed), from existing `labels_*.json`, or from **Fiji** — all via **`labelling\`**. Store engine: `label_store.py` (repo root). Gitignored (your data). |
 | **`labelling\`** | The three ways in + the Fiji macro/importer + launchers. See [labelling/README.md](../labelling/README.md). |
 

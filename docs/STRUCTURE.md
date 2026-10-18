@@ -117,12 +117,12 @@ the full categorized index. Grouped by purpose:
 | Item | Purpose |
 |---|---|
 | `Test_plates/` | Bundled sample plates (`large/`, `small/`) to try the tools. 🔒 (referenced by docs/examples) |
-| `Plaques to measure/` | The 21-plate study (7 phages × 3 replicates) with its compiled Excel, violins, and plot CSVs. 🔒 |
+| `Plaques to measure/` | The 21-plate study (7 phages × 3 replicates) with its compiled Excel, violins, and plot CSVs. **Author-local, gitignored — not in the public repo** (the `--root` default of `measure_samples.py` / `compile_excel.py` / `plot_sensitive_violin.py` / `run_viralplaque.py`). 🔒 |
 | `plates/` | Default input (drop) folder for `Batch Plates (CSV per plate).bat` — **empty by default** (drop your own plate photos here; they're gitignored so they're never committed). |
-| `IMG_3901.jpeg`, `IMG_3964.jpeg` | Calibration/ground-truth input photos referenced by several `_research/` scripts. **Keep.** |
-| `_research/` | Validation & method-development history: ground truth, blob/ensemble experiments, sweeps, the classifier (`clf/`). 🔒 (`clf/` is a Precise dep). |
+| `IMG_3901.jpeg`, `IMG_3964.jpeg` | Calibration/ground-truth input photos referenced by several `_research/` scripts. **Author-local, gitignored (`/IMG_*.jpeg`) — not in the public repo.** |
+| `_research/` | Validation & method-development history: ground truth, blob/ensemble experiments, sweeps (`autoresearch/`, `autotune/`, `neg_control.py`), the classifier (`clf/`). **Author-local and gitignored except `clf/plaque_clf.pt` + `clf/infer.py`**, which are the only `_research/` files in the public repo. 🔒 (`clf/` is a Precise dep). |
 | `training_data/` | The **persistent training-label store** (labels + image copies + `catalog.csv`) written by the app / `labelling/`. Only `README.txt` is tracked; the rest is gitignored (your data). Relocatable via `PLAQUE_TRAINING_DIR`. |
-| `_imagej/` | ImageJ + the ViralPlaque macros used by `run_viralplaque.py` for the cross-tool comparison. 🔒 |
+| `_imagej/` | ImageJ + the ViralPlaque macros used by `run_viralplaque.py` for the cross-tool comparison. **Author-local, gitignored — not in the public repo.** 🔒 |
 | `_robust/`, `_vfolder/` | Small image fixtures used in ad-hoc testing (gitignored). |
 | `out/`, `out_turbidity/`, `out_precise*/` | Tool results — created on first run, regenerable (gitignored). |
 | `_roboflow_key.txt` | A secret (gitignored; never commit). |

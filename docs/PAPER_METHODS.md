@@ -15,7 +15,7 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 > base)]` was included in the plane of the agar as a spatial reference for calibration.
 
 ### Plaque size measurement
-> Plaque size was measured with **Plaque Toolkit** (v1.0.2; https://github.com/mbaffour/plaque-toolkit),
+> Plaque size was measured with **Plaque Toolkit** (v1.1.0; https://github.com/mbaffour/plaque-toolkit; [DOI once minted]),
 > a desktop application built on the adaptive‑local plaque‑detection algorithm of the peer‑reviewed
 > Plaque Size Tool (Trofimova & Jaschke, 2021). Each image was spatially calibrated to millimetres
 > `[from the dish diameter / from the in‑frame ruler]`. Plaques were detected `[with the Published
@@ -39,13 +39,13 @@ specifics (camera, illumination, host/phage, engine used, number of plates).
 > F1 ≈ 0.95). Adding the external datasets changed held‑out F1 only marginally (VACVPlaque −0.003;
 > OnePetri +0.0003), so performance was driven mainly by the in‑house ground truth and
 > hard‑negative mining. A separate false‑positive‑reduction analysis on uninfected control plates
-> found the residual false‑positive rate (≈ 3 per blank plate for Precise) was not further reducible
+> found the residual false‑positive rate (≈ 3 per blank plate for Precise `[owner to confirm: two blank-plate runs with different settings exist — 3.1 ± 3.0 and 3.35 FP/blank; the per-plate data is not in the repository, so archive one run under validation/ and quote that one]`) was not further reducible
 > by classifier or gate tuning. Full training details and code are in the software's
 > `docs/TRAINING_AND_MODELS.md` and model card. *(Include this paragraph only if you used the
 > Precise engine.)*
 
 ### Validation against manual measurement (Fiji/ImageJ)
-> To validate the software's measurements, **100 plaques** `[spanning N plates and a range of sizes]`
+> To validate the software's measurements, **n = 100 plaques from `[owner to confirm: N]` plates** `[and a range of sizes]`
 > were additionally measured **independently** in Fiji/ImageJ (Schindelin et al., 2012) by manual
 > tracing, blind to the software's boundaries, on the same calibrated images. Agreement between the two
 > methods was quantified by Bland–Altman analysis (mean bias and 95% limits of agreement; Bland &
@@ -93,7 +93,9 @@ Use `PlaqueToolkit_vs_Fiji_BlandAltman.png` (this folder / your Downloads).
   above is *your own local* size validation, which is exactly what this section provides.
 - **Size vs count.** This validates plaque **size**. If you report plaque **counts / titre**, validate
   those separately (whole‑plate hand counts; and note the negative‑control false‑positive floor —
-  Precise ≈ 3 per blank plate on this setup).
+  Precise ≈ 3 per blank plate on this setup — note two blank-plate runs with different settings
+  exist and neither's per-plate data is in the repository; the maintainer must archive one under
+  `validation/` and reconcile [owner to confirm]).
 - **Report the bias, don't hide it.** State the −0.03 mm (≈1.8%) offset and the 95% limits of
   agreement; a stated, size‑independent bias is normal in method comparison and reads as rigour.
 - **Report plaques *and* plates; the plate is the experimental unit.** Write "n = 100 plaques from

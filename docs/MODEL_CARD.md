@@ -22,13 +22,16 @@ Full training narrative and the numbers' sources are in
 - **Deployed checkpoint:** `_research/clf/plaque_clf.pt` — **byte-identical (md5 `72413d31…`) to
   `_research/clf/loop/plaque_clf_onepetri.pt`**, the OnePetri-augmented, leave-one-plate-out
   fine-tuned model. Inference: `_research/clf/infer.py`.
-- **Version / date:** v1 (fine-tuned), 2026. Toolkit tag `v1.0.2`.
+- **Version / date:** v1 (fine-tuned), 2026. Shipped with Plaque Toolkit v1.1.0 (the v1.0.x tags are
+  no longer on main).
 - **Licence:** inherits **CC BY-NC-SA 4.0 (non-commercial)** from OnePetri-derived training patches.
 
 ## Intended use
 - **Intended:** reduce false positives inside the **Precise** engine on bacteriophage plaque
-  plates, as a reviewable filter behind PST/PlaqSeg detection. Opt-in (`--clf`, off by default in
-  the CLI; on by default in the desktop app).
+  plates, as a reviewable filter behind PST/PlaqSeg detection. Off by default on the CLI
+  (`run_precise.py --clf` / `PRECISE_CLF=1`) and in the two-env run-from-source app path; on in the
+  Full installer, any in-process run (`pipeline.run_inprocess(clf=True)`) and the web app;
+  `summary_<tag>.json` records `clf_gate`.
 - **Users:** researchers measuring phage plaques, who visually review results.
 - **Out of scope:** a standalone detector; a substitute for human review; use as a citable
   "validated method"; non-plaque imaging; commercial use (licence).
@@ -52,16 +55,17 @@ robustness). Fine-tuning loop: 4 rounds of hard-negative mining under leave-one-
 |---|---|---|
 | **Cross-plate** (base, `train_clf.py`) | plates `I70T` + `WT2` (1604 patches) | **F1 0.978** (P 0.964 / R 0.992 @0.5) |
 | **Leave-one-plate-out** (fine-tune loop) | each of `WT` / `2-4` / `G12E` in turn | **F1 ≈ 0.95** (best 0.9544) |
-| **Deployed, in the Precise engine** — *authors' validation* | GT plates + n = 100 vs Fiji | detection **precision 1.00**, diameter **r ≥ 0.99** vs hand labels; **ICC 0.97** vs independent Fiji ([VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)) |
+| **Deployed, in the Precise engine** — *authors' validation* | 9 GT plates (745 plaques) + n = 100 vs Fiji | pooled detection **precision 0.95 / recall 0.53 / F1 0.68** (21 FP; per-plate precision 0.00–1.00; the two densest plates 1.00 at recall 0.40 / 0.28); **ICC 0.97** vs independent Fiji sizing ([VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)). Gate on vs off on 4 plates: precision +0.03, recall −0.01, F1 unchanged |
 | **External-data A/B** | same held-out | VACV **−0.0027** F1; OnePetri **+0.0003** F1 (both negligible) |
-| **Engine-level FP** (negative controls) | 17 blank plates | Precise **≈ 3 FP/blank** (irreducible by gate/classifier tuning) |
+| **Engine-level FP** (negative controls) | 17 blank plates | Precise **≈ 3 FP/blank** (irreducible by gate/classifier tuning). Two blank-plate runs with different settings exist (3.1 ± 3.0 vs 3.35); the per-plate data is not in the repository — the maintainer must archive one run under `validation/` and reconcile [owner to confirm] |
 
 Scoring: position match (centre within `0.5 ×` GT radius) → precision / recall / F1
 (`app/validate.py`, `_research/clf/gt_sanity.py`, `_research/clf/loop/gt_eval.py`).
 
 ## Limitations & ethical considerations
 - **Locally validated, not independently peer-reviewed.** As part of the Precise engine, the model
-  was validated by the authors on their own plates (precision 1.00 vs hand labels; ICC 0.97 vs Fiji —
+  was validated by the authors on their own plates (precision 0.95 / recall 0.53 pooled over 9
+  hand-labelled plates; ICC 0.97 vs Fiji —
   [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md)); only the **Published** engine is
   peer-reviewed/citable. Its *training* labels are partly detector-derived — a training-set caveat,
   not a validation gap.

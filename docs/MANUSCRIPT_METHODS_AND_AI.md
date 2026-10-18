@@ -10,7 +10,7 @@ fully-referenced version is in [PAPER_METHODS.md](PAPER_METHODS.md); the pipelin
 
 ## 1. Brief Methods paragraph (measurement + validation)
 
-> **Plaque size measurement.** Plaque size was measured with Plaque Toolkit (v1.0.2), a desktop
+> **Plaque size measurement.** Plaque size was measured with Plaque Toolkit v1.1.0 (https://github.com/mbaffour/plaque-toolkit; [DOI once minted]), a desktop
 > application built on the adaptive‑local plaque‑detection algorithm of the peer‑reviewed Plaque
 > Size Tool (Trofimova & Jaschke, 2021). Each image was calibrated to millimetres from the
 > `[85‑mm Petri‑dish rim / an in‑frame ruler]`. Plaques were detected with the toolkit's **Precise
@@ -40,7 +40,7 @@ fully-referenced version is in [PAPER_METHODS.md](PAPER_METHODS.md); the pipelin
 
 ## 2. Compact one‑sentence version (if space is tight)
 
-> Plaques were measured with Plaque Toolkit (v1.0.2; built on the Plaque Size Tool of Trofimova &
+> Plaques were measured with Plaque Toolkit v1.1.0 (https://github.com/mbaffour/plaque-toolkit; [DOI once minted]; built on the Plaque Size Tool of Trofimova &
 > Jaschke, 2021) using its in‑house Precise engine (Plaque Size Tool geometry fused with a PlaqSeg
 > YOLO‑segmentation detector), with manual verification of every plate and size reported as the
 > area‑equivalent diameter *d* = 2·√(*A*/π); as an in‑house extension, Precise was validated locally
@@ -51,7 +51,9 @@ fully-referenced version is in [PAPER_METHODS.md](PAPER_METHODS.md); the pipelin
 cite the **Published** engine as the peer‑reviewed method and describe **Precise** explicitly as an
 in‑house extension validated by your own comparison above. If you also report **counts/titre**,
 validate those separately and note the negative‑control false‑positive floor (Precise ≈ 3 per blank
-plate on this imaging setup).
+plate on this imaging setup — two blank‑plate runs with different settings exist, 3.1 ± 3.0 and 3.35
+FP/blank, and neither's per‑plate data is in the repository; the maintainer must archive one run
+under `validation/` and reconcile before quoting it [owner to confirm]).
 
 ---
 

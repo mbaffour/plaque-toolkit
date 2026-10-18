@@ -5,7 +5,9 @@
 >
 > **Validating the tool against manual measurements?** See the **[`agreement/`](agreement)** subfolder —
 > tool‑vs‑manual method comparison (Bland–Altman + ICC), with its own interactive
-> [`GUIDE.html`](agreement/GUIDE.html).
+> [`GUIDE.html`](agreement/GUIDE.html). Its CLI (`agreement.py pairs.csv`) **prints which two columns it
+> compared** (`columns: tool = …, manual/reference = …`) and, when it has to guess, prefers the
+> diameter or area columns that match `--what diameters|area`; pass `--tool` / `--manual` to name them.
 
 A small, self‑contained package for turning plaque measurements from **different samples** into
 **publication‑ready, reproducible, customizable violin plots** plus **statistics and data
@@ -45,6 +47,10 @@ T4,plate1,diameter_mm,2.51
 T7,plate1,diameter_mm,1.80
 T4,plate1,turbidity,0.12
 ```
+
+> A LONG file that holds **several** metrics **requires `--value <metric>`** (e.g. `--value diameter_mm`);
+> the tool refuses to run otherwise, because pooling diameter, area and turbidity would mix units.
+> A LONG file with a single metric needs no flag.
 
 ### The columns
 
@@ -122,7 +128,8 @@ Common options (everything is also settable from a JSON `--config`):
 | `--value diameter_mm` | which measurement to analyse (WIDE) / which `metric` (LONG) |
 | `--replicate replicate` | the plate column (omit if you truly have no replicates) |
 | `--unit auto\|replicate\|plaque` | statistical unit (default `auto` → per‑plate when replicates exist) |
-| `--parametric auto\|parametric\|nonparametric` | force a test family (default `auto`, chosen from normality + Levene) |
+| `--parametric auto\|parametric\|nonparametric` | force a test family (default `auto`: parametric on plate means whenever any group has < 8 replicates; normality + Levene decide only at ≥ 8 per group — see §4) |
+| `--subgroup col --control LEVEL` | second factor (e.g. host): each non‑control level is tested against `LEVEL` **within every group**; the p‑values are **Holm‑adjusted within each group** and the raw p is kept in the CSV as `p_raw` |
 | `--order T4,T7,lambda` | x‑axis order |
 | `--palette okabe\|set2\|tab10\|warm\|cool\|grays` or `"#hex,#hex,…"` | a named colour theme, or your own per‑sample colours |
 | `--annotate auto\|all\|adjacent\|none` | which pairs get significance brackets |
@@ -226,13 +233,22 @@ with `--unit plaque` (the report will flag it).
 
 | situation | omnibus | pairwise post‑hoc |
 |---|---|---|
-| **2 groups**, ~normal | Welch's *t*‑test | — (+ Cohen's *d*) |
-| **2 groups**, non‑normal | Mann–Whitney U | — |
-| **>2 groups**, ~normal | one‑way ANOVA | Tukey HSD |
-| **>2 groups**, non‑normal | Kruskal–Wallis | Dunn (Holm‑adjusted) |
+| **2 groups**, parametric | Welch's *t*‑test | — (+ Cohen's *d*) |
+| **2 groups**, non‑parametric | Mann–Whitney U | — |
+| **>2 groups**, parametric, equal variances | one‑way ANOVA | Tukey HSD |
+| **>2 groups**, parametric, **unequal variances** (Levene p < 0.05) | **Welch's ANOVA** | **Games–Howell** |
+| **>2 groups**, non‑parametric | Kruskal–Wallis | Dunn (Holm‑adjusted) |
 
-Normality is judged per group (Shapiro–Wilk) with an equal‑variance check (Levene); `auto` picks the
-non‑parametric family if either fails. Significance stars: `*** p<0.001, ** p<0.01, * p<0.05, ns`.
+**How `auto` chooses.** With **fewer than 8 replicates (plates) in any group** — the usual case —
+`auto` is **always parametric on the plate means**: Shapiro–Wilk is unreliable at that *n* and the rank
+tests are underpowered (Mann–Whitney cannot reach p < 0.05 at 3 vs 3). Only when **every group has
+≥ 8 replicates** does it consult Shapiro–Wilk (per group) and Levene (equal variances) and switch to the
+non‑parametric family if either fails. In the parametric >2‑group case, a failed Levene test switches
+ANOVA + Tukey to **Welch's ANOVA + Games–Howell** instead of ignoring the unequal variances.
+`--parametric parametric|nonparametric` overrides all of this; the report always states which test ran.
+For `--subgroup`/`--control` comparisons the two‑sample test above is used within each group and the
+p‑values are Holm‑adjusted within that group (raw p kept as `p_raw`). Significance stars:
+`*** p<0.001, ** p<0.01, * p<0.05, ns`.
 
 > The Python and R tools use the same logic and are cross‑checked to give the **same p‑values** on the
 > same data.

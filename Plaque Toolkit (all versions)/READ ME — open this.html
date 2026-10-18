@@ -131,7 +131,7 @@
     <div class="vc" id="v4">
       <h3>4 · ORIGINAL tool — one plate <span class="tag val">Validated</span></h3>
       <div class="file">4 - ORIGINAL published tool - one plate.bat</div>
-      <p>Exact published algorithm on a single photo. Diameters within ≤0.04&nbsp;mm of the literal original.</p>
+      <p>Exact published algorithm on a single photo. Byte-identical to the original program on neutral-grey TIFF/PNG; on colour-cast or JPEG plates individual diameters can differ from it by up to 0.5&nbsp;mm (see docs/UPSTREAM_EXACT.md). The ≤0.04&nbsp;mm figure is Current vs Published.</p>
       <p class="when">When: the value goes in your paper. This is the citable one.</p>
     </div>
     <div class="vc" id="v5">
@@ -150,8 +150,8 @@
     <div class="vc" id="v7">
       <h3>7 · Plaque Toolkit app <span class="tag enh">Enhanced</span></h3>
       <div class="file">7 - Plaque Toolkit app (everything).bat</div>
-      <p>One window: <b>Measure</b> tab (open → detect → edit → save, with a sensitive checkbox + Re-detect) and a
-         <b>Compare turbidity</b> tab. No command line.</p>
+      <p>One window, seven tabs: <b>Measure</b> (open → detect → edit → save), <b>Batch</b>, <b>Compare turbidity</b>,
+         <b>Analyze</b>, <b>Validate</b>, <b>Fiji agreement</b> and <b>About</b>. No command line.</p>
       <p class="when">When: you want everything in a single point-and-click app.</p>
     </div>
   </div>
@@ -199,7 +199,7 @@
 
   <h2>First time? / setup</h2>
   <ol class="steps">
-    <li>These launchers need the <code>plaque</code> conda environment (Python 3.9). It's already set up on this machine.</li>
+    <li>These launchers need the <code>plaque</code> conda environment (Python 3.9) — create it once with <code>conda env create -f environment.yml</code> (see docs/INSTALL.md).</li>
     <li>To measure your own plates: put photos in the <code>plates</code> folder (or just drag them onto a launcher).
         <b>iPhone HEIC is supported.</b></li>
     <li>Results land in the <code>out</code> folder next to the tool (annotated image + CSV).</li>

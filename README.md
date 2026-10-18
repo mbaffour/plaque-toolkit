@@ -35,8 +35,9 @@ been independently validated. The distinction matters for publication — see
   **`Plaque Toolkit.bat`** (Windows) / **`Plaque Toolkit.command`** (macOS) /
   **`Plaque Toolkit.sh`** (Linux).
 
-The app has a **Measure** tab (engine dropdown, drag-and-drop, summary card, editable canvas,
-scale bar), a **Compare turbidity** tab, and an **About** tab. Plaques are numbered **1…N from
+The app has seven tabs: **Measure** (engine dropdown, drag-and-drop, summary card, editable canvas,
+scale bar), **Batch**, **Compare turbidity**, **Analyze**, **Validate**, **Fiji agreement** and
+**About**. Plaques are numbered **1…N from
 the top** (row 1 = the topmost plaque), and the green **Export all** button writes the CSV +
 annotated figure in one click.
 
@@ -67,8 +68,8 @@ This is the core concept. Pick the engine for the job; only one is citable.
 
 | Engine | What it is | Validation status | Use it for |
 |---|---|---|---|
-| **Published** | The exact Trofimova & Jaschke 2021 measurement algorithm. Byte-identical to the original upstream tool on neutral-grey TIFF/PNG input; the image is *read* the modern way (EXIF-aware, HEIC-capable, in-memory dimming), which can shift diameters by up to ~0.5 mm on **colour-cast or JPEG** plates — see [docs/UPSTREAM_EXACT.md](docs/UPSTREAM_EXACT.md) and the opt-in `--upstream-exact` flag. | **Peer-reviewed & validated.** The only citable mode. Reproduces the literature within ~0.04 mm. | Numbers that go in a paper. |
-| **Current** | Same algorithm + bug-fixes + a corrected dish/calibration (picks the roundest large contour so the dark surround can't hijack the mm scale) + non-truncated values. | In-house. Differs from Published only by ≤ ~0.04 mm / count unchanged on the bundled plates. | Routine day-to-day measuring (the **default**). |
+| **Published** | The exact Trofimova & Jaschke 2021 measurement algorithm. Byte-identical to the original upstream tool on neutral-grey TIFF/PNG input; the image is *read* the modern way (EXIF-aware, HEIC-capable, in-memory dimming), which can shift diameters by up to ~0.5 mm on **colour-cast or JPEG** plates — see [docs/UPSTREAM_EXACT.md](docs/UPSTREAM_EXACT.md) and the opt-in `--upstream-exact` flag. | **Peer-reviewed & validated.** The only citable mode. Byte-identical to the upstream program on neutral-grey TIFF/PNG; up to ~0.5 mm apart on colour-cast or JPEG plates (the ~0.04 mm figure is Current vs Published). | Numbers that go in a paper. |
+| **Current** | Same algorithm + bug-fixes + non-truncated values + (in the desktop app / click-editor / Precise front end only) a corrected dish/calibration that picks the roundest large contour so the dark surround can't hijack the mm scale; the size CLI `plaque_size_tool.py`, the Measure/Batch `.bat` launchers and the turbidity tool still take the largest contour, as upstream does. | In-house. Differs from Published only by ≤ ~0.04 mm / count unchanged on the bundled plates. | Routine day-to-day measuring (the **default**). |
 | **Sensitive** | Current with the size gates lowered to catch sub-0.4 mm plaques. | **In-house, not validated.** Higher recall **but more false positives** — verify by eye. | Finding tiny plaques; exploratory counts. |
 | **Precise** | PST dish + calibration → artifact masks → **PlaqSeg YOLO** primary → density switch → gated PST-sensitive recall → union; optional learned plaque-vs-texture classifier gate. | **In-house, not validated;** PlaqSeg itself is not peer-reviewed. | The best detector on dense, countable plates. |
 
@@ -144,9 +145,13 @@ it derives from:
 ## Large files (contributors)
 
 This repo already contains some large binaries (test-plate `.tif` images and model
-weights `.pt`, tens of MB each). To keep the repo from growing further, **new** large
-assets should be added via **[Git LFS](https://git-lfs.com/)** or attached as **GitHub
-release assets** rather than committed as ordinary blobs:
+weights `.pt`, tens of MB each). The `.pt` weights (`_plaqseg/models/*.pt`,
+`_research/clf/plaque_clf.pt`) are committed as **ordinary git blobs**, not LFS pointers —
+`.gitattributes` declares an LFS rule for `*.pt`, but git-lfs was not installed when they were
+added — so a plain clone, a GitHub source tarball and a **Zenodo source archive all include the
+CC BY-NC-SA 4.0 weights** (see [LICENSING.md](LICENSING.md)). To keep the repo from growing
+further, **new** large assets should be added via **[Git LFS](https://git-lfs.com/)** or attached
+as **GitHub release assets** rather than committed as ordinary blobs:
 
 ```bash
 git lfs install          # once per machine
@@ -156,6 +161,11 @@ git lfs install          # once per machine
 
 Existing history is intentionally left untouched (no rewrite), so already-committed
 files stay as they are — this only changes how *future* large files are stored.
+
+> **Caution:** the Hugging Face Space builds from a shallow clone (`webapp/Dockerfile`,
+> `git clone --depth 1`) and relies on the weights being plain files. Pushing a `.pt` through
+> LFS would leave the Space with a pointer file and break it unless a `git lfs pull` step is
+> added to that Dockerfile.
 
 ## License
 

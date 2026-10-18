@@ -37,8 +37,7 @@ Apple Silicon). `mamba` works too and is faster.
 ```
 conda env create -f environment.yml
 ```
-Or double-click **`install.bat`** path note: that script installs a *built* app —
-to create the source env just run the conda command above, or use the build below.
+(`install.bat` installs a built app; to create the source environment use the conda command above.)
 
 **macOS** — double-click **`setup.command`** in Finder (first time you may need to
 right-click → Open to clear Gatekeeper, or run `chmod +x setup.command` once).
@@ -128,5 +127,5 @@ an `env_paths.json` in the project root:
 { "plaqseg": "/opt/miniconda3/envs/plaqseg/bin/python" }
 ```
 
-If the `plaqseg` env or weights are missing, the **Precise** button shows a friendly
+If the `plaqseg` env or weights are missing, the **Precise** entry in the Engine dropdown shows a friendly
 message and the other three modes keep working.

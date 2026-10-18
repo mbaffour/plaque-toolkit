@@ -578,8 +578,8 @@
     <thead><tr><th>File</th><th>Contents</th></tr></thead>
     <tbody>
       <tr><td><code>per_plate.csv</code></td><td>One row per plate: plaque count, median diameter, mean diameter, calibration (mm/px), tilt flag, errors.</td></tr>
-      <tr><td><code>all_plaques.csv</code></td><td>Every individual plaque from every plate. Same columns as the single-image CSV, plus a <code>PLATE</code> column.</td></tr>
-      <tr><td><code>out_<em>image</em>.jpeg</code></td><td>Annotated overlay for each input image.</td></tr>
+      <tr><td><code>all_plaques.csv</code></td><td>Every individual plaque from every plate. Same columns as the app's measurement table (including <code>CIRCULARITY</code> / <code>OVERLAP</code>), plus an <code>IMAGE</code> column.</td></tr>
+      <tr><td><code>out_batch/<em>name</em>/out_<em>name</em>.<em>ext</em></code></td><td>Annotated overlay for each input image, in that image's own sub-folder beside its <code>data-green-<em>name</em>.csv</code>.</td></tr>
     </tbody>
   </table></div>
 
@@ -688,14 +688,14 @@
     <div class="card card-accent-blue">
       <div class="card-title"><span class="engine-pill ep-pub">Published</span> &nbsp;Peer-reviewed</div>
       <div class="card-body">
-        The exact Trofimova &amp; Jaschke (2021) algorithm, unchanged. <strong>The only citable mode for publications.</strong> Automatically disables watershed and sensitive settings. Reproduces the literature within ~0.04 mm.<br><br>
+        The exact Trofimova &amp; Jaschke (2021) algorithm, unchanged. <strong>The only citable mode for publications.</strong> Automatically disables watershed and sensitive settings. Byte-identical to the upstream program on neutral-grey TIFF/PNG; up to ~0.5 mm apart on colour-cast or JPEG plates (the ~0.04 mm figure is Current vs Published; see UPSTREAM_EXACT.md).<br><br>
         <strong>Use for:</strong> any numbers that go into a paper.
       </div>
     </div>
     <div class="card card-accent-green">
       <div class="card-title"><span class="engine-pill ep-cur">Current</span> &nbsp;Default</div>
       <div class="card-body">
-        Same algorithm with bug-fixes: non-truncated numeric values and a corrected dish calibration (uses the roundest large contour, not just the biggest, to prevent the dark surround from hijacking the mm scale).<br><br>
+        Same algorithm with bug-fixes: non-truncated numeric values and, in the desktop app / click-editor, a corrected dish calibration (uses the roundest large contour, not just the biggest, to prevent the dark surround from hijacking the mm scale). The size CLI (<code>plaque_size_tool.py</code>, the Measure/Batch launchers) and the turbidity tool still pick the <em>largest</em> contour, as the original does.<br><br>
         <strong>Use for:</strong> routine day-to-day measurement.
       </div>
     </div>
@@ -893,7 +893,7 @@
       <tr><td>DIAMETER_MM</td><td>mm</td><td>Area-equivalent diameter in mm</td></tr>
       <tr><td>MEAN_GRAY</td><td>0&ndash;255</td><td>Mean brightness inside the plaque (0=black, 255=white)</td></tr>
       <tr><td>TURBIDITY_REL</td><td>0&ndash;1</td><td>Within-plate clarity index. 0 = clearest plaque on this plate, 1 = lawn. <strong>Not comparable across plates.</strong></td></tr>
-      <tr><td>SOURCE</td><td>&mdash;</td><td><code>auto</code> (engine), <code>manual</code> (hand-drawn), <code>watershed</code> (split-touching)</td></tr>
+      <tr><td>SOURCE</td><td>&mdash;</td><td><code>auto</code> (engine), <code>manual</code> (hand-added), <code>freehand</code> (drawn with Draw shape), <code>region</code> (found by a Detect-area re-scan), <code>watershed</code> (split-touching)</td></tr>
     </tbody>
   </table></div>
 
@@ -938,7 +938,7 @@
   <pre>mm_per_px = dish_diameter_mm / dish_diameter_px
 DIAMETER_MM = 2 * sqrt(AREA_PXL * mm_per_px^2 / pi)</pre>
 
-  <p>The dish is detected as the <strong>roundest large contour</strong> in the image (Current/Precise modes). This prevents the dark surround common in top-lit iPhone photos from hijacking the mm scale &mdash; a real failure mode of the original algorithm on non-backlit images.</p>
+  <p>In the desktop app, the click-editor and the Precise front end (<code>plaque_gui.run_detection</code>), the dish is detected as the <strong>roundest large contour</strong> in the image (Current/Sensitive/Precise modes; Published keeps the largest contour). This prevents the dark surround common in top-lit iPhone photos from hijacking the mm scale &mdash; a real failure mode of the original algorithm on non-backlit images. The size CLI (<code>plaque_size_tool.py</code> and the Measure/Batch <code>.bat</code> launchers) and the turbidity tool still select the <strong>largest</strong> contour, as upstream does, so their mm/px can differ from the app's on such photos.</p>
 
   <h3>Tilt warning</h3>
   <p>If the dish looks elliptical in the photo (tilted camera), every mm value is biased. The app measures the dish axis ratio (major/minor) and warns when it exceeds <strong>1.03</strong>. Image plates <em>straight-on</em> to avoid this.</p>
@@ -1007,7 +1007,7 @@ DIAMETER_MM = 2 * sqrt(AREA_PXL * mm_per_px^2 / pi)</pre>
   <div class="tip">&#128161; Only the <span class="engine-pill ep-pub">Published</span> engine mode reproduces this paper's measurement algorithm. If you used Current with minor corrections, add "with minor numerical-precision corrections" to your methods. Note: on colour-cast or JPEG plates Published's modernised image-read path can shift diameters by up to 0.5&nbsp;mm from the original upstream program &mdash; use <code>--upstream-exact</code> if you need that bit for bit (see docs/UPSTREAM_EXACT.md).</div>
 
   <h3>Statistics &mdash; avoid pseudoreplication</h3>
-  <div class="warn">&#9888;&#65039; The <strong>plate is the biological replicate</strong>, not the individual plaque. Use <code>*_PLATE_MEAN</code> / <code>*_PLATE_SD</code> columns in <code>per_phage.csv</code>, with &ge;3 plates per phage. Compare phages with Mann&ndash;Whitney or Kruskal&ndash;Wallis on the per-plate means, or a mixed model with plate as a random effect.</div>
+  <div class="warn">&#9888;&#65039; The <strong>plate is the biological replicate</strong>, not the individual plaque. Use <code>*_PLATE_MEAN</code> / <code>*_PLATE_SD</code> columns in <code>per_phage.csv</code>, with &ge;3 plates per phage. Compare phages on the per-plate means &mdash; the bundled <code>plaque_stats</code> defaults to a parametric test on plate means (Welch t / ANOVA + Tukey, or Welch ANOVA + Games&ndash;Howell under unequal variances) when any group has fewer than 8 plates and switches to Mann&ndash;Whitney / Kruskal&ndash;Wallis + Dunn only at &ge;8 plates per group if Shapiro&ndash;Wilk or Levene fails (<code>--parametric</code> overrides) &mdash; or use a mixed model with plate as a random effect.</div>
 
   <h3>Required caveats in Methods</h3>
   <div class="accordion">

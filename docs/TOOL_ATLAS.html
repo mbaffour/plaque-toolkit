@@ -127,8 +127,9 @@
   <!-- LAYOUT -->
   <section id="layout">
     <h2>Window layout</h2>
-    <p>Five tabs across the top: <b>Measure</b> (one plate at a time), <b>Batch</b> (a whole folder), <b>Compare turbidity</b>
-    (cross‑phage OD), <b>Validate</b> (score engines vs your labels), and <b>About</b> (a built‑in reference). The
+    <p>Seven tabs across the top: <b>Measure</b> (one plate at a time), <b>Batch</b> (a whole folder), <b>Compare turbidity</b>
+    (cross‑phage OD), <b>Analyze</b> (samples → replicate plates → violin / stats figures), <b>Validate</b> (score engines vs your labels),
+    <b>Fiji agreement</b> (Bland–Altman / ICC vs manual Fiji values), and <b>About</b> (a built‑in reference). The
     <b>Help</b> menu (top‑left) opens the guides. A status bar at the very bottom shows the engine and progress.</p>
     <figure>
       <img src="atlas_img/measure_full.png" alt="The Measure tab with a detected plate">
@@ -235,7 +236,7 @@
     <h2>The results table</h2>
     <figure>
       <img src="atlas_img/results_table.png" alt="Per-plaque results table">
-      <figcaption>One row per plaque. Sortable (click a header). This is exactly what the CSV export contains.</figcaption>
+      <figcaption>One row per plaque. Sortable (click a header). This is exactly what the app's <b>Export all</b> CSV (<code>data_&lt;stem&gt;.csv</code>) contains; the engine's own <code>data-green-*.csv</code> has the same columns minus <code>CIRCULARITY</code> / <code>OVERLAP</code>.</figcaption>
     </figure>
     <table>
       <tr><th>Column</th><th>Meaning</th></tr>
@@ -244,8 +245,9 @@
       <tr><td><code>DIAMETER_PXL</code></td><td>Area‑equivalent diameter in pixels: <code>2·√(area/π)</code>.</td></tr>
       <tr><td><code>AREA_MM2</code> / <code>DIAMETER_MM</code></td><td>The same in mm (need calibration; blank if pixels‑only).</td></tr>
       <tr><td><code>MEAN_GRAY</code></td><td>Mean brightness inside the plaque (0–255). Lower = clearer/darker.</td></tr>
-      <tr><td><code>TURBIDITY_REL</code></td><td>Plaque brightness ÷ surrounding lawn. ~1 = as opaque as the lawn (turbid); lower = clearer. (See <a href="#turbidity">Turbidity</a>.)</td></tr>
-      <tr><td><code>SOURCE</code></td><td>How it was found: <code>auto</code> (detector), <code>manual</code> (you added it), <code>watershed</code> (split from a touching pair).</td></tr>
+      <tr><td><code>TURBIDITY_REL</code></td><td>Plate‑relative clarity index: <code>1 − |plaque mean gray − lawn mean gray| ÷ (largest such deviation on this plate)</code>, clipped to 0–1. 0 = the clearest plaque on <i>this</i> plate; 1 = indistinguishable from the lawn (turbid). Direction‑agnostic; <b>not</b> comparable across plates. (See <a href="#turbidity">Turbidity</a>.)</td></tr>
+      <tr><td><code>CIRCULARITY</code> / <code>OVERLAP</code></td><td>Shape roundness (<code>4·π·area/perimeter²</code>) and whether the plaque touches another (<code>yes</code>/<code>no</code>). App table / <b>Export all</b> / Batch <code>all_plaques.csv</code> only — not in <code>data-green-*.csv</code>.</td></tr>
+      <tr><td><code>SOURCE</code></td><td>How it was found: <code>auto</code> (detector), <code>manual</code> (you added it), <code>freehand</code> (drawn with <b>Draw shape</b>), <code>region</code> (found by a <b>Detect area</b> re‑scan), <code>watershed</code> (split from a touching pair).</td></tr>
     </table>
   </section>
 
@@ -369,7 +371,7 @@
     <p>Turbidity is a plaque’s <b>clarity</b> — a real, publishable phenotype: <b>clear</b> plaques ≈ fully lytic phage;
     <b>turbid/cloudy</b> plaques ≈ temperate (lysogeny) or resistant regrowth inside the plaque. It’s reported two ways:</p>
     <ul>
-      <li><b>Per plaque</b> (Measure tab): <code>MEAN_GRAY</code> and <code>TURBIDITY_REL</code> (plaque ÷ lawn).</li>
+      <li><b>Per plaque</b> (Measure tab): <code>MEAN_GRAY</code> and <code>TURBIDITY_REL</code> (1 − |plaque − lawn| ÷ plate maximum; within‑plate only).</li>
       <li><b>Across phages</b> (Compare tab): apparent OD, clarity class, titer, stats, figures.</li>
     </ul>
     <div class="warn"><b>Screening‑grade, not absolute OD.</b> From top‑lit phone photos the value is <i>apparent</i> optical

@@ -121,9 +121,10 @@ px and mm), sortable, and **Ctrl+C / Copy** puts it on the clipboard as Excel‑
 ![The per‑plaque measurements table](atlas_img/results_table.png)
 
 ### Step 5 — Export
-The green **Export all** button writes a CSV + an annotated figure to an `out/` folder in one
-click (the **More ▾** menu has individual items: figure, side‑by‑side, ground‑truth labels, plate
-crop, and the **Fiji registration bundle**).
+The green **Export all** button writes a CSV (`data_<stem>.csv`) + an annotated figure to an
+`out/` folder in one click, and both **Save** and **Export all** write a `run_metadata.json`
+(engine, settings, image hash) beside the CSV (the **More ▾** menu has individual items: figure,
+side‑by‑side, ground‑truth labels, plate crop, and the **Fiji registration bundle**).
 
 ### Step 6 — Validate against Fiji, for a paper (the *Fiji agreement* tab)
 Measure the same plaques in the tool and by hand in Fiji/ImageJ, then paste the two columns here.
@@ -136,7 +137,10 @@ red), and writes a ready‑to‑paste Methods sentence. New to the statistics? T
 ![The Fiji agreement tab — paste two columns, get Bland–Altman + ICC + a figure](atlas_img/fiji_agreement.png)
 
 ### The other tabs
-- **Batch** — run a whole folder of plates at once → per‑plate CSVs + a summary.
+- **Batch** — run a whole folder of plates at once → per‑plate CSVs (`out_batch/<name>/`) + a
+  combined `all_plaques.csv`. Its **Small plaques** checkbox matters only for Published: Published
+  runs *without* `-small` unless it is ticked (matching the Measure tab and the CLI), while Current
+  and Sensitive always use the engine's small gates in the app (equal to the CLI's `-small`).
 
   ![Batch tab](atlas_img/batch.png)
 
@@ -221,7 +225,7 @@ Do you want to COMPARE turbidity across different phages/plates?
 
 ## 4. Setup (one time)
 
-Already done on this machine. To reproduce elsewhere:
+The installers set this up for you; to create the source environment on a new machine:
 
 ```powershell
 conda env create -f environment.yml      # creates env 'plaque' (Python 3.9)
@@ -296,7 +300,8 @@ as Excel‑ready TSV. **Click a plaque on the image → its table row highlights
 so a plaque and its measurement stay linked. **View → Text size** enlarges the whole UI.
 
 **Orient.** **Orient ▾** rotates/flips the plate (e.g. to match your Fiji hand‑labelling) and
-re‑detects; do it *before* exporting so exports carry that orientation.
+re‑detects; it writes `out/<stem>_oriented.png` and the editor works on that copy, so exported
+labels and crops match the orientation you see. Do it *before* exporting.
 
 **Fiji / ImageJ integration.** **Export ▾ → Fiji registration bundle** writes a calibrated crop +
 an ImageJ ROI set (numbered to match) + a numbered map + a registration CSV; **Compare vs Fiji…**
@@ -319,18 +324,21 @@ Run from the `Plaque Size Tool` folder. Prefix everything with `conda run -n pla
 
 ### `plaque_size_tool.py` — size + count + turbidity index
 ```
-plaque_size_tool.py  (-i IMAGE | -d FOLDER)  [-p MM] [-small] [--watershed] [--published]
+plaque_size_tool.py  (-i IMAGE | -d FOLDER)  [-p MM] [-small] [--watershed] [--published] [-o OUTDIR]
 ```
 | Flag | Meaning |
 |---|---|
 | `-i PATH` | one image |
-| `-d PATH` | a folder of images (batch) |
-| `-p 100` | dish diameter in mm (enables mm columns) |
+| `-d PATH` | a folder of images (batch; sub-folders included) |
+| `-p 100` | dish diameter in mm (enables mm columns); must be a positive number — `0` or `90mm` is rejected |
 | `-small` | plaques < 2.5 mm / low‑res images |
 | `--watershed` | also split touching/merged plaques ([§10](#10-special-modes)) |
 | `--published` | reproduce the *exact* published tool output ([§10](#10-special-modes)) |
+| `-o`, `--out PATH` | output folder (default `out\` next to the image / inside the batch folder) |
+| `--version` | print the toolkit version |
 
-Output → `out\data-green-<name>.csv` and `out\out_<name>.<ext>`.
+Output → `out\data-green-<name>.csv` and `out\out_<name>.<ext>`. Same‑named images in different
+sub‑folders of a `-d` batch are written as `<subfolder>__<name>` so neither overwrites the other.
 
 Example:
 ```powershell
@@ -359,7 +367,7 @@ plaque_turbidity.py  -d FOLDER  [-p MM] [-small]
 | `--dark IMG` | dark frame (lens covered) → removes the black‑level offset |
 | `--core 0.6` | measure only the central 60 % of each plaque (avoids halo/edge contamination) |
 | `--group-by-prefix` | treat `T4_1`, `T4_2` as replicates of phage `T4` |
-| `--dilution`, `--volume-ul` | compute PFU/mL titer |
+| `--dilution`, `--volume-ul` | compute PFU/mL titer. `--dilution` is the **reciprocal** factor — `1e6` for a 10⁻⁶ dilution; values < 1 are rejected |
 | `--watershed` | split touching plaques first |
 | `--no-overlay`, `--no-plots` | skip the QC overlays / figures |
 
@@ -395,13 +403,22 @@ heic_to_tiff.py  -d FOLDER  [-o OUTFOLDER]
 | `TURBIDITY_REL` | 0–1 | **within‑plate** clarity index (0 = clearest plaque here, 1 = lawn). *Not* cross‑plate comparable — see [§8](#8-understanding-turbidity-important). |
 | `CIRCULARITY` *(app)* | 0–1 | shape roundness `4·π·area/perimeter²`; 1 = perfect circle, lower = irregular / comet / elongated |
 | `OVERLAP` *(app)* | yes/no | `yes` = touches/overlaps another plaque, so its size is unreliable (see the Exclude‑overlaps toggle) |
-| `SOURCE` *(GUI / `--watershed` only)* | – | `auto` / `manual` / `freehand` / `watershed` |
+| `SOURCE` *(GUI / app / `--watershed` only)* | – | `auto` / `manual` / `freehand` / `region` (added by the app's **Detect area** box) / `watershed` |
+
+`CIRCULARITY` and `OVERLAP` exist only in the app's measurement table, its **Export all** CSV
+(`data_<stem>.csv`) and the Batch tab's `all_plaques.csv` — **not** in `data-green-*.csv`.
 
 A plate with **zero** plaques still writes this CSV, with the header row and no data rows —
 "0 plaques" is a real observation (negative control, empty dilution) and must not disappear from
 a count or titer experiment. `summarize_plates.py` lists it with `N_PLAQUES = 0`; pass
 `-i <input folder>` as well and any image that produced **no** CSV at all is listed with
-`CSV_FOUND = False`, so a processing failure is not mistaken for a genuine zero.
+`CSV_FOUND = False`, so a processing failure is not mistaken for a genuine zero. With
+`-r/--recursive`, `summarize_plates.py` also reads the app's `data_<plate>.csv` (Export all) and the
+Batch tab's `out_batch/<plate>/` files, and its `MM_CALIBRATED` column says whether each plate's
+mm values were calibrated (blank when the CSV had no rows). The analysis helpers
+`compile_excel.py`, `plot_sensitive_violin.py` and `make_figure.py` take `--order WT,2-4,DTR` to
+fix the sample order; `measure_samples.py` and `run_viralplaque.py` take `--no-small` (and
+`run_viralplaque.py --plate <mm>`).
 
 - **`out_<name>.<ext>`** — annotated image (plaques circled + numbered; watershed‑recovered in cyan).
 
@@ -412,9 +429,12 @@ a count or titer experiment. `summarize_plates.py` lists it with `N_PLAQUES = 0`
 - **`per_phage.csv`** — the comparison table. Per phage: `N_PLATES, N_PLAQUES`, and for each metric
   a `*_PLAQUE_MEAN` (pooled) plus `*_PLATE_MEAN` / `*_PLATE_SD`. **Use the PLATE‑level columns for
   statistics** (see [§11](#11-using-it-in-a-paper)).
-- **`qc.csv`** — per plate: `DISH_FOUND, I0_LEVEL, LAWN_I, OD_LAWN, ILLUM_CV (illumination
-  unevenness), FRAC_DARKER_THAN_LAWN, FRAC_OVERCLEAR, FRAC_SATURATED (clipped pixels),
-  POLARITY_OK, ABSOLUTE_OD, COUNT, PFU_PER_ML`.
+- **`qc.csv`** — per plate: `PHAGE, PLATE, N_PLAQUES, BIT_DEPTH, TRANSFER, TRANSFER_SOURCE, READER,
+  DISH_FOUND, I0_LEVEL, LAWN_I, MEAN_PLAQUE_I, OD_LAWN, ILLUM_CV (illumination unevenness),
+  FRAC_DARKER_THAN_LAWN, FRAC_OVERCLEAR, FRAC_SATURATED (clipped pixels), POLARITY_OK, ABSOLUTE_OD,
+  NATIVE_MAX, FULL_SCALE, FLAT_APPLIED, DARK_APPLIED, COUNT`, and — only when both `--dilution` and
+  `--volume-ul` are given — `PFU_PER_ML, PFU_PER_ML_CI95_LO, PFU_PER_ML_CI95_HI,
+  COUNT_IN_RANGE_30_300`.
 - **`overlay_<plate>.png`** — QC image: dish outline + plaques coloured green→red by turbidity.
 - **`compare_<metric>.png`, `hist_<metric>.png`** — per‑phage box plots & histograms of diameter
   and turbidity (publication figures).
@@ -502,8 +522,11 @@ can keep a slightly different surviving contour) — below imaging resolution. I
   `CLARITY` gives categorical clear/turbid.
 - **Statistics — avoid pseudoreplication.** The **plate is the biological replicate, not the
   plaque.** Use the `*_PLATE_MEAN` / `*_PLATE_SD` columns in `per_phage.csv`, with ≥3 plates per
-  phage; compare phages with a non‑parametric test (Mann–Whitney / Kruskal–Wallis) on the
-  per‑plate means, or a mixed model with plate as a random effect.
+  phage; compare phages on the per‑plate means with the bundled `plaque_stats` (default `auto`: a
+  parametric test on plate means — Welch t, or one‑way ANOVA + Tukey / Welch ANOVA + Games‑Howell
+  under unequal variances — whenever any group has < 8 plates; at ≥ 8 plates per group it checks
+  Shapiro–Wilk + Levene and switches to Mann–Whitney / Kruskal–Wallis + Dunn if either fails;
+  `--parametric` overrides), or a mixed model with plate as a random effect.
 - **State these caveats in Methods:** (1) plaque size is **convex‑hull area**, a slight *upper*
   bound that includes any halo (inherited from the published method); (2) image plates **straight‑on
   (orthographic)** — a tilted phone shot makes the dish elliptical and biases the mm scale (the size
