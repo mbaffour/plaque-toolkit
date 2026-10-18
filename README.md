@@ -91,6 +91,7 @@ highlights:
 | [**docs/PUBLICATION.md**](docs/PUBLICATION.md) | The honest validation playbook: what to validate, how (Fiji ground truth, Bland-Altman/ICC, plate-level stats, negative control), and what to write in Methods. |
 | [**docs/DEVELOPER.md**](docs/DEVELOPER.md) | File map, the two-env vs unified-env design, the ML classifier, and how to rebuild the installers. |
 | [**docs/STRUCTURE.md**](docs/STRUCTURE.md) | Every top-level file/folder mapped to its purpose. |
+| [**releases/v1.1.0/MANIFEST.md**](releases/v1.1.0/MANIFEST.md) | The frozen record of v1.1.0: source checksums, the exact library versions, and checksums of every number it produced on the bundled plates (the regression oracle). |
 | [**docs/PLAQUE_SIZE_TOOL.md**](docs/PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
 | [**docs/CREDITS_AND_LINEAGE.md**](docs/CREDITS_AND_LINEAGE.md) | Every upstream tool/model/dataset/library, its licence, and what's original here. |
 | [**docs/VALIDATION_RESULTS.md**](docs/VALIDATION_RESULTS.md) · [**docs/PAPER_METHODS.md**](docs/PAPER_METHODS.md) | The local validation numbers, and paste‑ready Methods/Results text. |
