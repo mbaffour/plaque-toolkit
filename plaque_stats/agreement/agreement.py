@@ -31,6 +31,7 @@ import argparse
 import json
 import math
 import os
+import re
 from datetime import datetime
 
 import numpy as np
@@ -88,6 +89,45 @@ def icc_a1(ref, test):
     return (msr - mse) / denom if denom else float("nan")
 
 
+def _ba_slope(avg, diff):
+    """(slope, p) of diff ~ avg; p from the t-test on the slope (n - 2 df). Pure Python
+    except the t distribution, which comes from scipy when available."""
+    n = len(avg)
+    if n < 3:
+        return float("nan"), float("nan")
+    mx, my = _mean(avg), _mean(diff)
+    sxx = sum((a - mx) ** 2 for a in avg)
+    if sxx == 0:
+        return float("nan"), float("nan")
+    slope = sum((a - mx) * (d - my) for a, d in zip(avg, diff)) / sxx
+    intercept = my - slope * mx
+    resid = [d - (intercept + slope * a) for a, d in zip(avg, diff)]
+    if n <= 2:
+        return slope, float("nan")
+    se = math.sqrt(sum(r * r for r in resid) / (n - 2) / sxx) if sxx else float("nan")
+    if not se or se != se:
+        return slope, float("nan")
+    t = slope / se
+    try:
+        from scipy import stats as _st
+        p = float(2 * _st.t.sf(abs(t), n - 2))
+    except Exception:                               # pragma: no cover
+        p = float("nan")
+    return slope, p
+
+
+def _loa_ci_halfwidth(sd, n):
+    if n < 3 or sd != sd:
+        return float("nan")
+    se = sd * math.sqrt(3.0 / n)
+    try:
+        from scipy import stats as _st
+        t = float(_st.t.ppf(0.975, n - 1))
+    except Exception:                               # pragma: no cover
+        t = 1.96
+    return t * se
+
+
 def regress(x, y):
     """Least-squares y = slope*x + intercept."""
     mx, my = _mean(x), _mean(y)
@@ -117,6 +157,11 @@ def compute(tool, fiji):
         "r": pearson(tool, fiji), "icc": icc_a1(fiji, tool),
         "slope": slope, "intercept": intercept, "diff": diff, "avg": avg,
         "tool": tool, "fiji": fiji,
+        # Bland-Altman proportional bias: regress the difference on the mean of the two
+        # methods; a non-zero slope means the bias changes with plaque size (PT-46).
+        "ba_slope": _ba_slope(avg, diff)[0], "ba_slope_p": _ba_slope(avg, diff)[1],
+        # 95%% CI of each limit of agreement (Bland & Altman 1986: SE = SD * sqrt(3/n)).
+        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n),
     }
 
 
@@ -246,16 +291,25 @@ def report_sentence(s, unit, what, label_tool, label_manual):
     r = s["r"]
     p = s.get("pearson_p", float("nan"))
     sentence = ("Plaque %s measured with %s %s %s (n = %d): %s "
-                "(Pearson r = %.3f, R² = %.3f, p %s), with an intraclass correlation coefficient "
+                "(Pearson r = %.3f, R² = %.3f, %s), with an intraclass correlation coefficient "
                 "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
                 "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test %s) "
                 "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
                 "(1.0 = no proportional bias)."
                 % (what, label_tool, agreement_phrase(icc), label_manual, s["n"],
                    correlation_phrase(r, p),
-                   r, s.get("r2", r ** 2), _pfmt(p), icc, icc_ci, icc_grade(icc),
+                   r, s.get("r2", r ** 2), _pstr(p), icc, icc_ci, icc_grade(icc),
                    s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
                    _pstr(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
+    bs, bp = s.get("ba_slope", float("nan")), s.get("ba_slope_p", float("nan"))
+    if bs == bs and bp == bp:
+        if bp < 0.05:
+            sentence += (" The difference depended on plaque size (Bland-Altman slope %+.3f %s per %s, %s): "
+                         "a proportional bias, so a single bias value does not describe the whole range."
+                         % (bs, unit, unit, _pstr(bp)))
+        else:
+            sentence += (" The difference did not depend on plaque size (Bland-Altman slope %+.3f, %s)."
+                         % (bs, _pstr(bp)))
     if icc == icc and icc < 0.5:
         sentence += (" These two methods therefore cannot be used interchangeably for "
                      "individual %s; a similar group MEAN does not imply agreement, and any "
@@ -376,12 +430,29 @@ TOOL_HINTS = ("tool", "toolkit", "auto", "precise", "software", "app", "detected
 MANUAL_HINTS = ("manual", "fiji", "imagej", "hand", "reference", "ref", "gt", "ground")
 
 
-def _find_col(cols, hints):
+def _tokens(name):
+    return [t for t in re.split(r"[^a-z0-9]+", str(name).lower()) if t]
+
+
+def _find_col(cols, hints, exclude=(), prefer=None):
+    """Pick the column whose name TOKENS match one of `hints`. Substring matching used to
+    pick `length_tool` for the MANUAL column ("gt" inside "length") and, on the repo's own
+    validation file, the area columns for a diameter report (AUDIT-2026-10.md, PT-45).
+    `prefer` (e.g. 'diam' or 'area') breaks ties when several columns qualify."""
+    cands = []
     for c in cols:
-        cl = str(c).lower()
-        if any(h in cl for h in hints):
-            return c
-    return None
+        if c in exclude:
+            continue
+        toks = _tokens(c)
+        if any(h in toks for h in hints):
+            cands.append(c)
+    if not cands:
+        return None
+    if prefer:
+        pref = [c for c in cands if any(t.startswith(prefer) for t in _tokens(c))]
+        if pref:
+            return pref[0]
+    return cands[0]
 
 
 def _numeric_cols(df):
@@ -397,15 +468,25 @@ def run(args):
         if str(args["data"]).lower().endswith((".csv", ".tsv", ".txt")) \
         else pd.read_excel(args["data"])
     num = _numeric_cols(df)
-    tcol = args.get("tool") or _find_col(df.columns, TOOL_HINTS)
-    mcol = args.get("manual") or _find_col(df.columns, MANUAL_HINTS)
+    what_pref = None
+    w = str(args.get("what") or "").lower()
+    if w.startswith("diam"):
+        what_pref = "diam"
+    elif w.startswith("area"):
+        what_pref = "area"
+    tcol = args.get("tool") or _find_col(num, TOOL_HINTS, prefer=what_pref)
+    mcol = args.get("manual") or _find_col(num, MANUAL_HINTS, exclude=(tcol,), prefer=what_pref)
+    if tcol is not None and mcol is not None and tcol == mcol:
+        mcol = _find_col(num, MANUAL_HINTS, exclude=(tcol,), prefer=what_pref)
     if (tcol is None or mcol is None) and len(num) == 2:
         tcol, mcol = tcol or num[0], mcol or num[1]
         print("note: columns not named — using '%s' (tool) vs '%s' (manual). "
               "Override with --tool/--manual." % (tcol, mcol))
-    if tcol is None or mcol is None:
+    if tcol is None or mcol is None or tcol == mcol:
         raise SystemExit("Could not identify the two columns. Pass --tool COL --manual COL. "
                          "Numeric columns found: %s" % num)
+    # Always say which columns were compared: a wrong silent pick is the worst outcome.
+    print("columns: tool = %r, manual/reference = %r  (override with --tool/--manual)" % (tcol, mcol))
 
     d = df[[tcol, mcol]].apply(pd.to_numeric, errors="coerce").dropna()
     tool_vals, manual_vals = d[tcol].tolist(), d[mcol].tolist()

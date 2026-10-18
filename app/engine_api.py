@@ -71,6 +71,10 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
             ppm = emb
     return {
         "display_rgb": display_rgb,
+        # which engine produced this -- carried with the result so sizing/provenance
+        # never depend on the mutable pst globals (AUDIT-2026-10.md, PT-30)
+        "published": bool(published), "small": bool(small),
+        "sensitive": bool(sensitive) and not bool(published),
         "orig_bgr": orig_bgr,
         "proc_gray": proc_gray,
         "plaques": plaques,
@@ -125,7 +129,7 @@ def _circularity(p):
     return round(min(1.0, 4.0 * math.pi * area / (per * per)), 3)
 
 
-def measure_table(plaques, orig_bgr, ppm, lawn_gray):
+def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None):
     """Per-plaque DataFrame mirroring what save_results writes, but WITHOUT writing files
     (for live display of the editable plaque set). Adds CIRCULARITY (shape) and OVERLAP
     (touches another plaque) so irregular / confluent plaques are visible and filterable."""
@@ -138,7 +142,7 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray):
     over = overlap_flags(plaques)
     rows = []
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
-        dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm)
+        dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
         rows.append({"INDEX": i, "AREA_PXL": round(p["area_pxl"], 2),
                      "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": round(area_mm2, 2),
                      "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
@@ -150,8 +154,8 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray):
                                        "CIRCULARITY", "OVERLAP", "SOURCE"])
 
 
-def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray):
-    return pgui.save_results(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray)
+def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=None):
+    return pgui.save_results(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=published)
 
 
 def detect_region(orig_bgr, roi, sensitive=True, small=True, published=False):
@@ -268,19 +272,23 @@ def _precise_plaques_from_df(pdf, ppm):
     scrutinise the recovered ones. ppm is mm/px."""
     import math
     out = []
-    if pdf is None or len(pdf) == 0 or not ppm:
+    if pdf is None or len(pdf) == 0:
         return out
     cols = {str(c).upper(): c for c in pdf.columns}
     xk, yk, dk = cols.get("X"), cols.get("Y"), cols.get("DIAMETER_MM")
+    pk = cols.get("DIAMETER_PXL")                    # pixel fallback when uncalibrated
     sk = cols.get("SOURCE")
-    if not (xk and yk and dk):
+    if not (xk and yk and ((dk and ppm) or pk)):
         return out
     for _, r in pdf.iterrows():
         try:
-            x = float(r[xk]); y = float(r[yk]); dmm = float(r[dk])
+            x = float(r[xk]); y = float(r[yk])
+            if ppm and dk:
+                r_px = max((float(r[dk]) / 2.0) / ppm, 1.0)
+            else:
+                r_px = max(float(r[pk]) / 2.0, 1.0)
         except Exception:
             continue
-        r_px = max((dmm / 2.0) / ppm, 1.0)
         src = (str(r[sk]).lower() if sk else "plaqseg")
         source = "auto" if src in ("plaqseg", "auto", "") else "region"
         out.append({"source": source, "kind": "circle", "center": (x, y),
@@ -326,8 +334,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
             from precise.pipeline import run_inprocess
             # reuse `base` (the classic detection already computed above) so the pipeline's
             # PST front doesn't repeat the identical normal pass or re-read the image.
-            summ = run_inprocess(path, plate_mm=(plate_mm or 100), out_dir=out_dir,
-                                 clf=True, blob=False, tag=tag, base=base)
+            # Under _LOCK: the pipeline's PST sensitive pass mutates the engine globals.
+            with _LOCK:
+                summ = run_inprocess(path, plate_mm=(plate_mm or 100), out_dir=out_dir,
+                                     clf=True, blob=False, tag=tag, base=base)
         except Exception as e:  # surface a friendly message; keep the GUI alive
             raise PreciseUnavailable(
                 "The in-process Precise pipeline failed:\n\n%s\n\n"
@@ -343,15 +353,24 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
         result["precise_csv"] = csv_path
         result["n_plaques"] = int(summ.get("n_final", len(pdf)))
         _pl = _precise_plaques_from_df(pdf, base.get("pxl_per_mm"))
-        if _pl:                                  # show the Precise detections in the editor
-            result["plaques"] = _pl
-            result["n_plaques"] = len(_pl)
+        _adopt_precise_plaques(result, _pl, pdf)
         return result
 
     # ---- TWO-ENV SUBPROCESS fallback (run-from-source with separate plaque/plaqseg envs) #
     # run_precise.py is launched with the running interpreter, which from source is the
     # 'plaque' env python (a real interpreter that can run the .py and import plaque_gui).
-    cmd = [sys.executable, runner, "--image", path, "--out", out_dir,
+    py = sys.executable
+    if getattr(sys, "frozen", False):
+        # In a PyInstaller build sys.executable IS the GUI binary: launching it with a .py
+        # argument opened a second app window (AUDIT-2026-10.md). Use the plaque env.
+        from app import env_paths
+        py = env_paths.find_env_python("plaque")
+        if not py:
+            raise PreciseUnavailable(
+                "Precise needs the 'plaqseg' two-env setup, but no 'plaque' conda environment "
+                "was found to drive it from this installed app. Install the Full build, or "
+                "run from source.")
+    cmd = [py, runner, "--image", path, "--out", out_dir,
            "--tag", tag, "--plate-mm", str(plate_mm or 100)]
     if progress:
         progress("Running Precise pipeline (PST + PlaqSeg)… this can take a minute.")
@@ -393,10 +412,26 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
     result["precise_csv"] = csv_path
     result["n_plaques"] = int(summ.get("n_final", len(pdf)))
     _pl = _precise_plaques_from_df(pdf, base.get("pxl_per_mm"))
-    if _pl:                                      # show the Precise detections in the editor
-        result["plaques"] = _pl
-        result["n_plaques"] = len(_pl)
+    _adopt_precise_plaques(result, _pl, pdf)
     return result
+
+
+def _adopt_precise_plaques(result, plaques, pdf):
+    """Put the Precise detections into the result, or fail loudly. The old code kept the
+    Current(-small) plaques while reporting Precise's count whenever the CSV could not be
+    mapped (no mm calibration), so the table and CSV silently showed another engine's
+    plaques under the Precise label (AUDIT-2026-10.md, PT-32)."""
+    if plaques:
+        result["plaques"] = plaques
+    elif pdf is not None and len(pdf) > 0:
+        raise PreciseUnavailable(
+            "Precise found %d plaques but they could not be mapped onto the image (no X/Y or "
+            "size columns). The result was NOT shown to avoid presenting another engine's "
+            "plaques as Precise." % len(pdf))
+    else:
+        result["plaques"] = []
+    result["n_plaques"] = len(result["plaques"])
+    result["published"] = False
 
 
 def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, dark=None,
@@ -408,6 +443,8 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
     with _LOCK:
         pst.use_published = bool(published)
         pst.watershed_enabled = bool(watershed) and not bool(published)
+        pst.sensitive = False            # never inherit a Measure-tab Sensitive run (PT-29)
+        pst.small_plaques = bool(small)
         df = ptb.run_batch(
             directory, str(plate_mm) if plate_mm else None, bool(small),
             blank or None, flat or None, out_dir,

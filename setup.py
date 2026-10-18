@@ -28,6 +28,7 @@ setup(name='plaque-toolkit',
       extras_require={'heic': ['pillow-heif>=0.13'],
                       'excel': ['openpyxl>=3.0'],
                       'test': ['pytest>=7']},
-      py_modules=['plaque_size_tool', 'plaque_turbidity', '_version'],
+      py_modules=['plaque_size_tool', 'plaque_turbidity', '_version', 'provenance', 'scalebar',
+                  'summarize_plates', 'plate_crop', 'plaque_gui'],
       zip_safe=False,
       keywords='bacteriophage phage virus viral plaque size turbidity')

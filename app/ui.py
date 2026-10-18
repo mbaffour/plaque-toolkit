@@ -505,7 +505,13 @@ class MeasureTab(QWidget):
                 self._cur_img = engine_api.read_image(self.image_path)
             self._cur_img = engine_api.rotate_flip(self._cur_img, op)
             stem = os.path.splitext(os.path.basename(self.image_path))[0]
-            tmp = os.path.join(tempfile.gettempdir(), "plaquetk_oriented_" + stem + ".png")
+            # Keep the oriented copy next to the outputs, not in the temp folder, and open
+            # the editor ON that copy: exported labels then point at an image that exists
+            # in the same orientation, so Validate scores them correctly. (Labels written
+            # against the un-rotated original scored 0 % recall; AUDIT-2026-10.md, PT-34.)
+            out_dir = os.path.join(os.path.dirname(self.image_path), "out")
+            os.makedirs(out_dir, exist_ok=True)
+            tmp = os.path.join(out_dir, stem + "_oriented.png")
             engine_api.write_image(tmp, self._cur_img)
             self._detect_src = tmp
         except Exception as e:
@@ -594,7 +600,7 @@ class MeasureTab(QWidget):
             self.editor.setParent(None)
         else:
             self.placeholder.setParent(None)
-        self.editor = PlaqueCanvas(self.det, self.image_path,
+        self.editor = PlaqueCanvas(self.det, self._detect_src or self.image_path,
                                    os.path.join(os.path.dirname(self.image_path), "out"),
                                    on_change=self.refresh_table,
                                    face=style.LIGHT["surface"])
@@ -603,8 +609,10 @@ class MeasureTab(QWidget):
 
     def on_detected(self, det):
         self.det = det
-        self._mount_editor()
-        self._set_busy(False)
+        try:
+            self._mount_editor()
+        finally:
+            self._set_busy(False)      # an editor error must not leave the tab locked
         self.refresh_table()
         self._set_image_info()
         label = MODES[self.mode.currentIndex()][0]
@@ -1239,6 +1247,10 @@ class BatchTab(QWidget):
                              "Precise is very slow over a whole folder.")
         self.watershed = QCheckBox("Split touching plaques")
         self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch.")
+        self.small = QCheckBox("Small plaques (engine -small gates)")
+        self.small.setToolTip("Lower the engine's size gates for plaques under ~2.5 mm. Published "
+                              "runs WITHOUT this unless ticked, matching the Measure tab and the CLI; "
+                              "Current and Sensitive always use the small gates in the app.")
         self.crops = QCheckBox("Also export Fiji-calibrated plate crops")
         self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
                               "baked in (plus a .fiji.txt). Opens in Fiji already scaled in mm, so "
@@ -1271,6 +1283,7 @@ class BatchTab(QWidget):
         opt.addWidget(self.watershed); opt.addStretch()
         gl.addLayout(opt, 2, 1)
         gl.addWidget(self.crops, 3, 1)
+        gl.addWidget(self.small, 4, 1)
 
         runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addWidget(self.open_btn)
         runrow.addStretch(); runrow.addWidget(self.progress)
@@ -1320,7 +1333,8 @@ class BatchTab(QWidget):
                                     "For a large folder, Current is far faster.")
         self._set_busy(True); self.window().statusBar().showMessage("Batch running…")
         w = Worker(batch_measure.batch_measure, folder, plate_mm=self.plate.value(), mode=key,
-                   watershed=self.watershed.isChecked(), crops=self.crops.isChecked())
+                   watershed=self.watershed.isChecked(), crops=self.crops.isChecked(),
+                   small=self.small.isChecked())
         w.kwargs["progress"] = w.signals.progress.emit
         w.signals.progress.connect(self.status.setText)
         w.signals.finished.connect(self._done); w.signals.error.connect(self._err)
@@ -1328,7 +1342,7 @@ class BatchTab(QWidget):
 
     def _set_busy(self, on):
         self.progress.setVisible(on)
-        for x in (self.run_btn, self.mode, self.plate, self.watershed, self.crops):
+        for x in (self.run_btn, self.mode, self.plate, self.watershed, self.crops, self.small):
             x.setEnabled(not on)
 
     def _done(self, res):

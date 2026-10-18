@@ -229,18 +229,21 @@ def server(input, output, session):
         numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
         is_long = "value" in cols
 
-        def pick(cands, pool):
+        def pick(cands, pool, default=None):
             low = {str(c).lower(): c for c in pool}          # case-insensitive (matches REPLICATE, PHAGE, …)
             for cand in cands:
                 if str(cand).lower() in low:
                     return low[str(cand).lower()]
-            return pool[0] if pool else None
+            return default
 
         items = [ui.input_select("group", "Group column", {c: c for c in cols},
-                                 selected=pick(["group", "sample", "Sample", "phage"], cols))]
+                                 selected=pick(["group", "sample", "Sample", "phage"], cols,
+                                               cols[0] if cols else None))]
         items.append(ui.input_select("replicate", "Replicate (plate) column",
                                      {"(none)": "(none)", **{c: c for c in cols}},
-                                     selected=pick(["replicate", "Replicate", "plate"], cols) or "(none)"))
+                                     # no plate-like column -> "(none)", never the group column
+                                     # (which silently disabled plate-level stats; AUDIT-2026-10.md)
+                                     selected=pick(["replicate", "Replicate", "plate"], cols, "(none)")))
         if is_long:
             mets = [str(m) for m in df["metric"].dropna().unique()]
             items.append(ui.input_select("metric", "Metric to plot", {m: m for m in mets},

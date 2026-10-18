@@ -158,6 +158,30 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
         blob_enabled=bool(blob), bgr=bgr,
         clf_enabled=bool(clf),
         clf_thr=(float(clf_thr) if clf_thr is not None else None))
+    # PT-19: record the detector side of the run too (YOLO thresholds, weights identity,
+    # library versions) and rewrite summary_<tag>.json with it.
+    try:
+        import hashlib, json as _json
+        wpath = str(weights)
+        wsha = ""
+        if os.path.exists(wpath):
+            with open(wpath, "rb") as fh:
+                wsha = hashlib.sha256(fh.read()).hexdigest()[:16]
+        vers = {}
+        for mod in ("torch", "ultralytics", "cv2", "numpy"):
+            try:
+                vers[mod] = __import__(mod).__version__
+            except Exception:
+                vers[mod] = "?"
+        keep_edge = os.environ.get("PLAQSEG_KEEP_EDGE", "0") not in ("0", "", "false", "False")
+        summary["yolo"] = {"weights": os.path.basename(wpath), "weights_sha256_16": wsha,
+                           "conf": float(conf), "iou": float(iou),
+                           "tile_edge_fragments_dropped": not keep_edge}
+        summary["library_versions"] = vers
+        with open(os.path.join(out_dir, "summary_%s.json" % tag), "w") as fh:
+            _json.dump(summary, fh, indent=2)
+    except Exception:                       # never break a result for its bookkeeping
+        pass
     return summary
 
 

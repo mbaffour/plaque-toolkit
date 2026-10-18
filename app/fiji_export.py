@@ -36,10 +36,12 @@ def app_match_frame(plaques, orig_bgr, plate, ppm):
     rows = []
     for i, p in enumerate(plaques, start=1):
         cx, cy = p["center"]
-        _dp, _amm, dia_mm = _measure(p["area_pxl"], ppm)
+        dia_px, _amm, dia_mm = _measure(p["area_pxl"], ppm)
+        # Uncalibrated plate: report the PIXEL diameter rather than 0.0 mm, which made the
+        # comparison show bias = -Fiji diameter (AUDIT-2026-10.md). X/Y are already px then.
         rows.append({"INDEX": i,
                      "X": (cx - x0) * mm_per_px, "Y": (cy - y0) * mm_per_px,
-                     "DIAMETER": dia_mm})
+                     "DIAMETER": dia_mm if ppm else dia_px})
     return pd.DataFrame(rows, columns=["INDEX", "X", "Y", "DIAMETER"])
 
 

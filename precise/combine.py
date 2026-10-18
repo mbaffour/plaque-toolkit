@@ -70,6 +70,12 @@ CLF_MAX_HALF = 200
 # Each tunable can be overridden via an environment variable (PRECISE_<NAME>)
 # for cheap parameter sweeps without editing the source. Defaults below are the
 # locked-in engine defaults.
+try:
+    from _version import __version__ as _TOOLKIT_VERSION
+except Exception:                       # pragma: no cover
+    _TOOLKIT_VERSION = "0.0.0+unknown"
+
+
 def _envf(name, default):
     v = os.environ.get("PRECISE_" + name)
     return float(v) if v is not None else default
@@ -448,6 +454,17 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
         "px_per_mm": px_per_mm,
         "csv": csv_path,
         "overlay": ov_path,
+        # Every tunable that shaped this result (AUDIT-2026-09.md PT-19). The YOLO
+        # parameters and weights identity are added by precise/pipeline.py, which owns them.
+        "settings": {
+            "lawn_frac": LAWN_FRAC, "min_tol_mm": MIN_TOL_MM, "contrast_floor": CONTRAST_FLOOR,
+            "dense_factor": DENSE_FACTOR, "match_tol_scale": MATCH_TOL_SCALE,
+            "ring_k": RING_K, "label_dilate": LABEL_DILATE,
+            "blob_enabled": bool(blob_enabled), "clf_enabled": bool(clf_used),
+            "clf_thr": (clf_thr if clf_used else None),
+            "env_overrides": {k: v for k, v in os.environ.items() if k.startswith("PRECISE_")},
+        },
+        "toolkit_version": _TOOLKIT_VERSION,
     }
     sum_path = os.path.join(out_dir, "summary_%s.json" % tag)
     with open(sum_path, "w") as f:

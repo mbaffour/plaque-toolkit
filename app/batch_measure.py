@@ -48,6 +48,12 @@ def find_images(folder):
         if not os.path.isfile(path):
             continue
         if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
+            try:
+                import plaque_size_tool as _pst
+                if _pst.is_toolkit_output_file(name, folder):
+                    continue
+            except Exception:                        # pragma: no cover
+                pass
             out.append(path)
     return sorted(out)
 
@@ -62,7 +68,7 @@ def _safe_float(v):
     return f if f == f else None
 
 
-def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=False,
+def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=False,
                   out_dir=None, progress=None, crops=False):
     """Measure every image in ``folder`` and write combined CSVs.
 
@@ -114,8 +120,13 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
     mode_kwargs = dict(MODE_KWARGS.get(mode, {"small": True}))
     if watershed:
         mode_kwargs["watershed"] = True
+    # Published gets -small ONLY when the caller asks for it. The old default (small=True)
+    # made the Batch tab's "Published" run the engine with -small, so it disagreed with the
+    # Measure tab and with `plaque_size_tool.py --published` on every plate
+    # (AUDIT-2026-10.md, PT-33).
     if small and mode == "published":
         mode_kwargs["small"] = True
+    small_used = bool(mode_kwargs.get("small", False))
 
     images = find_images(folder)
     N = len(images)
@@ -146,7 +157,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
             # save_results creates ``perimg`` itself; it writes the overlay and
             # the data-green-<name>.csv mirroring the single-image GUI output.
             plaque_gui.save_results(plaques, orig_bgr, path, perimg, ppm,
-                                    lawn_gray, plate=plate)
+                                    lawn_gray, plate=plate, published=(mode == "published"),
+                                    write_provenance=False)   # the batch writes its own below
 
             # ---- optional Fiji-calibrated cropped-plate TIFF ------------- #
             if crops:
@@ -155,7 +167,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
                     orig_bgr, plate, ppm, os.path.join(perimg, name + "_plate.tif"))
 
             # ---- measurement table (no file writes) ---------------------- #
-            df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray)
+            df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray,
+                                          published=(mode == "published"))
 
             # diameter summary stats over this plate's plaques
             if len(df):
@@ -172,7 +185,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
                 axis_ratio = _safe_float(plate.get("axis_ratio"))
             tilt_flag = bool(axis_ratio is not None and axis_ratio > 1.03)
 
-            n_plaques = int(det.get("n_plaques", len(df)))
+            n_plaques = len(plaques)                 # what the CSV actually holds
             plate_rows.append({
                 "image": os.path.basename(path),
                 "n_plaques": n_plaques,
@@ -220,7 +233,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
         # empty frame with the expected columns so downstream code never KeyErrors
         all_df = pd.DataFrame(columns=[
             "IMAGE", "INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-            "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"])
+            "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "CIRCULARITY", "OVERLAP", "SOURCE"])
 
     summary_df.to_csv(os.path.join(out_dir, "per_plate.csv"), index=False)
     all_df.to_csv(os.path.join(out_dir, "all_plaques.csv"), index=False)
@@ -234,7 +247,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=True, watershed=Fa
             provenance.engine_name(published=(mode == "published"),
                                    sensitive=(mode == "sensitive"),
                                    precise=(mode == "precise")),
-            {"mode": mode, "plate_size_mm": plate_mm, "small": bool(small),
+            {"mode": mode, "plate_size_mm": plate_mm, "small": small_used,
              "watershed": bool(watershed), "crops": bool(crops), "folder": folder},
             [{"file": r.get("image"), "n_plaques": r.get("n_plaques"),
               "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),

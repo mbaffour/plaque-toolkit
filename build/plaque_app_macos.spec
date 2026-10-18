@@ -12,6 +12,9 @@ from PyInstaller.utils.hooks import (
 )
 
 ROOT = os.path.dirname(SPECPATH)
+# One source of truth for the version (PT-13); the bundle used to say 1.0.0 forever.
+import runpy
+_VERSION = runpy.run_path(os.path.join(ROOT, "_version.py"))["__version__"]
 
 datas = []
 binaries = []
@@ -38,6 +41,10 @@ datas += [(os.path.join(ROOT, "_plaqseg", "models", "nano.pt"), "_plaqseg/models
 datas += [(os.path.join(ROOT, "_research", "clf", "plaque_clf.pt"), "_research/clf")]
 datas += [(os.path.join(ROOT, "_research", "clf", "infer.py"), "_research/clf")]
 datas += [(os.path.join(ROOT, "docs"), "docs")]
+# licence texts must ship WITH the binary (Apache-2.0 sec.4 / AGPL-3.0 / LGPL-3.0 conveyance);
+# the Windows specs always did, this one did not (AUDIT-2026-10.md, PT-38).
+datas += [(os.path.join(ROOT, f), ".")
+          for f in ("LICENSE", "LICENSING.md", "THIRD_PARTY_LICENSES.md", "NOTICE")]
 
 hiddenimports += [
     # project modules
@@ -93,8 +100,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Plaque Toolkit",
         "CFBundleDisplayName": "Plaque Toolkit",
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleVersion": "1.0.0",
+        "CFBundleShortVersionString": _VERSION,
+        "CFBundleVersion": _VERSION,
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,
     },

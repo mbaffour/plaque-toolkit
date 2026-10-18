@@ -7,15 +7,33 @@ import math
 import re
 
 
+_NUM = r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+
+
 def parse_column(text):
-    """Parse a pasted/typed column: one value per line, taking the first number on each line
-    (tolerates commas, extra columns, blank lines, headers)."""
-    out = []
+    """Parse a pasted/typed column of values.
+
+    Tolerates blank lines, headers and extra columns. Two things the old parser got
+    wrong (AUDIT-2026-10.md, PT-35): a pasted Fiji *Results* table starts every row with
+    its row number, and the parser took that (1, 2, 3 ...) instead of the measurement; and
+    a European decimal comma ("1,24") was read as 1. Now: when every line carries two or
+    more numbers and the first ones count 1..n, the second number is used; a lone comma
+    between digits is a decimal point."""
+    rows = []
     for line in str(text).splitlines():
-        m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", line.replace(",", " "))
-        if m:
-            out.append(float(m.group()))
-    return out
+        t = line.strip()
+        if not t:
+            continue
+        if re.fullmatch(r"-?\d+,\d+", t):             # "1,24" -> 1.24
+            t = t.replace(",", ".")
+        nums = [float(x) for x in re.findall(_NUM, t.replace(",", " "))]
+        if nums:
+            rows.append(nums)
+    if not rows:
+        return []
+    multi = all(len(r) >= 2 for r in rows)
+    looks_indexed = multi and all(r[0] == i for i, r in enumerate(rows, start=1))
+    return [r[1] if looks_indexed else r[0] for r in rows]
 
 
 def area_to_diam(areas):
@@ -62,6 +80,40 @@ def icc_a1(ref, test):
     return (msr - mse) / denom if denom else float("nan")
 
 
+def _ba_slope(avg, diff):
+    """(slope, p) of diff ~ avg (Bland-Altman proportional bias); p via scipy if present."""
+    n = len(avg)
+    if n < 3:
+        return float("nan"), float("nan")
+    mx, my = _mean(avg), _mean(diff)
+    sxx = sum((a - mx) ** 2 for a in avg)
+    if sxx == 0:
+        return float("nan"), float("nan")
+    slope = sum((a - mx) * (d - my) for a, d in zip(avg, diff)) / sxx
+    intercept = my - slope * mx
+    resid = [d - (intercept + slope * a) for a, d in zip(avg, diff)]
+    se = math.sqrt(sum(r * r for r in resid) / (n - 2) / sxx)
+    if not se or se != se:
+        return slope, float("nan")
+    try:
+        from scipy import stats as _st
+        p = float(2 * _st.t.sf(abs(slope / se), n - 2))
+    except Exception:                               # pragma: no cover
+        p = float("nan")
+    return slope, p
+
+
+def _loa_ci_halfwidth(sd, n):
+    if n < 3 or sd != sd:
+        return float("nan")
+    try:
+        from scipy import stats as _st
+        t = float(_st.t.ppf(0.975, n - 1))
+    except Exception:                               # pragma: no cover
+        t = 1.96
+    return t * sd * math.sqrt(3.0 / n)
+
+
 def regress(x, y):
     """Least-squares y = slope*x + intercept."""
     mx, my = _mean(x), _mean(y)
@@ -91,6 +143,8 @@ def compute(tool, fiji):
         "r": pearson(tool, fiji), "icc": icc_a1(fiji, tool),
         "slope": slope, "intercept": intercept, "diff": diff, "avg": avg,
         "tool": tool, "fiji": fiji,
+        "ba_slope": _ba_slope(avg, diff)[0], "ba_slope_p": _ba_slope(avg, diff)[1],
+        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n),
     }
 
 

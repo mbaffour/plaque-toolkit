@@ -93,6 +93,7 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y()
 
 import plaque_gui as pgui
+import plaque_size_tool as pst
 from app import engine_api
 
 TOOL_SELECT = "select"
@@ -416,9 +417,15 @@ class PlaqueCanvas(QWidget):
     def _emit_selection(self):
         self.selection_changed.emit(self.selected_uids())
 
+    def _det_flag(self, key):
+        d = getattr(self, "det", None)
+        return d.get(key) if isinstance(d, dict) else None
+
     def save(self):
         return pgui.save_results(self._plaques, self.orig_bgr, self.image_path, self.out_dir,
                                  self.ppm, self.lawn_gray, plate=self.plate,
+                                 published=self._det_flag("published"),
+                                 engine_label=("Precise" if self._det_flag("precise") else None),
                                  scalebar_mm=self._scalebar_mm, scalebar_anchor=self._scalebar_anchor,
                                  scalebar_color=self._sb_bgr())
 
@@ -1058,8 +1065,25 @@ class PlaqueCanvas(QWidget):
         name = os.path.splitext(os.path.basename(self.image_path))[0]
         os.makedirs(self.out_dir, exist_ok=True)
         csv_path = os.path.join(self.out_dir, f"data_{name}.csv")
-        df = engine_api.measure_table(self._plaques, self.orig_bgr, self.ppm, self.lawn_gray)
+        _pub = self._det_flag("published")
+        df = engine_api.measure_table(self._plaques, self.orig_bgr, self.ppm, self.lawn_gray, published=_pub)
         df.to_csv(csv_path, index=False)
+        try:                                        # provenance for the app's main export (PT-31)
+            import provenance
+            if _pub is None:
+                _pub = bool(pst.use_published)
+            n_manual = sum(1 for p in self._plaques if p.get("source") not in (None, "auto"))
+            provenance.write_metadata(
+                self.out_dir, "app/plaque_canvas.export_all",
+                provenance.engine_name(published=_pub, sensitive=bool(self._det_flag("sensitive")),
+                                       precise=bool(self._det_flag("precise"))),
+                {"published": bool(_pub), "edited": n_manual > 0, "mm_per_px": self.ppm},
+                [{"file": os.path.basename(self.image_path), "path": self.image_path,
+                  "sha256_16": provenance.file_digest(self.image_path), "n_plaques": len(df),
+                  "n_manual_or_edited": n_manual, "mm_per_px": self.ppm,
+                  "csv": os.path.basename(csv_path)}])
+        except Exception:                           # noqa: BLE001 -- never block an export
+            pass
         fig_path = os.path.join(self.out_dir, f"figure_{name}.png")
         pgui.save_figure(self._plaques, self.orig_bgr, fig_path, self.ppm, plate=self.plate,
                          scalebar_mm=self._scalebar_mm, scalebar_anchor=self._scalebar_anchor,

@@ -23,7 +23,7 @@ dependencies:
       - torch>=2.0          # CPU build resolves automatically off PyPI on win/mac;
                             #   on Linux use the CPU index if you want to avoid CUDA:
                             #   pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - ultralytics>=8.3
+      - ultralytics>=8.4.79       # the shipped YOLO26-family checkpoints need a recent ultralytics; 8.4.79 is the known-good pin (requirements_full.txt)
       - scikit-image>=0.22
       - opencv-python>=4.6,<5
       - numpy>=1.24

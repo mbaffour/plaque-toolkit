@@ -30,7 +30,10 @@ def _precise_smoke(extra=None):
         print("PRECISE_SMOKE FAIL  (torch/ultralytics not importable in this interpreter)")
         return 1
     img = extra or engine_api.resource_path("sample.tif")
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(img)), "out_precise_smoke")
+    # Write the gate's outputs to a temp folder: next to sample.tif they landed INSIDE the
+    # frozen .app bundle that build_macos.sh then packaged and uploaded (AUDIT-2026-10.md).
+    import tempfile
+    out_dir = os.environ.get("PLAQUE_SMOKE_OUT") or tempfile.mkdtemp(prefix="precise_smoke_")
     try:
         from precise.pipeline import run_inprocess
         s = run_inprocess(img, plate_mm=100, out_dir=out_dir, clf=True, blob=False)

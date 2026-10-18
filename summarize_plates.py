@@ -19,6 +19,7 @@ import re
 import pandas as pd
 
 PREFIX, SUFFIX = "data-green-", ".csv"
+APP_PREFIX = "data_"            # the desktop app's "Export all" CSV (same columns, INDEX not INDEX_COL)
 IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 
 
@@ -52,18 +53,43 @@ def _stats_row(plate, d, csv_found=True):
 
 def _image_stems(images_dir):
     stems = []
-    for root, _dirs, files in os.walk(images_dir):
+    try:
+        import plaque_size_tool as _pst
+    except Exception:                       # pragma: no cover
+        _pst = None
+    for root, dirs, files in os.walk(images_dir):
+        if _pst:
+            dirs[:] = sorted(x for x in dirs if not _pst.is_toolkit_output_dir(x))
         for f in sorted(files):
             if os.path.splitext(f)[1].lower() in IMAGE_EXTS:
+                if _pst and _pst.is_toolkit_output_file(f, root):
+                    continue
                 stems.append(os.path.splitext(f)[0])
     return stems
 
 
-def summarize(out_dir, images_dir=None):
+def _find_csvs(out_dir, recursive=False):
+    """(plate, path) for every per-plate CSV: the CLI's data-green-<plate>.csv, the app's
+    data_<plate>.csv (Export all), and with recursive=True the batch tab's
+    out_batch/<plate>/data-green-<plate>.csv (AUDIT-2026-10.md, PT-12 extension)."""
+    pats = [PREFIX + "*" + SUFFIX, APP_PREFIX + "*" + SUFFIX]
+    found = []
+    for pat in pats:
+        found += glob.glob(os.path.join(out_dir, pat))
+        if recursive:
+            found += glob.glob(os.path.join(out_dir, "**", pat), recursive=True)
+    out = {}
+    for csv in sorted(set(found)):
+        base = os.path.basename(csv)
+        plate = base[len(PREFIX):-len(SUFFIX)] if base.startswith(PREFIX) else base[len(APP_PREFIX):-len(SUFFIX)]
+        out.setdefault(plate, csv)                  # data-green- wins over data_ for one plate
+    return sorted(out.items())
+
+
+def summarize(out_dir, images_dir=None, recursive=False):
     rows = []
     seen = set()
-    for csv in sorted(glob.glob(os.path.join(out_dir, PREFIX + "*" + SUFFIX))):
-        plate = os.path.basename(csv)[len(PREFIX):-len(SUFFIX)]
+    for plate, csv in _find_csvs(out_dir, recursive):
         seen.add(plate)
         rows.append(_stats_row(plate, pd.read_csv(csv)))
 
@@ -110,5 +136,7 @@ if __name__ == "__main__":
     ap.add_argument("-i", "--images", default=None,
                     help="optional: the folder of INPUT images, so plates that produced no "
                          "CSV at all are listed too (CSV_FOUND = False)")
+    ap.add_argument("-r", "--recursive", action="store_true",
+                    help="also look in sub-folders (the app's Batch tab writes out_batch/<plate>/)")
     a = ap.parse_args()
-    summarize(a.out, a.images)
+    summarize(a.out, a.images, a.recursive)

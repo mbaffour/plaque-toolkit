@@ -7,7 +7,8 @@ Usage:
   python run_plaqseg.py WEIGHTS IMAGE OUT_DIR TAG [--conf 0.25] [--iou 0.5] [--ppm 0.0363]
   (--ppm is mm-per-pixel from our dish calibration; omit to report pixels only)
 """
-import argparse, os, json
+import argparse
+import os, os, json
 import numpy as np
 import cv2
 from ultralytics import YOLO
@@ -44,8 +45,16 @@ def detect_plaqseg(model, img, conf=0.1, iou=0.5, ppm=0.0,
             xyxy = r.boxes.xyxy.cpu().numpy()
             cf = r.boxes.conf.cpu().numpy()
             polys = r.masks.xy if (r.masks is not None) else None
+            ch, cw = crop.shape[:2]
             for i in range(len(xyxy)):
                 b = xyxy[i]
+                # A box cut off by an INTERNAL tile edge is a fragment of a plaque that the
+                # overlapping neighbour tile sees whole (tiles overlap by tile - stride px).
+                # Fragments with < 50 % of the plaque visible survived the global NMS and
+                # produced a double count plus a spurious undersized diameter
+                # (AUDIT-2026-10.md, PT-36). Drop them; set PLAQSEG_KEEP_EDGE=1 to keep.
+                if not _KEEP_EDGE and _touches_internal_edge(b, x0, y0, cw, ch, W, H):
+                    continue
                 gb = [float(b[0] + x0), float(b[1] + y0), float(b[2] + x0), float(b[3] + y0)]
                 if polys is not None and i < len(polys) and len(polys[i]) >= 3:
                     area = float(cv2.contourArea(polys[i].astype(np.float32)))
@@ -68,6 +77,23 @@ def detect_plaqseg(model, img, conf=0.1, iou=0.5, ppm=0.0,
                          AREA_PXL=round(area, 1), DIAMETER_PXL=round(dia_px, 2),
                          DIAMETER_MM=round(dia_mm, 3), CONF=round(scores[k], 3)))
     return rows, len(boxes)
+
+
+_KEEP_EDGE = os.environ.get("PLAQSEG_KEEP_EDGE", "0") not in ("0", "", "false", "False")
+
+
+def _touches_internal_edge(b, x0, y0, cw, ch, W, H, margin=1.0):
+    """True if box `b` (crop coords) touches a crop edge that is NOT also an image edge."""
+    left, top, right, bottom = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+    if left <= margin and x0 > 0:
+        return True
+    if top <= margin and y0 > 0:
+        return True
+    if right >= cw - margin and x0 + cw < W:
+        return True
+    if bottom >= ch - margin and y0 + ch < H:
+        return True
+    return False
 
 
 def main():

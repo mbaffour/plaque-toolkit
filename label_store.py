@@ -84,7 +84,13 @@ def file_into_store(meta, plaques, image_path=None, *, source="app", engine=None
     stem = os.path.splitext(os.path.basename(meta.get("image") or img or "label"))[0]
     sample, rep = parse_sample_replicate(stem)
     now = _now()
-    label_id = "%s_%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", stem), now.strftime("%Y%m%d-%H%M%S"))
+    # stem + timestamp + a short digest of the labels themselves: two exports within one
+    # second (a re-ingest, or duplicate stems in a folder) used to get the same id and the
+    # second silently overwrote the first (AUDIT-2026-10.md, PT-37).
+    _digest = hashlib.sha1(json.dumps(plaques, sort_keys=True, default=str).encode()).hexdigest()[:6]
+    label_id = "%s_%s_%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", stem), now.strftime("%Y%m%d-%H%M%S"), _digest)
+    if os.path.exists(os.path.join(labels_dir, label_id + ".json")):
+        raise FileExistsError("label %s is already in the store (identical labels, same second)" % label_id)
     sha = sha1_file(img) if (img and os.path.exists(img)) else None
 
     image_stored = ""
@@ -97,6 +103,10 @@ def file_into_store(meta, plaques, image_path=None, *, source="app", engine=None
             image_stored = ""
 
     full_meta = dict(meta)
+    # The store is meant to be shared/retrained from: keep the image's name and digest,
+    # not the absolute path (which carries the user's home folder / user name).
+    if full_meta.get("image_path"):
+        full_meta["image_path"] = os.path.basename(str(full_meta["image_path"]))
     full_meta.update(schema=SCHEMA, label_id=label_id,
                      date=now.isoformat(timespec="seconds"),
                      sample=sample, replicate=rep, source=source, engine=engine,

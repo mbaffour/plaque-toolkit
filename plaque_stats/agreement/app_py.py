@@ -187,8 +187,9 @@ def server(input, output, session):
         if df is None:
             return ui.p("Upload a paired CSV (tool + manual columns), or click “Load example data”.")
         num = [str(c) for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        tguess = ag._find_col(df.columns, ag.TOOL_HINTS) or (num[0] if num else None)
-        mguess = ag._find_col(df.columns, ag.MANUAL_HINTS) or (num[1] if len(num) > 1 else None)
+        tguess = ag._find_col(num, ag.TOOL_HINTS) or (num[0] if num else None)
+        mguess = (ag._find_col(num, ag.MANUAL_HINTS, exclude=(tguess,))
+                  or next((c for c in num if c != tguess), None))
         return ui.TagList(
             ui.input_select("tool", "Tool column (method under test)", {c: c for c in num}, selected=tguess),
             ui.input_select("manual", "Manual / reference column", {c: c for c in num}, selected=mguess),
@@ -244,7 +245,8 @@ def server(input, output, session):
             ("Lin's CCC", "%.3f" % s["ccc"]),
             ("mean bias (%s)" % u, "%+.3f  (%.1f%%)" % (s["bias"], s["pct_bias"])),
             ("bias vs 0 (paired t)", "t = %.2f, p = %s" % (s["t_stat"], ag._pfmt(s["t_p"]))),
-            ("95%% limits of agreement", "%+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], u)),
+            ("95% limits of agreement", "%+.3f to %+.3f %s  (each ±%.3f, 95%% CI)" % (s["loa_lo"], s["loa_hi"], u, s.get("loa_ci_halfwidth", float("nan")))),
+            ("proportional bias (diff ~ mean)", "slope %+.3f, %s" % (s.get("ba_slope", float("nan")), ag._pstr(s.get("ba_slope_p", float("nan"))) if s.get("ba_slope_p", float("nan")) == s.get("ba_slope_p", float("nan")) else "p n/a")),
             ("RMSE / MAE (%s)" % u, "%.3f / %.3f" % (s["rmse"], s["mae"])),
             ("regression (tool on ref)", "y = %.3f x %+.3f" % (s["slope"], s["intercept"])),
         ]

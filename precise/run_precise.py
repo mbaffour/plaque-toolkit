@@ -42,7 +42,7 @@ except Exception:                      # pragma: no cover - keep working with no
 # Default to the running interpreter for the plaque stage (run_precise itself is launched
 # from the plaque env); fall back to discovery, then to sys.executable.
 PLAQUE_PY = find_env_python("plaque") or sys.executable
-PLAQSEG_PY = find_env_python("plaqseg") or "python"
+PLAQSEG_PY = find_env_python("plaqseg")        # None if absent; checked in main()
 RUN_PLAQSEG = os.path.join(ROOT, "_plaqseg", "run_plaqseg.py")
 DEFAULT_WEIGHTS = os.path.join(ROOT, "_plaqseg", "models", "small.pt")
 
@@ -79,6 +79,12 @@ def main():
     ap.add_argument("--clf-thr", default=None,
                     help="P(plaque) threshold for the learned gate (default 0.5 / model default).")
     a = ap.parse_args()
+    if not a.plaqseg_py:
+        # Falling back to a bare "python" produced a raw ModuleNotFoundError from the
+        # launcher (AUDIT-2026-10.md). Say what is missing and how to point at it.
+        raise SystemExit("No 'plaqseg' conda environment was found (torch/ultralytics). Create it "
+                         "with `conda env create -f environment-precise.yml`, or pass "
+                         "--plaqseg-py / set PLAQSEG_PY to that environment's python.")
 
     image = os.path.abspath(a.image)
     out = os.path.abspath(a.out)

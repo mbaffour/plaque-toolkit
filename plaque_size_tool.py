@@ -258,6 +258,28 @@ def draw_one_contour(image, c_df, color):
     return image_w_contours
 
 
+OUTPUT_DIR_NAMES = ('out', 'out_batch', 'out_turbidity', 'out_precise', 'out_precise_smoke',
+                    'training_data')
+OUTPUT_FILE_PREFIXES = ('out_', 'overlay_', 'precise_overlay_', 'figure_', 'plaquetk_')
+
+
+def is_toolkit_output_dir(name):
+    """True for folders the toolkit itself writes, so batch walkers skip them."""
+    return (name in OUTPUT_DIR_NAMES or name.startswith(('out_turb_', 'out_precise_'))
+            or name.endswith('_fiji'))
+
+
+def is_toolkit_output_file(name, folder=None):
+    """True for images the toolkit itself writes next to the inputs (annotated overlays,
+    figures, the Fiji plate crop that always has a .fiji.txt sibling)."""
+    stem = os.path.splitext(name)[0]
+    if stem.startswith(OUTPUT_FILE_PREFIXES):
+        return True
+    if stem.endswith('_plate') and folder and os.path.exists(os.path.join(folder, stem + '.fiji.txt')):
+        return True
+    return False
+
+
 def get_image_paths(image, directory):
     images = []
     if image:
@@ -265,13 +287,22 @@ def get_image_paths(image, directory):
     else:
         exts = ('.tif', '.tiff', '.jpg', '.jpeg', '.png', '.heic', '.heif')
         skip = os.path.abspath(out_dir_path)
+        skipped = []
         for r, d, f in os.walk(directory):
-            # Deterministic order, and never descend into our own output folder: a second
-            # `-d .` run used to ingest out/out_<plate>.tif as a new plate.
-            d[:] = sorted(x for x in d if os.path.abspath(os.path.join(r, x)) != skip)
+            # Deterministic order, and never descend into the toolkit's own output folders:
+            # a second `-d .` run used to ingest out/out_<plate>.tif as a new plate.
+            d[:] = sorted(x for x in d if os.path.abspath(os.path.join(r, x)) != skip
+                          and not is_toolkit_output_dir(x))
             for file in sorted(f):
                 if os.path.splitext(file)[1].lower() in exts:   # case-insensitive; incl. HEIC
+                    if is_toolkit_output_file(file, r):
+                        skipped.append(os.path.join(r, file))
+                        continue
                     images.append(os.path.join(r, file))
+        if skipped:
+            print("NOTE: skipped %d file(s) that look like toolkit outputs (out_*, overlay_*, "
+                  "figure_*, Fiji plate crops): %s" % (len(skipped), ", ".join(
+                      os.path.basename(p) for p in skipped[:5]) + (" ..." if len(skipped) > 5 else "")))
     return images
 
 
@@ -311,12 +342,37 @@ def output_stem(image_path):
     return _output_stems.get(image_path) or os.path.splitext(os.path.basename(image_path))[0]
 
 
+def imwrite_checked(path, img):
+    """cv2.imwrite that cannot fail silently (AUDIT-2026-09.md PT-20).
+
+    cv2.imwrite returns False -- it does not raise -- when it cannot open the path,
+    which on Windows happens for any non-ASCII output path. Every caller in the
+    toolkit ignored that return value and then reported the image as saved. This
+    helper encodes with the same OpenCV encoder and default parameters (so the bytes
+    are identical) and writes through Python's own file API, which handles any path,
+    and raises if even that fails.
+    """
+    try:
+        ok = bool(cv2.imwrite(path, img))
+    except cv2.error:
+        ok = False
+    if ok:
+        return path
+    ext = os.path.splitext(path)[1] or '.png'
+    ok, buf = cv2.imencode(ext, img)
+    if not ok:
+        raise IOError("could not encode image for %s" % path)
+    with open(path, 'wb') as fh:
+        fh.write(buf.tobytes())
+    return path
+
+
 def write_images(out_dir, output_image, binary_image, high_contrast_image, image_path):
     stem = output_stem(image_path)
     ext = os.path.splitext(image_path)[1]
     if ext.lower() in ('.heic', '.heif'):   # OpenCV cannot write HEIC
         ext = '.png'
-    cv2.imwrite(f'{out_dir}/out_{stem}{ext}', output_image)
+    imwrite_checked(f'{out_dir}/out_{stem}{ext}', output_image)
     # cv2.imwrite(f'{out_dir}/out_red-{os.path.split(image_path)[1]}', output_image_red)
     #cv2.imwrite(f'{out_dir}/contrast-{os.path.split(image_path)[1]}', high_contrast_image)
     #cv2.imwrite(f'{out_dir}/binary-{os.path.split(image_path)[1]}', binary_image)

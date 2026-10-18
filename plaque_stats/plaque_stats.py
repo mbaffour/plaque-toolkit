@@ -123,11 +123,26 @@ def normalize(df, group, value, replicate, metric):
     if group not in cols:
         raise SystemExit(f"[error] group column {group!r} not found. Columns: {sorted(cols)}")
 
-    long_mode = ("value" in cols) and (value in (None, "value"))
+    # LONG layout: a `value` column plus a `metric` column naming what each row measures.
+    # `--value <metric name>` picks the metric. Before 1.1.1 the filter below was dead code
+    # (its guard contradicted the long_mode test), so a LONG file was either analysed with
+    # ALL its metrics pooled into one sample (diameter + area + turbidity) or, with the
+    # documented --value, rejected as a missing column (AUDIT-2026-10.md, PT-41).
+    long_mode = ("value" in cols) and (value in (None, "value") or value not in cols)
     if long_mode:
         vcol = "value"
-        if metric in cols and value not in (None, "value") and value != "value":
-            df = df[df[metric] == value]
+        if metric in cols:
+            mets = [str(m) for m in df[metric].dropna().unique()]
+            if value not in (None, "value"):
+                if str(value) not in mets:
+                    raise SystemExit("[error] metric %r not found in column %r. Available: %s"
+                                     % (value, metric, ", ".join(mets)))
+                df = df[df[metric].astype(str) == str(value)]
+            elif len(mets) > 1:
+                raise SystemExit("[error] this LONG file holds %d metrics (%s). Pass --value <metric> "
+                                 "to choose one; pooling them would mix units." % (len(mets), ", ".join(mets)))
+            elif mets:
+                value = mets[0]
     else:
         if value is None:
             numeric = [c for c in df.columns
@@ -210,7 +225,7 @@ def replicate_means(df):
 # ------------------------------------------------------------------- statistics
 def stars(p):
     if p is None or (isinstance(p, float) and math.isnan(p)):
-        return "ns"
+        return "n/a"       # a test that did not run must not read as 'not significant'
     return "***" if p < 1e-3 else "**" if p < 1e-2 else "*" if p < 5e-2 else "ns"
 
 
@@ -266,12 +281,60 @@ def pairwise_mwu(groups):
 
 
 def tukey(groups):
+    """Tukey HSD (Tukey-Kramer for unequal n). Groups with fewer than 2 values cannot be
+    tested: they get p = NaN (reported as n/a) instead of crashing scipy (AUDIT-2026-10.md)."""
     labels = list(groups)
-    res = st.tukey_hsd(*[np.asarray(groups[g], float) for g in labels])
+    ok = [g for g in labels if len(groups[g]) >= 2]
     out = {}
+    if len(ok) >= 2:
+        res = st.tukey_hsd(*[np.asarray(groups[g], float) for g in ok])
+        for i, j in itertools.combinations(range(len(ok)), 2):
+            out[(ok[i], ok[j])] = float(res.pvalue[i, j])
     for i, j in itertools.combinations(range(len(labels)), 2):
-        out[(labels[i], labels[j])] = float(res.pvalue[i, j])
+        out.setdefault((labels[i], labels[j]), float("nan"))
     return out
+
+
+def games_howell(groups):
+    """Games-Howell pairwise test (unequal variances), via the studentized range
+    distribution with Welch-Satterthwaite degrees of freedom."""
+    labels = [g for g in groups if len(groups[g]) >= 2]
+    k = len(labels)
+    out = {}
+    for a, b in itertools.combinations(labels, 2):
+        x, y = np.asarray(groups[a], float), np.asarray(groups[b], float)
+        na, nb = len(x), len(y)
+        va, vb = x.var(ddof=1) / na, y.var(ddof=1) / nb
+        se = math.sqrt(va + vb)
+        if se == 0:
+            out[(a, b)] = float("nan"); continue
+        t = abs(x.mean() - y.mean()) / se
+        df = (va + vb) ** 2 / (va ** 2 / (na - 1) + vb ** 2 / (nb - 1))
+        out[(a, b)] = float(st.studentized_range.sf(t * math.sqrt(2.0), k, df))
+    for a, b in itertools.combinations(list(groups), 2):
+        out.setdefault((a, b), float("nan"))
+    return out
+
+
+def welch_anova_p(gv):
+    """Welch's one-way ANOVA p-value (unequal variances)."""
+    gv = [np.asarray(v, float) for v in gv if len(v) >= 2]
+    k = len(gv)
+    if k < 2:
+        return float("nan")
+    n = np.array([len(v) for v in gv], float)
+    m = np.array([v.mean() for v in gv])
+    s2 = np.array([v.var(ddof=1) for v in gv])
+    if np.any(s2 == 0):
+        return float("nan")
+    w = n / s2
+    mw = (w * m).sum() / w.sum()
+    num = ((w * (m - mw) ** 2).sum()) / (k - 1)
+    lam = (3.0 / (k * k - 1)) * (((1 - w / w.sum()) ** 2) / (n - 1)).sum()
+    den = 1 + 2.0 * (k - 2) / 3.0 * lam
+    F = num / den
+    df2 = 1.0 / lam if lam > 0 else float("inf")
+    return float(st.f.sf(F, k - 1, df2))
 
 
 def _holm(raw):
@@ -329,7 +392,13 @@ def run_stats(df, order, unit, parametric):
 
     k = len(order)
     omni = {"unit": unit, "n_per_group": ns, "min_n": min_n, "levene_p": levene_p,
-            "normality_p": normal, "parametric_used": use_param, "warnings": warns}
+            "normality_p": normal, "parametric_used": use_param, "warnings": warns,
+            # descriptives of the values the test actually used (plate means when
+            # unit == 'replicate'), so the report can quote the tested numbers (PT-43)
+            "unit_stats": {g: {"mean": float(np.mean(v)) if len(v) else float("nan"),
+                               "sd": float(np.std(v, ddof=1)) if len(v) > 1 else float("nan"),
+                               "sem": float(np.std(v, ddof=1) / math.sqrt(len(v))) if len(v) > 1 else float("nan"),
+                               "n": int(len(v))} for g, v in groups.items()}}
     if k == 2:
         a, b = groups[order[0]], groups[order[1]]
         omni["test"] = "Welch t-test" if use_param else "Mann–Whitney U"
@@ -343,10 +412,24 @@ def run_stats(df, order, unit, parametric):
     elif k > 2:
         gv = [groups[g] for g in order]
         if use_param:
-            omni["test"] = "one-way ANOVA"
-            omni["p"] = float(st.f_oneway(*gv).pvalue)
-            omni["effect"] = {"eta_squared": _eta_squared(gv)}
-            posthoc = tukey(groups)
+            # Classic ANOVA + Tukey assume equal variances. When Levene rejects that, use
+            # Welch's ANOVA + Games-Howell instead of printing Levene and ignoring it
+            # (AUDIT-2026-10.md, PT-42). Equal-variance data takes the old path unchanged.
+            unequal = (levene_p == levene_p) and levene_p < 0.05 and min_n >= 2
+            if unequal:
+                omni["test"] = "Welch ANOVA"
+                omni["p"] = welch_anova_p(gv)
+                omni["effect"] = {"eta_squared": _eta_squared(gv)}
+                posthoc = games_howell(groups)
+                omni["posthoc"] = "Games-Howell"
+                warns.append("Levene p = %.3f: group variances differ, so Welch's ANOVA and "
+                             "Games-Howell (no equal-variance assumption) were used." % levene_p)
+            else:
+                omni["test"] = "one-way ANOVA"
+                omni["p"] = float(st.f_oneway(*gv).pvalue)
+                omni["effect"] = {"eta_squared": _eta_squared(gv)}
+                posthoc = tukey(groups)
+                omni["posthoc"] = "Tukey HSD"
         else:
             hres = st.kruskal(*gv)
             N = sum(len(x) for x in gv)
@@ -513,8 +596,10 @@ def _pairs_to_annotate(order, posthoc, mode):
     elif mode == "all":
         cand = allpairs
     else:  # auto: annotate significant pairs (fall back to adjacent if none significant)
-        sig = [p for p in allpairs
-               if (posthoc.get(p, posthoc.get((p[1], p[0]))) or 1) < 0.05]
+        def _p(pair):
+            v = posthoc.get(pair, posthoc.get((pair[1], pair[0])))
+            return v if (v is not None and v == v) else 1.0       # p == 0.0 is significant
+        sig = [p for p in allpairs if _p(p) < 0.05]
         cand = sig or [(order[i], order[i + 1]) for i in range(len(order) - 1)]
     return cand
 
@@ -560,18 +645,34 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
         g1, g2 = summ.iloc[0], summ.iloc[1]
         d_txt = ""
         d_val = omni.get("effect", {}).get("cohens_d")
+        us = omni.get("unit_stats", {})
         if d_val is not None and d_val == d_val:
             d_txt = ", Cohen's d = %.2f" % d_val
-        L.append("> %s in %s was %.2f ± %.2f (%s) vs %s %.2f ± %.2f (%s); %s p = %s%s."
-                 % (metric, g1["group"], g1["mean"], g1["sd"], _n(g1),
-                    g2["group"], g2["mean"], g2["sd"], _n(g2),
-                    omni["test"], _fmt_p(omni["p"]), d_txt))
+            if omni.get("min_n", 0) < 5:
+                d_txt += " (a %d-vs-%d %s estimate; treat as rough)" % (
+                    us.get(g1["group"], {}).get("n", 0), us.get(g2["group"], {}).get("n", 0),
+                    "plate" if unit == "replicate" else "plaque")
+        if unit == "replicate" and g1["group"] in us and g2["group"] in us:
+            # Quote the numbers the test was run on (plate means +/- SEM, n = plates), not
+            # per-plaque mean +/- SD beside a plate-level p (AUDIT-2026-10.md, PT-43).
+            u1, u2 = us[g1["group"]], us[g2["group"]]
+            L.append("> %s in %s was %.2f ± %.2f (mean ± SEM of %d plate means; %d plaques) vs %s "
+                     "%.2f ± %.2f (%d plates; %d plaques); %s on plate means, p = %s%s."
+                     % (metric, g1["group"], u1["mean"], u1["sem"], u1["n"], int(g1["n"]),
+                        g2["group"], u2["mean"], u2["sem"], u2["n"], int(g2["n"]),
+                        omni["test"], _fmt_p(omni["p"]), d_txt))
+        else:
+            L.append("> %s in %s was %.2f ± %.2f (%s) vs %s %.2f ± %.2f (%s); %s p = %s%s."
+                     % (metric, g1["group"], g1["mean"], g1["sd"], _n(g1),
+                        g2["group"], g2["mean"], g2["sd"], _n(g2),
+                        omni["test"], _fmt_p(omni["p"]), d_txt))
     else:
         unit_note = ("the plate is the experimental unit" if unit == "replicate"
                      else "NOTE: unit = plaque — pseudoreplication, add plate replicates")
-        L.append("> %s across %d groups: p = %s (statistical unit: %s; pairwise adjusted with "
-                 "Holm/Tukey). Values are mean ± SD; %s."
-                 % (omni["test"], len(summ), _fmt_p(omni["p"]), unit, unit_note))
+        L.append("> %s across %d groups: p = %s (statistical unit: %s; pairwise: %s). "
+                 "Values are mean ± SD per plaque; %s."
+                 % (omni["test"], len(summ), _fmt_p(omni["p"]), unit,
+                    omni.get("posthoc", "Holm/Tukey"), unit_note))
 
     L.append("\n## Assumptions & limitations\n")
     L.append("- **Experimental unit:** %s — %s." % (
@@ -644,7 +745,7 @@ def save_stats_table(summ, base, metric, unit, formats=("png",)):
     nrow = len(disp)
     fig, ax = plt.subplots(figsize=(min(13, 2.0 + 0.92 * len(disp.columns)), 0.55 + 0.34 * (nrow + 1)))
     ax.axis("off")
-    ax.set_title("Descriptive statistics — %s  (unit: %s)" % (metric, unit),
+    ax.set_title("Descriptive statistics — %s  (per plaque; tests use unit: %s)" % (metric, unit),
                  fontsize=11, fontweight="bold", loc="left", pad=12)
     tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
                    loc="center", cellLoc="center")
@@ -718,8 +819,20 @@ def normalize_grouped(df, group, subgroup, value, replicate, metric):
     for col, nm in ((group, "group"), (subgroup, "subgroup")):
         if col not in cols:
             raise SystemExit("[error] %s column %r not found. Columns: %s" % (nm, col, sorted(cols)))
-    if value in (None, "value") and "value" in cols:
+    if "value" in cols and (value in (None, "value") or value not in cols):
         vcol = "value"
+        if metric in cols:                           # same LONG handling as normalize() (PT-41)
+            mets = [str(m) for m in df[metric].dropna().unique()]
+            if value not in (None, "value"):
+                if str(value) not in mets:
+                    raise SystemExit("[error] metric %r not found in column %r. Available: %s"
+                                     % (value, metric, ", ".join(mets)))
+                df = df[df[metric].astype(str) == str(value)]
+            elif len(mets) > 1:
+                raise SystemExit("[error] this LONG file holds %d metrics (%s). Pass --value <metric> "
+                                 "to choose one; pooling them would mix units." % (len(mets), ", ".join(mets)))
+            elif mets:
+                value = mets[0]
     elif value is None:
         numeric = [c for c in df.columns if c not in (group, subgroup, replicate, metric)
                    and pd.api.types.is_numeric_dtype(df[c])]
@@ -800,7 +913,20 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto"):
                               # a test that didn't run (n<2 per side -> p is NaN) must NOT read as a
                               # tested 'ns'; label it n/a so the report/plot don't imply a null result
                               "test": test, "p": p, "signif": stars(p) if p == p else "n/a"})
-    return pd.DataFrame(rows), pd.DataFrame(comps), unit
+    comps_df = pd.DataFrame(comps)
+    if len(comps_df):
+        # Several subgroups are each tested against the one control within a group: adjust
+        # those p-values (Holm, within group) and report both (AUDIT-2026-10.md, PT-44).
+        comps_df["p_raw"] = comps_df["p"]
+        adj = []
+        for g, sub in comps_df.groupby("group", sort=False):
+            raw = {i: (float(p) if p == p else float("nan")) for i, p in zip(sub.index, sub["p"])}
+            a = _holm(raw)
+            adj += [(i, a[i]) for i in sub.index]
+        for i, p in adj:
+            comps_df.loc[i, "p"] = p
+            comps_df.loc[i, "signif"] = stars(p) if p == p else "n/a"
+    return pd.DataFrame(rows), comps_df, unit
 
 
 def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
@@ -911,7 +1037,8 @@ def _write_grouped_report(path, metric, summ, comp, unit, control, args):
                 f.write("| %s | %s | %.3f | %.3f | %+.1f%% | %.2f | %s | %s | %s |\n"
                         % (r["group"], r["subgroup"], r["mean_control"], r["mean_subgroup"],
                            r["change_pct"], r["cohens_d"], r["test"], _fmt_p(r["p"]), r["signif"]))
-        f.write("\n_Stars: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant. "
+        f.write("\n_Stars: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant, n/a = not tested. "
+                "p-values are Holm-adjusted within each group (raw p in the CSV as p_raw). "
                 "Change = (subgroup − control)/control._\n")
 
 

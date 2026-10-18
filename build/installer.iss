@@ -4,7 +4,8 @@
 ; It wraps the ONEDIR PyInstaller build (dist\PlaqueToolkit\) into PlaqueToolkitSetup.exe.
 
 #define AppName "Plaque Toolkit"
-#define AppVer  "1.0.0"
+; Keep in step with _version.py (the installer cannot read it; AUDIT-2026-10.md PT-38).
+#define AppVer  "1.1.0"
 #define AppExe  "PlaqueToolkit.exe"
 
 [Setup]

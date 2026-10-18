@@ -25,10 +25,22 @@ import pandas as pd
 from shiny import App, ui, render, reactive, req
 
 # ------------------------------------------------------------------ engine ----
+_TMP_DIRS = []            # temp folders of earlier requests; purged on the next request
+
+
+def _purge_old_tmp(keep=1):
+    """\"Nothing is stored\" was only true until the Space restarted: every upload and every
+    result folder was left behind (AUDIT-2026-10.md, PT-40). Keep the latest `keep`."""
+    while len(_TMP_DIRS) > keep:
+        d = _TMP_DIRS.pop(0)
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _run_precise(image_path, plate_mm, clf):
     """Call the repo's in-process Precise pipeline. Returns (summary, df, overlay_path)."""
     import precise.pipeline as pipe
     out_dir = tempfile.mkdtemp(prefix="precise_web_")
+    _TMP_DIRS.append(out_dir)
     summary = pipe.run_inprocess(image_path, plate_mm=float(plate_mm), out_dir=out_dir,
                                  clf=bool(clf))
     csv, overlay = summary.get("csv"), summary.get("overlay")
@@ -102,7 +114,9 @@ def server(input, output, session):
         # copy upload to a temp file with a real extension the readers accept
         src = f[0]["datapath"]
         ext = os.path.splitext(f[0]["name"])[1] or ".png"
+        _purge_old_tmp(keep=0)
         tmp = tempfile.mkdtemp(prefix="upload_")
+        _TMP_DIRS.append(tmp)
         img = os.path.join(tmp, "plate" + ext)
         shutil.copyfile(src, img)
         try:

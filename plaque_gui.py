@@ -240,12 +240,24 @@ def detect_region(orig_bgr, roi, sensitive=True, small=True):
 # --------------------------------------------------------------------------- #
 #  Measurement + manual segmentation helpers
 # --------------------------------------------------------------------------- #
-def measure(area_pxl, pxl_per_mm):
-    """Area-equivalent diameter (px), area (mm^2), diameter (mm) -- as the tool does."""
+def measure(area_pxl, pxl_per_mm, published=None):
+    """Area-equivalent diameter (px), area (mm^2), diameter (mm) -- as the tool does.
+
+    `published` (None = follow pst.use_published) selects the Published engine's sizing,
+    which derives DIAMETER_MM from AREA_MM2 *rounded to 2 dp* (upstream stored it as a
+    2-dp string). The app and this editor used the un-rounded area for every engine, so
+    their "Published" DIAMETER_MM differed from the CLI's by 0.01 mm on ~3 % of plaques
+    (AUDIT-2026-10.md, PT-30). Current/Sensitive sizing is unchanged.
+    """
+    if published is None:
+        published = bool(pst.use_published)
     dia_pxl = 2.0 * np.sqrt(area_pxl / np.pi)
     if pxl_per_mm:
         area_mm2 = area_pxl * pxl_per_mm * pxl_per_mm
-        dia_mm = 2.0 * np.sqrt(area_mm2 / np.pi)
+        if published:
+            dia_mm = 2.0 * np.sqrt(round(area_mm2, 2) / np.pi)
+        else:
+            dia_mm = 2.0 * np.sqrt(area_mm2 / np.pi)
     else:
         area_mm2, dia_mm = 0.0, 0.0
     return dia_pxl, area_mm2, dia_mm
@@ -424,7 +436,11 @@ def save_image(img_bgr, out_path):
 
 
 def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=None, plate=None,
-                 scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
+                 scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255),
+                 published=None, write_provenance=True, engine_label=None):
+    """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
+    sibling saying which engine and edits produced them (PT-9 never covered the editor or
+    the app's Save; AUDIT-2026-10.md, PT-31)."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -436,7 +452,7 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
 
     rows = []
     for i, (p, mg, tb) in enumerate(zip(plaques, means, turb), start=1):
-        dia_pxl, area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm)
+        dia_pxl, area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm, published)
         rows.append({
             "INDEX_COL": i,
             "AREA_PXL": round(p["area_pxl"], 2),
@@ -459,7 +475,26 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     img_path = os.path.join(out_dir, f"out_{name}{ext}")
     pd.DataFrame(rows, columns=["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
                                 "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
-    cv2.imwrite(img_path, annotated)
+    pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
+    if write_provenance:
+        try:
+            import provenance
+            if published is None:
+                published = bool(pst.use_published)
+            label = engine_label or provenance.engine_name(
+                published=published, sensitive=bool(getattr(pst, "sensitive", False)) and not published)
+            n_manual = sum(1 for p in plaques if p.get("source") not in (None, "auto"))
+            provenance.write_metadata(
+                out_dir, "plaque_gui.save_results", label,
+                {"plate_size_mm": (plate or {}).get("plate_mm"), "small_plaque": bool(pst.small_plaques),
+                 "published": bool(published), "watershed": bool(pst.watershed_enabled),
+                 "edited": n_manual > 0},
+                [{"file": os.path.basename(image_path), "path": image_path,
+                  "sha256_16": provenance.file_digest(image_path), "n_plaques": len(rows),
+                  "n_manual_or_edited": n_manual, "mm_per_px": pxl_per_mm,
+                  "csv": os.path.basename(csv_path)}])
+        except Exception:                             # provenance must never break a save
+            pass
     return csv_path, img_path, len(rows)
 
 
@@ -577,7 +612,14 @@ class PlaqueEditor:
         self.fig.canvas.draw_idle()
 
     def _push_undo(self):
-        self.undo_stack.append([dict(p) for p in self.plaques])
+        # Snapshot the detection state too: a Sensitive toggle replaces the plaque set, the
+        # lawn reference and the candidates, and Undo used to put back only the plaques,
+        # leaving the button and the TURBIDITY_REL reference out of step (AUDIT-2026-10.md).
+        self.undo_stack.append({"plaques": [dict(p) for p in self.plaques],
+                                "sensitive": getattr(self, "sensitive", None),
+                                "lawn_gray": getattr(self, "lawn_gray", None),
+                                "candidates": getattr(self, "candidates", None),
+                                "proc_gray": getattr(self, "proc_gray", None)})
 
     def _find_plaque(self, x, y):
         """Index of the smallest plaque containing (x, y), else nearest centre within 15 px."""
@@ -666,7 +708,9 @@ class PlaqueEditor:
         if self.preview is not None:
             self.preview.remove()
             self.preview = None
-        if event.xdata is None:
+        if event.xdata is None or event.inaxes is not self.ax:
+            # Released over a button: xdata is then the BUTTON's 0-1 coordinate, and the
+            # old check added a dish-sized bogus "manual" plaque (AUDIT-2026-10.md).
             self.fig.canvas.draw_idle()
             return
         r = float(np.hypot(event.xdata - cx, event.ydata - cy))
@@ -735,7 +779,18 @@ class PlaqueEditor:
         if not self.undo_stack:
             self._title("nothing to undo")
             return
-        self.plaques = self.undo_stack.pop()
+        state = self.undo_stack.pop()
+        if isinstance(state, dict):
+            self.plaques = state["plaques"]
+            if state.get("sensitive") is not None and state["sensitive"] != getattr(self, "sensitive", None):
+                self.sensitive = state["sensitive"]
+                self.lawn_gray = state.get("lawn_gray")
+                self.candidates = state.get("candidates") or []
+                self.proc_gray = state.get("proc_gray")
+                if getattr(self, "b_sens", None) is not None:
+                    self.b_sens.label.set_text("Sensitive: " + ("ON" if self.sensitive else "OFF"))
+        else:                                   # pre-1.1.1 snapshots were a bare list
+            self.plaques = state
         self._redraw()
         self._title("undid last change")
 

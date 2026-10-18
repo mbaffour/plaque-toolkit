@@ -209,11 +209,34 @@ def detect_plate(path, plate_size, small, transfer=None):
     """
     pst.small_plaques = bool(small)
     pst.debug_mode = False
+    # This tool has no sensitive mode. plaque_gui.run_detection sets pst.sensitive as a
+    # side effect and nobody reset it, so a Sensitive measurement earlier in the same app
+    # session silently lowered the size gates here (AUDIT-2026-10.md, PT-29).
+    pst.sensitive = False
 
     raw, read_info = read_bgr_raw(path)
     read_info["transfer"] = choose_transfer(raw, transfer)
     read_info["transfer_source"] = "explicit" if (transfer and transfer != "auto") else "auto"
-    orig = to_8bit(raw)
+    orig = None
+    if raw.dtype != np.uint8:
+        # DETECTION must see exactly the 8-bit image plaque_size_tool.py sees, so that a
+        # 16-bit TIFF yields the same plaque set in both tools. to_8bit() scales by
+        # 255/65535 (floor), cv2.imread() by a different rule; the two differ by one
+        # grey level on half of all values, and the detector is sensitive to that: it
+        # gave 45 vs 35 plaques on one 16-bit plate (AUDIT-2026-10.md, PT-27). The
+        # photometric OD path still uses `raw` at native depth (PT-2 is unchanged).
+        try:
+            orig = pst.read_image_bgr(path)
+            if orig is None or orig.shape[:2] != raw.shape[:2]:
+                orig = None
+            else:
+                read_info["detection_8bit"] = "cv2.imread (same as plaque_size_tool)"
+        except Exception:
+            orig = None
+    if orig is None:
+        orig = to_8bit(raw)
+        if raw.dtype != np.uint8:
+            read_info["detection_8bit"] = "scaled by format full scale"
     # brightness + optional dimming, in-memory (matches pst.main, but HEIC-safe / no temp file)
     brightness = float(cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY).mean())
     image = orig
@@ -276,22 +299,58 @@ def detect_plate(path, plate_size, small, transfer=None):
 # --------------------------------------------------------------------------- #
 #  Reference handling: flat-field + blank-agar I0
 # --------------------------------------------------------------------------- #
-def load_linear(path, shape, transfer=None):
-    """Load an image, linearise, resize to `shape`. Used for flat / dark frames.
+def load_linear(path, shape=None, transfer=None):
+    """Load an image, linearise, optionally resize to `shape`. Used for flat / dark frames.
 
     Uses the same native-depth read + transfer policy as the plates, so a 16-bit
-    linear flat field is not gamma'd against 8-bit plates (or vice versa)."""
+    linear flat field is not gamma'd against 8-bit plates (or vice versa). With
+    `shape=None` the frame is kept at its native size and fitted to each plate later
+    by fit_reference()."""
     if not path:
         return None
+    if not os.path.exists(path):
+        raise FileNotFoundError("reference image not found: %s" % path)
     raw, _info = read_bgr_raw(path)
     img = to_linear_gray(raw, transfer=transfer)
-    if img.shape != shape:
+    if shape is not None and img.shape != shape:
         img = cv2.resize(img, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
     return img
 
 
-def make_flat(flat_path, shape, dark=None, transfer=None):
-    """Normalised illumination field F (mean 1.0) at the target shape, or None.
+_FIT_CACHE = {}
+
+
+def fit_reference(ref, shape):
+    """Resize a reference frame to `shape` (cached), or pass None through."""
+    if ref is None or ref.shape == tuple(shape):
+        return ref
+    key = (id(ref), tuple(shape))
+    if key not in _FIT_CACHE:
+        _FIT_CACHE[key] = cv2.resize(ref, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
+    return _FIT_CACHE[key]
+
+
+def load_blank(blank_path, plate_size, small, transfer, flat, dark):
+    """Detect the blank's dish, linearise it, and apply the dark/flat correction IN THE
+    BLANK'S OWN FRAME. Returns (blank_lin, blank_geo); blank_geo is 'median' when no
+    dish was found. See measure_plate() for why the order matters (PT-28)."""
+    bdet = detect_plate(blank_path, plate_size, small, transfer=transfer)
+    blank_lin = to_linear_gray(bdet["raw"], transfer=bdet["read_info"]["transfer"])
+    d = fit_reference(dark, blank_lin.shape)
+    f = fit_reference(flat, blank_lin.shape)
+    if d is not None:
+        blank_lin = np.clip(blank_lin - d, 0, None)
+    if f is not None:
+        blank_lin = blank_lin / f
+    if bdet["dish_center"] is None:
+        print("WARNING: no dish detected in blank; using its whole-image median as a flat I0 "
+              "(absolute OD will be approximate).")
+        return blank_lin, "median"
+    return blank_lin, (bdet["dish_center"], bdet["dish_r"])
+
+
+def make_flat(flat_path, shape=None, dark=None, transfer=None):
+    """Normalised illumination field F (mean 1.0), at `shape` or native size, or None.
 
     With a dark frame, F is built from (flat - dark) so the correction is the proper
     quantitative form (I-dark)/(flat-dark)."""
@@ -299,7 +358,7 @@ def make_flat(flat_path, shape, dark=None, transfer=None):
     if flat is None:
         return None
     if dark is not None:
-        flat = np.clip(flat - dark, 0, None)
+        flat = np.clip(flat - fit_reference(dark, flat.shape), 0, None)
     flat = cv2.GaussianBlur(flat, (0, 0), 9)          # smooth: illumination is low-frequency
     mean = float(np.mean(flat[flat > 0])) if np.any(flat > 0) else 1.0
     flat = np.clip(flat / (mean + EPS), 0.2, 5.0)     # guard against tiny/zero values
@@ -349,27 +408,45 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
     gray_native = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY) if raw.ndim == 3 else raw
     fs = full_scale(gray_native)
     dm = det["dish_mask"]
+    native_max = float(np.max(gray_native)) if gray_native.size else float("nan")
     if dm is not None and dm.any():
-        dpx = gray_native[dm > 0].astype(np.float64)
-        frac_sat = float(np.mean((dpx >= fs - 1) | (dpx <= 1)))
+        # Clipping is per CHANNEL: a pixel whose red channel is pinned at full scale is
+        # clipped even if its grey value is not (AUDIT-2026-10.md). Test every channel.
+        if raw.ndim == 3:
+            sel = raw[dm > 0].astype(np.float64)            # (n, 3)
+            clipped = (sel.max(axis=1) >= fs - 1) | (sel.min(axis=1) <= 1)
+        else:
+            dpx = gray_native[dm > 0].astype(np.float64)
+            clipped = (dpx >= fs - 1) | (dpx <= 1)
+        frac_sat = float(np.mean(clipped))
+        native_max = float(np.max(raw[dm > 0])) if raw.size else native_max
     else:
         frac_sat = float("nan")
 
     transfer = (det.get("read_info") or {}).get("transfer")
     gray = to_linear_gray(raw, transfer=transfer)
+    # Flat/dark frames are kept at their native size and fitted to each plate here, so a
+    # folder of mixed-resolution photos no longer crashes on every plate whose size
+    # differs from the first one (AUDIT-2026-10.md, PT-26).
+    dark = fit_reference(dark, shape)
+    flat = fit_reference(flat, shape)
     if dark is not None:
         gray = np.clip(gray - dark, 0, None)
     if flat is not None:
         gray = gray / flat
 
-    # I0 field (clear reference)
+    # I0 field (clear reference). `blank_lin` arrives ALREADY dark-subtracted and
+    # flat-divided in the blank's own pixel frame (see load_blank): correcting it after
+    # warping it onto the sample's dish position divided both images by the same flat at
+    # the same pixel, so the flat cancelled out of every OD whenever the blank dish was
+    # not exactly where the sample dish is (AUDIT-2026-10.md, PT-28).
     i0_map, i0_level, absolute = None, float("nan"), False
     if blank_lin is not None and det["dish_center"] is not None:
-        i0_map = align_blank(blank_lin, blank_geo, det["dish_center"], det["dish_r"], shape)
-        if dark is not None:
-            i0_map = np.clip(i0_map - dark, 0, None)
-        if flat is not None:
-            i0_map = i0_map / flat
+        if blank_geo == "median":
+            # no dish in the blank: a flat field at the blank's median, as the message says
+            i0_map = np.full(shape, float(np.median(blank_lin)), dtype=np.float64)
+        else:
+            i0_map = align_blank(blank_lin, blank_geo, det["dish_center"], det["dish_r"], shape)
         i0_level = mean_in_mask(i0_map, det["dish_mask"]) if det["dish_mask"] is not None else float(np.median(i0_map))
         absolute = True
 
@@ -459,6 +536,13 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
         "FRAC_SATURATED": (round(frac_sat, 4) if frac_sat == frac_sat else ""),
         "POLARITY_OK": polarity_ok,
         "ABSOLUTE_OD": absolute,
+        # Brightest native value inside the dish vs the format full scale: a 12-bit camera
+        # saved in a 16-bit container tops out near 4095, and FRAC_SATURATED can then never
+        # fire against 65535. Readers can see that here.
+        "NATIVE_MAX": (int(native_max) if native_max == native_max else ""),
+        "FULL_SCALE": int(fs),
+        "FLAT_APPLIED": flat is not None,
+        "DARK_APPLIED": dark is not None,
     }
     return rows, qc
 
@@ -469,11 +553,39 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
 def list_images(directory):
     exts = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
     out = []
-    for r, _, files in os.walk(directory):
+    for r, dirs, files in os.walk(directory):
+        dirs[:] = sorted(x for x in dirs if not pst.is_toolkit_output_dir(x))   # skip our own outputs
         for f in sorted(files):
-            if os.path.splitext(f)[1].lower() in exts:
+            if os.path.splitext(f)[1].lower() in exts and not pst.is_toolkit_output_file(f, r):
                 out.append(os.path.join(r, f))
     return out
+
+
+def plate_labels(images, directory):
+    """PLATE label per image: the file stem, unless two images share one, in which case
+    the colliding ones are labelled by their path relative to `directory` (`rep1__T4`).
+    Two `T4.tif` in different sub-folders used to collapse into one PLATE, so per_phage
+    N_PLATES was wrong and one overlay overwrote the other (AUDIT-2026-10.md, PT-23)."""
+    counts = {}
+    for p in images:
+        s = os.path.splitext(os.path.basename(p))[0]
+        counts[s] = counts.get(s, 0) + 1
+    labels = {}
+    for p in images:
+        s = os.path.splitext(os.path.basename(p))[0]
+        if counts[s] > 1:
+            rel = os.path.splitext(os.path.relpath(p, directory))[0]
+            labels[p] = rel.replace(os.sep, "__").replace("/", "__").replace("..__", "")
+        else:
+            labels[p] = s
+    if any(labels[p] != os.path.splitext(os.path.basename(p))[0] for p in images):
+        print("NOTE: some images share a file name; those plates are labelled by sub-folder.")
+    return labels
+
+
+PLAQUE_COLUMNS = ["PHAGE", "PLATE", "PLATE_INDEX", "AREA_PXL", "DIAMETER_MM", "MEAN_GRAY",
+                  "TRANSMITTANCE", "OD", "OD_LAWN", "TURBIDITY", "CLARITY"]
+PER_PHAGE_COLUMNS = ["PHAGE", "N_PLATES", "N_PLAQUES"]
 
 
 def summarise(df):
@@ -482,7 +594,7 @@ def summarise(df):
     columns: the plate is the biological replicate, the plaque is not (pooling
     plaques across one plate is pseudoreplication)."""
     if df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=PER_PHAGE_COLUMNS)   # header-only, like PT-3
     metrics = [c for c in ("TRANSMITTANCE", "OD", "TURBIDITY") if c in df.columns]
     rows = []
     for phage, g in df.groupby("PHAGE"):
@@ -531,10 +643,10 @@ def annotate_plate(det, rows, out_dir, plate):
         (cx, cy), _ = cv2.minEnclosingCircle(hull)
         cv2.putText(img, str(r["PLATE_INDEX"]), (int(cx), int(cy)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    cv2.imwrite(os.path.join(out_dir, f"overlay_{plate}.png"), img)
+    pst.imwrite_checked(os.path.join(out_dir, f"overlay_{plate}.png"), img)
 
 
-def write_metadata(out_dir, args_dict, images, qc_rows, errors):
+def write_metadata(out_dir, args_dict, images, qc_rows, errors, labels=None):
     """Write run_metadata.json for provenance/reproducibility."""
     meta = {
         "tool": "plaque_turbidity.py",
@@ -569,7 +681,7 @@ def write_metadata(out_dir, args_dict, images, qc_rows, errors):
                 h = hashlib.sha256(fh.read()).hexdigest()[:16]
         except Exception:
             h = ""
-        stem = os.path.splitext(os.path.basename(path))[0]
+        stem = (labels or {}).get(path) or os.path.splitext(os.path.basename(path))[0]
         q = by_plate.get(stem, {})
         meta["images"].append({"file": os.path.basename(path), "sha256_16": h,
                                "bit_depth": q.get("BIT_DEPTH"),
@@ -629,41 +741,39 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
     images = list_images(directory)
     if not images:
         raise SystemExit(f"No images found in {directory}")
+    if dilution is not None and float(dilution) < 1:
+        # --dilution is the RECIPROCAL factor (1e6 for a 10^-6 dilution). 1e-6 here would
+        # make every titer 10^12 too small with no warning (AUDIT-2026-09.md, PT-18).
+        raise SystemExit("--dilution must be the reciprocal dilution factor, e.g. 1e6 for a "
+                         "10^-6 dilution (got %s)" % dilution)
     os.makedirs(out_dir, exist_ok=True)
+    labels = plate_labels(images, directory)
 
-    # prepare references once (a bad blank/flat should not abort the whole run)
-    shape0 = None
-    flat = None
-    dark = None
+    # References. A reference the user NAMED must load, or the run must stop: before
+    # 1.1.1 a typo in --dark silently dropped both --dark and --flat for the whole run
+    # while run_metadata.json recorded them as applied (AUDIT-2026-10.md, PT-26).
+    flat = dark = None
     blank_lin, blank_geo = None, None
     try:
-        sample0 = detect_plate(images[0], plate_size, small, transfer=transfer)
-        shape0 = sample0["shape"]
-        dark = load_linear(dark_path, shape0, transfer=transfer)
-        flat = make_flat(flat_path, shape0, dark, transfer=transfer)
+        dark = load_linear(dark_path, None, transfer=transfer)
     except Exception as e:
-        print(f"WARNING: could not pre-read {images[0]} ({e}); continuing.")
-        sample0 = None
+        raise SystemExit(f"--dark {dark_path} could not be read: {e}")
+    try:
+        flat = make_flat(flat_path, None, dark, transfer=transfer)
+    except Exception as e:
+        raise SystemExit(f"--flat {flat_path} could not be read: {e}")
     if blank_path:
         try:
-            bdet = detect_plate(blank_path, plate_size, small, transfer=transfer)
-            blank_lin = to_linear_gray(bdet["raw"], transfer=bdet["read_info"]["transfer"])
-            if bdet["dish_center"] is None:
-                print("WARNING: no dish detected in blank; using whole-image median as I0 "
-                      "(absolute OD will be approximate).")
-                blank_geo = ((bdet["shape"][1] / 2, bdet["shape"][0] / 2), max(bdet["shape"]) / 2)
-            else:
-                blank_geo = (bdet["dish_center"], bdet["dish_r"])
+            blank_lin, blank_geo = load_blank(blank_path, plate_size, small, transfer, flat, dark)
         except Exception as e:
-            print(f"WARNING: could not read blank {blank_path} ({e}); falling back to lawn-relative mode.")
+            raise SystemExit(f"--blank {blank_path} could not be read: {e}")
 
     all_rows, qc_rows, errors = [], [], []
     for path in images:
-        plate = os.path.splitext(os.path.basename(path))[0]
+        plate = labels[path]
         phage = phage_label(plate, group_by_prefix)
         try:
-            det = (sample0 if (sample0 is not None and path == images[0])
-                   else detect_plate(path, plate_size, small, transfer=transfer))
+            det = detect_plate(path, plate_size, small, transfer=transfer)
             rows, qc = measure_plate(det, phage, plate, flat, blank_lin, blank_geo,
                                      dark=dark, core_frac=core_frac)
         except Exception as e:
@@ -672,7 +782,15 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
             continue
         qc["COUNT"] = qc["N_PLAQUES"]
         if dilution and volume_ul:
-            qc["PFU_PER_ML"] = round(qc["N_PLAQUES"] / (volume_ul / 1000.0) * dilution, 1)
+            n = qc["N_PLAQUES"]
+            per_ml = 1.0 / (volume_ul / 1000.0) * dilution
+            qc["PFU_PER_ML"] = round(n * per_ml, 1)
+            # Counting (Poisson) uncertainty on the titer, and the conventional countable
+            # range: a titer from 3 plaques carries a +/-115 % interval (PT-18, additive).
+            half = 1.96 * math.sqrt(n)
+            qc["PFU_PER_ML_CI95_LO"] = round(max(n - half, 0.0) * per_ml, 1)
+            qc["PFU_PER_ML_CI95_HI"] = round((n + half) * per_ml, 1)
+            qc["COUNT_IN_RANGE_30_300"] = bool(30 <= n <= 300)
         all_rows.extend(rows)
         qc_rows.append(qc)
         if make_overlays:
@@ -687,7 +805,9 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
                   f"than the lawn. For transmitted light, clear plaques should be brighter -- "
                   f"check the imaging (is it really back-lit?) before trusting these values.")
 
-    df = pd.DataFrame(all_rows)
+    # Fixed column lists so a run with zero plaques still writes a header (a 1-byte file
+    # made pandas raise EmptyDataError in the app's Compare tab; AUDIT-2026-10.md).
+    df = pd.DataFrame(all_rows, columns=PLAQUE_COLUMNS)
     df.to_csv(os.path.join(out_dir, "plaques_all.csv"), index=False)
     summarise(df).to_csv(os.path.join(out_dir, "per_phage.csv"), index=False)
     pd.DataFrame(qc_rows).to_csv(os.path.join(out_dir, "qc.csv"), index=False)
@@ -702,7 +822,7 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
                              "group_by_prefix": group_by_prefix, "dilution": dilution,
                              "volume_ul": volume_ul, "published": pst.use_published,
                              "watershed": pst.watershed_enabled, "transfer": transfer},
-                   images, qc_rows, errors)
+                   images, qc_rows, errors, labels=labels)
 
     # consolidated QC summary so problems can't be missed
     _print_qc_summary(qc_rows, errors)
@@ -721,6 +841,10 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
 
 def _print_qc_summary(qc_rows, errors):
     bad_polarity = [q["PLATE"] for q in qc_rows if q.get("ABSOLUTE_OD") and not q.get("POLARITY_OK")]
+    # Without --blank the polarity check is not a pass/fail: on a reflected-light photo
+    # plaques are normally darker than the lawn, and TRANSMITTANCE < 1 then means
+    # "darker than lawn", not "more opaque". Say so instead of "all plates passed".
+    rel_dark = [q["PLATE"] for q in qc_rows if not q.get("ABSOLUTE_OD") and not q.get("POLARITY_OK")]
     no_dish = [q["PLATE"] for q in qc_rows if not q.get("DISH_FOUND")]
     high_cv = [q["PLATE"] for q in qc_rows
                if isinstance(q.get("ILLUM_CV"), (int, float)) and q["ILLUM_CV"] > 0.15]
@@ -732,8 +856,16 @@ def _print_qc_summary(qc_rows, errors):
         print(f"  POLARITY FAIL (plaques darker than lawn): {', '.join(bad_polarity)}")
     if high_cv:
         print(f"  UNEVEN ILLUMINATION (ILLUM_CV>0.15, use a flat field): {', '.join(high_cv)}")
+    if rel_dark:
+        print(f"  NOTE: {len(rel_dark)}/{len(qc_rows)} plate(s) have plaques DARKER than the lawn "
+              f"(reflected-light polarity). Without --blank that is not a failure, but "
+              f"TRANSMITTANCE < 1 then means 'darker than lawn', not 'more opaque'.")
     if not (no_dish or bad_polarity or high_cv):
-        print("  all plates passed dish/polarity/illumination checks.")
+        if any(q.get("ABSOLUTE_OD") for q in qc_rows):
+            print("  all plates passed dish/polarity/illumination checks.")
+        else:
+            print("  all plates passed dish/illumination checks (polarity is only assessed "
+                  "with --blank).")
 
 
 def parse_args():

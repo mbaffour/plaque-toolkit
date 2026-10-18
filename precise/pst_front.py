@@ -26,24 +26,33 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import plaque_gui
+import plaque_size_tool as pst
 
 
 def detect(image_path, plate_mm, base=None):
     # PST NORMAL pass (used for the density switch reference count). When the caller already
     # ran the identical normal detection (engine_api.detect_precise computes `base` for the
     # editor), reuse it instead of repeating that ~3 s pass.
-    if base is not None:
-        orig_bgr = base["orig_bgr"]
-        plaques_n = base["plaques"]
-        ppm_n = base["pxl_per_mm"]
-        plate = base["plate"]
-    else:
-        res_n = plaque_gui.run_detection(image_path, plate_mm, True, False)
-        (_d, orig_bgr, _g, plaques_n, ppm_n, _c, _l, plate) = res_n
+    # run_detection sets pst.small_plaques / pst.sensitive as side effects and nobody
+    # restored them, so every Precise run left the engine in Sensitive mode for whatever
+    # ran next in the same process -- including a "Published" turbidity batch
+    # (AUDIT-2026-10.md, PT-29). Save and restore the engine globals around both passes.
+    _prev = (pst.small_plaques, pst.sensitive, pst.watershed_enabled, pst.use_published)
+    try:
+        if base is not None:
+            orig_bgr = base["orig_bgr"]
+            plaques_n = base["plaques"]
+            ppm_n = base["pxl_per_mm"]
+            plate = base["plate"]
+        else:
+            res_n = plaque_gui.run_detection(image_path, plate_mm, True, False)
+            (_d, orig_bgr, _g, plaques_n, ppm_n, _c, _l, plate) = res_n
 
-    # PST SENSITIVE pass (recall candidates for the sparse/clean branch).
-    res_s = plaque_gui.run_detection(image_path, plate_mm, True, True)
-    (_d2, _o2, _g2, plaques_s, ppm_s, _c2, _l2, _p2) = res_s
+        # PST SENSITIVE pass (recall candidates for the sparse/clean branch).
+        res_s = plaque_gui.run_detection(image_path, plate_mm, True, True)
+        (_d2, _o2, _g2, plaques_s, ppm_s, _c2, _l2, _p2) = res_s
+    finally:
+        pst.small_plaques, pst.sensitive, pst.watershed_enabled, pst.use_published = _prev
 
     h, w = orig_bgr.shape[:2]
 
