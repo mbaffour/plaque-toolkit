@@ -1,9 +1,9 @@
 """
 Convert a folder of iPhone HEIC/HEIF photos to lossless TIFF.
 
-The plaque size tool and the GUI editor read images with OpenCV, which cannot open
-HEIC. Run this once on your iPhone photos, then point those tools at the TIFF copies.
-(The turbidity tool, plaque_turbidity.py, reads HEIC directly and does not need this.)
+Every toolkit engine reads HEIC directly (via pillow-heif), so this converter is only
+needed for the one path that cannot: `plaque_size_tool.py --upstream-exact`, which
+reproduces the original upstream read path, and for third-party tools (Fiji, ViralPlaque).
 
 Note: converting does NOT undo the iPhone's in-camera processing - it just changes the
 container. For quantitative turbidity, prefer re-shooting in ProRAW (see notes from setup).
@@ -16,7 +16,7 @@ Usage:
 import argparse
 import os
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     from pillow_heif import register_heif_opener
@@ -36,7 +36,9 @@ def convert_dir(src_dir, out_dir):
         src = os.path.join(src_dir, f)
         dst = os.path.join(out_dir, os.path.splitext(f)[0] + ".tif")
         try:
-            Image.open(src).convert("RGB").save(dst, format="TIFF")
+            # exif_transpose: honour the phone's orientation tag, exactly as the engines do
+            # when they read the HEIC directly, so the TIFF is not rotated relative to them.
+            ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(dst, format="TIFF")
             n += 1
             print(f"  {f} -> {os.path.basename(dst)}")
         except Exception as e:

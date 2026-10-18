@@ -11,8 +11,14 @@ Usage: python compile_excel.py [--root "Plaques to measure"] [--out Plaque_data_
 import argparse, os, glob
 import numpy as np
 import pandas as pd
+try:
+    import openpyxl  # noqa: F401  (pandas needs it to write .xlsx)
+except ImportError:
+    raise SystemExit("compile_excel.py needs openpyxl to write the workbook: "
+                     "pip install openpyxl   (it is in requirements.txt)")
 
 MODES = ["normal", "sensitive"]
+# Default sample order (the author's own strains); override with --order (PT-22).
 ORDER = ["WT", "2-4", "DTR", "G12E", "I70T", "T65I", "T71A"]
 
 
@@ -21,10 +27,14 @@ def sample_key(s):
 
 
 def main():
+    global ORDER
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="Plaques to measure")
     ap.add_argument("--out", default="Plaque_data_compiled.xlsx")
+    ap.add_argument("--order", default=None, help="comma-separated sample order for the x-axis / sheet order, e.g. 'WT,2-4,DTR' (default: %s; samples not listed follow, sorted)" % ",".join(ORDER))
     a = ap.parse_args()
+    if a.order:
+        ORDER = [s.strip() for s in a.order.split(",") if s.strip()]
     base_dir = os.path.dirname(os.path.abspath(__file__))
     root = a.root if os.path.isabs(a.root) else os.path.join(base_dir, a.root)
 
@@ -75,6 +85,10 @@ def main():
                 per_photo.append(rec)
 
     photo_df = pd.DataFrame(per_photo)
+    if photo_df.empty:
+        raise SystemExit("No <photo>_normal.csv / <photo>_sensitive.csv found under %s\n"
+                         "Expected the layout measure_samples.py writes: "
+                         "<root>/<SAMPLE>/<photo>/<photo>_normal.csv" % root)
     front = ["SAMPLE", "REPLICATE", "PLATE"]
     photo_df = photo_df[front + [c for c in photo_df.columns if c not in front]]
 

@@ -22,13 +22,13 @@ import plaque_size_tool as pst
 IMG_EXT = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif")
 
 
-def measure_one(ppath, outdir, base, plate_mm):
+def measure_one(ppath, outdir, base, plate_mm, small=True):
     """Run normal + sensitive on one photo; return a summary row dict."""
     row = {"photo": os.path.basename(ppath)}
     os.makedirs(outdir, exist_ok=True)
     plate_info = None
     for mode, sens in (("normal", False), ("sensitive", True)):
-        det = pgui.run_detection(ppath, str(plate_mm), True, sens)   # small=True
+        det = pgui.run_detection(ppath, str(plate_mm), small, sens)
         disp, orig, proc, plaques, ppm, cand, lawn, plate = det
         csv_path, img_path, n = pgui.save_results(plaques, orig, ppath, outdir, ppm, lawn)
         # rename the fixed-name outputs to <base>_<mode>.*
@@ -42,7 +42,12 @@ def measure_one(ppath, outdir, base, plate_mm):
             plate_info = (plate, orig)
             row["dish_diam_px"] = round(plate["diam_px"]) if plate else None
             row["dish_axis_ratio"] = round(plate["axis_ratio"], 3) if (plate and plate.get("axis_ratio")) else None
-            row["dish_tilt_flag"] = "TILTED?" if (plate and plate.get("axis_ratio") and plate["axis_ratio"] > 1.03) else ""
+            if not plate:
+                # No dish -> no mm calibration: every DIAMETER_MM in the CSV is 0. Say so in
+                # the summary instead of leaving blanks that look like a clean run.
+                row["dish_tilt_flag"] = "NO DISH"
+            else:
+                row["dish_tilt_flag"] = "TILTED?" if (plate.get("axis_ratio") and plate["axis_ratio"] > 1.03) else ""
     # dish-calibration check image (orange circle = dish used for mm scaling)
     if plate_info and plate_info[0]:
         plate, orig = plate_info
@@ -57,6 +62,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="Plaques to measure")
     ap.add_argument("--plate", default="100")
+    ap.add_argument("--no-small", dest="small", action="store_false",
+                    help="use the standard size gates instead of -small (the default here, "
+                         "which can miss the dish on some large-plate photos)")
     a = ap.parse_args()
     pst.use_published = False          # CURRENT (corrected) mode -> roundest-dish calibration
     pst.watershed_enabled = False
@@ -73,17 +81,18 @@ def main():
             ppath = os.path.join(sdir, photo)
             outdir = os.path.join(sdir, base)
             try:
-                r = measure_one(ppath, outdir, base, a.plate)
+                r = measure_one(ppath, outdir, base, a.plate, a.small)
                 r = {"sample": sample, **r}
             except Exception as e:
-                r = {"sample": sample, "photo": photo, "normal_count": "ERROR", "sensitive_count": str(e)[:120]}
+                # keep the count columns numeric/empty; the message goes in its own column
+                r = {"sample": sample, "photo": photo, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}
             rows.append(r)
             print("done  %-6s %-16s  normal=%s  sensitive=%s  dish_axis=%s%s" % (
                 sample, r.get("photo"), r.get("normal_count"), r.get("sensitive_count"),
                 r.get("dish_axis_ratio"), ("  " + r["dish_tilt_flag"]) if r.get("dish_tilt_flag") else ""))
 
     keys = ["sample", "photo", "normal_count", "sensitive_count", "dish_diam_px",
-            "dish_axis_ratio", "dish_tilt_flag", "normal_mm_per_px", "sensitive_mm_per_px"]
+            "dish_axis_ratio", "dish_tilt_flag", "normal_mm_per_px", "sensitive_mm_per_px", "error"]
     with open(os.path.join(root, "SUMMARY.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
         w.writeheader()

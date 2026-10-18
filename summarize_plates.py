@@ -14,6 +14,7 @@ would bias every mean count and titer upward. See AUDIT-2026-09.md (PT-3).
 import argparse
 import glob
 import os
+import re
 
 import pandas as pd
 
@@ -21,9 +22,21 @@ PREFIX, SUFFIX = "data-green-", ".csv"
 IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 
 
+def _natural_key(s):
+    """Sort Plate_2 before Plate_10 (plain string order puts Plate_10 first)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
+
+
 def _stats_row(plate, d, csv_found=True):
     dm = pd.to_numeric(d.get("DIAMETER_MM"), errors="coerce").dropna() if d is not None else []
     am = pd.to_numeric(d.get("AREA_MM2"), errors="coerce").dropna() if d is not None else []
+    # A plate with no detected dish has mm columns of 0 (Current) or nan (Published). Zero
+    # is a placeholder, not a diameter: averaging it in gave DIAM_MM_MEAN = 0.0 for a plate
+    # with real plaques (AUDIT-2026-10.md). Leave the mm cells blank instead, as for nan.
+    if len(dm):
+        dm = dm[dm > 0]
+    if len(am):
+        am = am[am > 0]
     return {
         "PLATE": plate,
         "N_PLAQUES": len(d) if d is not None else 0,
@@ -32,6 +45,7 @@ def _stats_row(plate, d, csv_found=True):
         "DIAM_MM_MIN": round(dm.min(), 3) if len(dm) else "",
         "DIAM_MM_MAX": round(dm.max(), 3) if len(dm) else "",
         "AREA_MM2_MEAN": round(am.mean(), 4) if len(am) else "",
+        "MM_CALIBRATED": bool(len(dm)) if d is not None and len(d) else "",
         "CSV_FOUND": bool(csv_found),
     }
 
@@ -66,7 +80,9 @@ def summarize(out_dir, images_dir=None):
     if not rows:
         print("No %s*%s files found in %s" % (PREFIX, SUFFIX, out_dir))
         return None
-    df = pd.DataFrame(rows).sort_values("PLATE").reset_index(drop=True)
+    df = pd.DataFrame(rows)
+    df = df.iloc[sorted(range(len(df)), key=lambda i: _natural_key(df["PLATE"].iloc[i]))]
+    df = df.reset_index(drop=True)
     out = os.path.join(out_dir, "summary.csv")
     df.to_csv(out, index=False)
     print(df.to_string(index=False))
@@ -74,6 +90,10 @@ def summarize(out_dir, images_dir=None):
     if n_zero:
         print(f"\nNote: {n_zero} plate(s) have N_PLAQUES = 0. That is a real observation "
               f"and is included in this table on purpose.")
+    n_uncal = int((df["MM_CALIBRATED"] == False).sum())
+    if n_uncal:
+        print(f"WARNING: {n_uncal} plate(s) have plaques but no mm calibration (no dish was "
+              f"detected); their mm columns are blank, not zero.")
     if missing:
         print(f"WARNING: no CSV was found for {len(missing)} input image(s) "
               f"({', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}). They are listed "

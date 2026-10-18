@@ -29,7 +29,8 @@ The exact **measurement** algorithm from:
 - Adaptive-local thresholding → contour detection → keeps non-overlapping, roughly-circular
   contours → measures convex-hull area.
 - 2-decimal-place string values, `DIAMETER_MM` derived from the truncated `AREA_MM2`,
-  concentric-pair de-dup that drops **both** members, largest-contour dish — all preserved.
+  concentric-pair de-dup that drops the **first-visited** member of each pair and keeps the second
+  (verified against upstream's own loop; it was previously described as dropping both), largest-contour dish — all preserved.
 - Reproduces the published literature **within ~0.04 mm**.
 - This is the **only** mode you may cite as a published, peer-reviewed method.
 

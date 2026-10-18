@@ -10,3 +10,5 @@ Pillow>=9
 # plots were silently skipped and the run still reported success. See AUDIT-2026-09.md (PT-10).
 matplotlib>=3.9
 pillow-heif>=0.13
+# compile_excel.py writes an .xlsx workbook (AUDIT-2026-09.md PT-11; fixed 2026-10).
+openpyxl>=3.0

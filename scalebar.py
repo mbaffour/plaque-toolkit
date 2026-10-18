@@ -100,8 +100,21 @@ def draw_scale_bar(img_bgr, mm_per_px, corner="br", target_frac=0.18,
         bar_len_px = int(round(bar_len_px))
         if bar_len_px < 1:
             return img_bgr
-        # Never let the bar overrun the image.
-        bar_len_px = min(bar_len_px, int(w * 0.9))
+        # Never let the bar overrun the image -- and if it had to be shortened, re-derive
+        # the label from the length actually drawn. The clamp used to keep the caller's
+        # label, so a 500 px image could carry a 451 px bar labelled "50 mm" (AUDIT-2026-10.md).
+        max_px = int(w * 0.9)
+        if bar_len_px > max_px:
+            if mm_per_px and float(mm_per_px) > 0:
+                fits = [m for m in NICE_MM if m / float(mm_per_px) <= max_px]
+                nice_mm = max(fits) if fits else round(max_px * float(mm_per_px), 2)
+                bar_len_px = int(round(nice_mm / float(mm_per_px)))
+                label = ("%g mm" % nice_mm)
+            else:
+                fits = [p for p in NICE_PX if p <= max_px]
+                nice_px = max(fits) if fits else max_px
+                bar_len_px = int(nice_px)
+                label = ("%d px" % int(nice_px))
 
         # ---- size everything to the image so it reads on big photos ----
         if pad is None:

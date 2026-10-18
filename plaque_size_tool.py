@@ -2,6 +2,7 @@ import argparse
 import imutils
 import cv2
 import numpy as np
+import datetime
 import os
 import pandas as pd
 from PIL import Image, ImageStat, ImageEnhance, ImageOps
@@ -53,11 +54,20 @@ try:                                    # run_metadata.json writer (PT-9); optio
 except Exception:                       # pragma: no cover - standalone installs
     provenance = None
 out_dir_path = './out'
+# Output stems: normally the image's basename. When a -d batch contains two images with
+# the same basename in different sub-folders, both used to be written to the same
+# data-green-<stem>.csv and the first was silently lost (AUDIT-2026-10.md, PT-23). Such
+# collisions are now disambiguated with the sub-folder path; see assign_output_stems().
+_output_stems = {}
+# One id per invocation so run_metadata.json can tell its own flushes from a previous run.
+_run_id = None
 small_plaques = False
 debug_mode = False
 # When True, reproduce the EXACT published Plaque Size Tool behaviour (for citation /
 # comparison). Default False uses two small corrections: numeric (un-truncated) sizes,
-# and concentric-duplicate de-dup that keeps one plaque instead of deleting both.
+# and concentric-duplicate de-dup that keeps the FIRST member of each concentric pair
+# (upstream's loop drops the first-visited member and keeps the second; see
+# _check_duplicate_plaques_published and AUDIT-2026-10.md, PT-24).
 use_published = False
 # Opt-in (--watershed): split touching/merged plaques. Never runs in published mode.
 watershed_enabled = False
@@ -84,7 +94,8 @@ def parse_args():
                     help="for processing small plaques", action = "store_true")
     ap.add_argument("-published", "--published", required=False, action="store_true",
                     help="published Plaque Size Tool MEASUREMENT behaviour (2-dp string sizes, "
-                         "concentric-pair de-dup that drops both members, largest-contour dish). "
+                         "concentric-pair de-dup that drops the first-visited member of each pair and "
+                         "keeps the second, largest-contour dish). "
                          "The image is still read the modern way (EXIF-aware, HEIC-capable, "
                          "in-memory dimming); add --upstream-exact for the original read path too")
     ap.add_argument("-watershed", "--watershed", required=False, action="store_true",
@@ -99,11 +110,22 @@ def parse_args():
                          "lossy temp-file re-encode when dimming, and NO EXIF transpose. Implies "
                          "--published. Use this to reproduce a number produced by the upstream "
                          "tool itself; see docs/UPSTREAM_EXACT.md. Cannot read HEIC.")
+    ap.add_argument("-o", "--out", required=False, default=None,
+                    help="output folder for the CSVs, annotated images and run_metadata.json "
+                         "(default: ./out inside the current working directory)")
     ap.add_argument("--version", action="version", version="plaque-toolkit %s" % __version__)
     ap.add_argument("-debug", "--debug", required=False, action = "store_true")
     args = vars(ap.parse_args())
     if args['image'] ==  None and args['directory'] == None:
         raise Exception('Either -i or -d flags must be provided!')
+    if args['plate_size'] is not None:         # '0' and '90mm' used to pass straight through
+        try:
+            _ps = float(args['plate_size'])
+        except ValueError:
+            ap.error("-p/--plate_size must be a number in millimetres, got %r" % args['plate_size'])
+        if _ps <= 0:
+            ap.error("-p/--plate_size must be > 0 mm (got %s); every mm column would be 0"
+                     % args['plate_size'])
     return args
 
 
@@ -242,15 +264,56 @@ def get_image_paths(image, directory):
         images.append(image)
     else:
         exts = ('.tif', '.tiff', '.jpg', '.jpeg', '.png', '.heic', '.heif')
+        skip = os.path.abspath(out_dir_path)
         for r, d, f in os.walk(directory):
+            # Deterministic order, and never descend into our own output folder: a second
+            # `-d .` run used to ingest out/out_<plate>.tif as a new plate.
+            d[:] = sorted(x for x in d if os.path.abspath(os.path.join(r, x)) != skip)
             for file in sorted(f):
                 if os.path.splitext(file)[1].lower() in exts:   # case-insensitive; incl. HEIC
                     images.append(os.path.join(r, file))
     return images
 
 
+def assign_output_stems(image_paths, directory=None):
+    """Decide the output stem for every input image.
+
+    The stem is the image's basename unless two inputs share one, in which case each
+    colliding image gets its path relative to `directory` with separators replaced by
+    `__` (so `a/Plate_2.tif` and `b/Plate_2.tif` become `a__Plate_2` and `b__Plate_2`).
+    Non-colliding images keep the plain basename, so default output names are unchanged.
+    """
+    global _output_stems
+    _output_stems = {}
+    counts = {}
+    for p in image_paths:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        counts[stem] = counts.get(stem, 0) + 1
+    clashes = []
+    for p in image_paths:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        if counts[stem] > 1:
+            rel = os.path.relpath(p, directory) if directory else p
+            rel = os.path.splitext(rel)[0]
+            uniq = rel.replace(os.sep, '__').replace('/', '__').replace('..__', '')
+            _output_stems[p] = uniq
+            clashes.append((p, uniq))
+    if clashes:
+        print("NOTE: %d input images share a file name; their outputs are named by sub-folder "
+              "so none overwrites another:" % len(clashes))
+        for p, uniq in clashes:
+            print("  %s -> data-green-%s.csv" % (p, uniq))
+    return _output_stems
+
+
+def output_stem(image_path):
+    """The stem used for this image's CSV and annotated image (see assign_output_stems)."""
+    return _output_stems.get(image_path) or os.path.splitext(os.path.basename(image_path))[0]
+
+
 def write_images(out_dir, output_image, binary_image, high_contrast_image, image_path):
-    stem, ext = os.path.splitext(os.path.split(image_path)[1])
+    stem = output_stem(image_path)
+    ext = os.path.splitext(image_path)[1]
     if ext.lower() in ('.heic', '.heif'):   # OpenCV cannot write HEIC
         ext = '.png'
     cv2.imwrite(f'{out_dir}/out_{stem}{ext}', output_image)
@@ -277,8 +340,7 @@ def write_one_data(out_dir, image_path, prefix, df):
     biases every mean count and titer computed downstream. The old `if df.empty != True`
     guard made such plates vanish from summarize_plates.py entirely. See PT-3.
     """
-    image_file_name = os.path.split(image_path)[1]
-    image_name = os.path.splitext(image_file_name)[0]
+    image_name = output_stem(image_path)
     cols = list(MEASUREMENT_COLUMNS)
     if 'SOURCE' in df.columns:
         cols.append('SOURCE')
@@ -369,7 +431,13 @@ def reindex(df):
     return dfNew
 
 def _check_duplicate_plaques_published(obj_df):
-    # exact published behaviour: drops BOTH members of every concentric pair
+    # Exact upstream behaviour (verified against ellinium/plaque_size_tool). NOTE: this
+    # does NOT drop both members of a concentric pair, although that is what the toolkit
+    # said until 1.1.0. The loop iterates the ORIGINAL frame but tests each row against the
+    # already-MUTATED frame: A sees B and is dropped; B no longer sees A and is kept. So the
+    # first-visited member goes and the second survives. Current mode keeps the first.
+    # On a chain A~B, B~C, A!~C only C survives here, while Current keeps A and C, so the
+    # two rules can differ in COUNT on such plates (they do not on the bundled Test_plates).
     def dup(obj, df):
         for x in df.iterrows():
             if obj['INDEX_COL'] != x[0]:
@@ -386,7 +454,8 @@ def _check_duplicate_plaques_published(obj_df):
 def check_duplicate_plaques(obj_df):
     # De-duplicate concentric detections (circle-in-circle) by KEEPING the first of
     # each group and dropping only later near-coincident centers. The published version
-    # dropped BOTH members of every pair, silently deleting real plaques (use --published).
+    # keeps the SECOND member of a pair instead (see _check_duplicate_plaques_published),
+    # so the two rules usually agree on the count but can keep a different survivor.
     if use_published:
         return _check_duplicate_plaques_published(obj_df)
     kept_centers = []
@@ -448,7 +517,9 @@ def calculate_size_mm(plate_size, obj_df, plate_df):
         obj_df['DIAMETER_MM'] = obj_df['AREA_PXL'].apply(
             lambda a: round(float(np.sqrt(float(a) * mm_per_px * mm_per_px / np.pi) * 2), 2))
     else:
-        if plate_size:
+        if plate_size and not last_calibration.get('warned_no_dish'):
+            # calculate_size_mm runs once per contour class, so say this once per image
+            last_calibration['warned_no_dish'] = True
             print("  WARNING: -p was given but no Petri dish was detected; "
                   "reporting pixels only (mm columns = 0).")
         obj_df['ENCL_DIAMETER_MM'] = 0
@@ -626,7 +697,12 @@ def main():
     warnings.filterwarnings('ignore')
     args = parse_args()
 
+    global out_dir_path, _run_id
+    if args.get('out'):
+        out_dir_path = args['out']
+    _run_id = datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%S.%f') + '-' + str(os.getpid())
     image_paths = get_image_paths(args['image'], args['directory'])
+    assign_output_stems(image_paths, args['directory'])
     plate_size = args['plate_size']
 
     global small_plaques
@@ -655,10 +731,50 @@ def main():
         print("(sensitive mode ON: detecting very small plaques - expect more, and some false positives)")
 
     run_images = []                      # provenance rows, one per image (PT-9)
+    failed = []
+
+    def _flush_metadata():
+        # Written after every image, not only at the end, so a crash mid-batch still
+        # leaves a record of what was measured and with which engine (PT-25).
+        if provenance is not None:
+            provenance.write_metadata(
+                out_dir_path, "plaque_size_tool.py",
+                provenance.engine_name(published=use_published, upstream_exact=upstream_exact,
+                                       sensitive=sensitive),
+                {"plate_size_mm": plate_size, "small_plaque": bool(small_plaques),
+                 "published": bool(use_published), "upstream_exact": bool(upstream_exact),
+                 "sensitive": bool(sensitive), "watershed": bool(watershed_enabled),
+                 "image": args.get('image'), "directory": args.get('directory'),
+                 "out": out_dir_path},
+                run_images, extra={"run_id": _run_id, "n_failed": len(failed)})
+
     for image_path in image_paths:
         print("Processing " + image_path)
 
         last_calibration['mm_per_px'] = None
+        last_calibration['warned_no_dish'] = False
+        try:
+            _process_one(image_path, plate_size, run_images, args)
+        except Exception as exc:
+            # One unreadable or corrupt file used to abort the whole batch with a traceback
+            # and no run_metadata.json at all (PT-25). Record it and carry on.
+            failed.append(image_path)
+            print("  ERROR: %s could not be processed (%s: %s); skipping it"
+                  % (image_path, type(exc).__name__, exc))
+            run_images.append({"file": os.path.basename(image_path), "path": image_path,
+                               "error": "%s: %s" % (type(exc).__name__, exc)})
+        _flush_metadata()
+
+    if failed:
+        print("\n%d of %d image(s) FAILED and have no CSV: %s" % (
+            len(failed), len(image_paths), ", ".join(os.path.basename(f) for f in failed)))
+        print("These are NOT zero-plaque plates; see run_metadata.json for the errors.")
+        raise SystemExit(1)
+
+
+def _process_one(image_path, plate_size, run_images, args):
+    """Measure one image and write its CSV, annotated image and provenance row."""
+    if True:
         # read + dim (see read_and_dim / read_and_dim_upstream_exact)
         image, orig_image, image_brightness = read_and_dim(image_path)
 
@@ -740,25 +856,13 @@ def main():
                 "dimmed": bool(image_brightness > 70),
                 "mm_per_px": last_calibration['mm_per_px'],
                 "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
-                "csv": "data-green-%s.csv" % os.path.splitext(os.path.basename(image_path))[0],
+                "csv": "data-green-%s.csv" % output_stem(image_path),
             })
         except Exception as exc:         # pragma: no cover - defensive only
             run_images.append({"file": os.path.basename(image_path),
                                "provenance_error": str(exc)})
         print("Process completed successfully")
         print(str(len(green_df_copy)) + ' plaques were found\n')
-
-    # Provenance: which engine, which settings, which version produced these CSVs.
-    if provenance is not None:
-        provenance.write_metadata(
-            out_dir_path, "plaque_size_tool.py",
-            provenance.engine_name(published=use_published, upstream_exact=upstream_exact,
-                                   sensitive=sensitive),
-            {"plate_size_mm": plate_size, "small_plaque": bool(small_plaques),
-             "published": bool(use_published), "upstream_exact": bool(upstream_exact),
-             "sensitive": bool(sensitive), "watershed": bool(watershed_enabled),
-             "image": args.get('image'), "directory": args.get('directory')},
-            run_images)
 
 
 def renumerate_df(df):

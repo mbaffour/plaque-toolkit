@@ -40,13 +40,17 @@ FONT = 12
 
 
 def main():
+    global ORDER
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default=os.path.join("Plaques to measure", "plaque_data_tidy.csv"))
     ap.add_argument("--mode", default="normal", choices=["normal", "sensitive"])
     ap.add_argument("--metric", default="DIAMETER_MM")
     ap.add_argument("--ymax", type=float, default=2.0, help="y-axis cap (mm); set 0 to show all")
     ap.add_argument("--out", default=None, help="output basename (default: <mode>_<metric>_figure)")
+    ap.add_argument("--order", default=None, help="comma-separated sample order for the x-axis / sheet order, e.g. 'WT,2-4,DTR' (default: %s; samples not listed follow, sorted)" % ",".join(ORDER))
     a = ap.parse_args()
+    if a.order:
+        ORDER = [s.strip() for s in a.order.split(",") if s.strip()]
 
     plt.rcParams.update({"font.size": FONT, "axes.linewidth": 1.0, "svg.fonttype": "none"})
     df = pd.read_csv(a.csv)

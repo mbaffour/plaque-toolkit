@@ -26,7 +26,7 @@ import plaque_size_tool as pst
 from scalebar import draw_scale_bar
 
 
-def add_scale(image_path, plate_mm="100", out_path=None):
+def add_scale(image_path, plate_mm="100", out_path=None, small=True):
     """Read image_path, get dish calibration, stamp the scale bar, save and return out path."""
     # Read via the toolkit's HEIC-safe reader so iPhone photos work too.
     img = pst.read_image_bgr(image_path)
@@ -37,7 +37,7 @@ def add_scale(image_path, plate_mm="100", out_path=None):
     try:
         # run_detection returns pxl_per_mm which is actually mm/px (the calibration).
         # We only want the calibration here, so plaque detection results are ignored.
-        result = plaque_gui.run_detection(image_path, str(plate_mm), True)
+        result = plaque_gui.run_detection(image_path, str(plate_mm), small)
         mm_per_px = result[4]          # pxl_per_mm position in the returned tuple
     except Exception as e:
         print(f"  (calibration/detection failed: {e}; drawing a pixel-length bar)")

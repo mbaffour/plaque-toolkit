@@ -100,7 +100,8 @@ and numbered. HEIC inputs are saved as `.png` (OpenCV can't write HEIC).
 - **Overlapping plaques** are skipped by default (the detector keeps non‑overlapping ones); use
   `--watershed` to split and recover touching ones.
 - **The two default corrections** (vs `--published`): values are kept numeric (not truncated to 2 dp),
-  and concentric "circle‑in‑circle" duplicates keep one plaque instead of deleting both. On the
+  and concentric "circle‑in‑circle" duplicates keep the **first** member of the pair (upstream keeps the
+  **second** — it does not delete both, as this page used to say). On the
   bundled test plates this leaves the **count unchanged** and changes individual diameters by
   **≤ ~0.04 mm**.
 - **`--published` vs the original upstream *program*.** `--published` reproduces the published

@@ -10,16 +10,22 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# WT first (reference), then the variants
+# WT first (reference), then the variants. The author's strains; override with --order (PT-22).
 ORDER = ["WT", "2-4", "DTR", "G12E", "I70T", "T65I", "T71A"]
 
 
 def main():
+    global ORDER
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="Plaques to measure")
     ap.add_argument("--mode", default="sensitive")
     ap.add_argument("--metric", default="DIAMETER_MM")
+    ap.add_argument("--order", default=None, help="comma-separated sample order for the x-axis / sheet order, e.g. 'WT,2-4,DTR' (default: %s; samples not listed follow, sorted)" % ",".join(ORDER))
     a = ap.parse_args()
+    if a.order:
+        ORDER = [s.strip() for s in a.order.split(",") if s.strip()]
+    if not os.path.isdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), a.root)) and not os.path.isabs(a.root):
+        pass
     root = a.root if os.path.isabs(a.root) else os.path.join(os.path.dirname(os.path.abspath(__file__)), a.root)
 
     data, labels, ns, n_plates, medians = [], [], [], [], []
@@ -47,6 +53,10 @@ def main():
             data.append(np.array(vals)); labels.append(s); ns.append(len(vals))
             n_plates.append(plates); medians.append(float(np.median(vals)))
 
+    if not data:
+        raise SystemExit("No <photo>_%s.csv with a %s column found under %s (expected the layout "
+                         "measure_samples.py writes: <root>/<SAMPLE>/<photo>/<photo>_%s.csv)"
+                         % (a.mode, a.metric, root, a.mode))
     # save the pooled long-format data too
     pd.DataFrame(pooled_rows).to_csv(os.path.join(root, "%s_%s_pooled.csv" % (a.mode, a.metric)), index=False)
 

@@ -20,4 +20,5 @@ dependencies:
       - Pillow>=9
       - matplotlib>=3.9        # tick_labels= in write_plots needs 3.9 (AUDIT-2026-09.md, PT-10)
       - pillow-heif>=0.13
+      - openpyxl>=3.0           # compile_excel.py (PT-11)
       - PySide6>=6.4,<6.8       # Qt GUI (the app)
