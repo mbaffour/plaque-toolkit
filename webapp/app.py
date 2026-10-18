@@ -114,7 +114,7 @@ def server(input, output, session):
         # copy upload to a temp file with a real extension the readers accept
         src = f[0]["datapath"]
         ext = os.path.splitext(f[0]["name"])[1] or ".png"
-        _purge_old_tmp(keep=0)
+        _purge_old_tmp(keep=4)      # keep a few: another user may still be downloading theirs
         tmp = tempfile.mkdtemp(prefix="upload_")
         _TMP_DIRS.append(tmp)
         img = os.path.join(tmp, "plate" + ext)
