@@ -30,6 +30,7 @@ index (and [`STRUCTURE.md`](STRUCTURE.md), the repo map) to navigate.
 | [PUBLISHING_CHECKLIST.md](PUBLISHING_CHECKLIST.md) | What's still needed before publication. |
 | [TESTING_AND_VALIDATION.md](TESTING_AND_VALIDATION.md) | The acceptance gates and validation harness. |
 | [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) · [LABELLING_GUIDE.md](LABELLING_GUIDE.md) | How to validate the tool on your plates, and how to hand-label ground truth. |
+| [VALIDATION_STUDY_PROTOCOL.md](VALIDATION_STUDY_PROTOCOL.md) | Checklist for a from-scratch validation study on new plates (plate design, photography, blind labelling, scoring, archive) — the dataset a methods paper needs. |
 | **Figures / interactive** | [plaque_pipeline.svg](plaque_pipeline.svg) (pipeline diagram) · [PlaqueToolkit_vs_Fiji_BlandAltman.png](PlaqueToolkit_vs_Fiji_BlandAltman.png) · [STATS_EXPLAINED.html](STATS_EXPLAINED.html) · [FIJI_VALIDATION_PROTOCOL.html](FIJI_VALIDATION_PROTOCOL.html) · [FIJI_TUTORIAL.html](FIJI_TUTORIAL.html) |
 
 ## 3 · How it works & development

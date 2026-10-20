@@ -96,6 +96,7 @@ highlights:
 | [**docs/PLAQUE_SIZE_TOOL.md**](docs/PLAQUE_SIZE_TOOL.md) | Focused reference for the core `plaque_size_tool.py` size CLI. |
 | [**docs/CREDITS_AND_LINEAGE.md**](docs/CREDITS_AND_LINEAGE.md) | Every upstream tool/model/dataset/library, its licence, and what's original here. |
 | [**docs/VALIDATION_RESULTS.md**](docs/VALIDATION_RESULTS.md) · [**docs/PAPER_METHODS.md**](docs/PAPER_METHODS.md) | The local validation numbers, and paste‑ready Methods/Results text. |
+| [**docs/VALIDATION_STUDY_PROTOCOL.md**](docs/VALIDATION_STUDY_PROTOCOL.md) | Checklist for validating on **new plates from scratch**: plate design, photography, blind labelling, scoring against other tools, and the archive a reviewer can re-run. |
 | [**docs/MANUSCRIPT_METHODS_AND_AI.md**](docs/MANUSCRIPT_METHODS_AND_AI.md) | Brief paste‑ready Methods paragraph **+ a use‑of‑AI statement** for a manuscript. |
 | [**docs/TRAINING_AND_MODELS.md**](docs/TRAINING_AND_MODELS.md) | **How the models were built and trained** — the classifier, datasets, the fine‑tune loop, tuning, and provenance. |
 | [**docs/HOW_IT_WAS_BUILT.md**](docs/HOW_IT_WAS_BUILT.md) | The build‑and‑design narrative: origin, architecture, the four engines, and the honesty caveats. |
