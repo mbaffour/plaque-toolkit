@@ -11,7 +11,7 @@ the SHA-1 of every derived image, so a run can be checked against the archived r
 | Dataset | Domain | Labels | Licence | Converter |
 |---|---|---|---|---|
 | **VACVPlaque** (De et al., *Sci Data* 2025; [RODARE 3003](https://rodare.hzdr.de/record/3003)) | 211 phone photos of crystal-violet-stained **6-well mammalian** plaque assays (vaccinia virus) | per-plaque and per-well instance masks | CC BY 4.0 | `vacvplaque_convert.py` |
-| **OnePetri** (Shamash & Maurice 2021; Roboflow Universe) | ~2,500 **phage** plate photos | bounding boxes | CC BY-NC-SA 4.0 (login required to export) | planned |
+| **OnePetri** (Shamash & Maurice 2021; Roboflow Universe) | ~2,500 **phage** plate photos | bounding boxes | CC BY-NC-SA 4.0 (login required to export) | planned — needs a manual export |
 
 ## VACVPlaque
 
@@ -36,5 +36,6 @@ are scale-free and size agreement should be read in pixels.
 
 ### Results (test split, 21 photos, 126 wells, 11,951 plaques)
 
-Filled in by `vacvplaque_benchmark.md` once a run completes; see that file for the table and
-the exact toolkit commit and weights digest it was produced with.
+See [`vacvplaque_benchmark.md`](vacvplaque_benchmark.md) for the tables (shipped engines, the
+fine-tune experiment, and the pipeline with fine-tuned weights), tied to the toolkit commit and
+weights digests; the per-well CSVs are under `results/vacvplaque/`.
