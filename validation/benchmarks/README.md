@@ -39,3 +39,14 @@ are scale-free and size agreement should be read in pixels.
 See [`vacvplaque_benchmark.md`](vacvplaque_benchmark.md) for the tables (shipped engines, the
 fine-tune experiment, and the pipeline with fine-tuned weights), tied to the toolkit commit and
 weights digests; the per-well CSVs are under `results/vacvplaque/`.
+
+## Environment note
+
+`pip install ultralytics` pulls in `opencv-python` **5.x**, which then shadows the pinned
+`opencv-python-headless` 4.11 that the toolkit is validated with. OpenCV 5 moves turbidity
+`TRANSMITTANCE` by about 0.001 on some plates (the size CSVs are unchanged). After installing
+ultralytics, run `pip uninstall opencv-python && pip install --force-reinstall --no-deps
+opencv-python-headless==4.11.0.86`, and check `library_versions.opencv` in any `run_metadata.json`
+before comparing numbers. The VACVPlaque tables above were produced with OpenCV 5.0 for the
+Precise and detector-only rows and 4.11 for the classic-engine rows; detection counts are not
+affected by the difference.
