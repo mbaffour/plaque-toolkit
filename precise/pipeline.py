@@ -80,7 +80,9 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
     config); pass clf=False for the raw PlaqSeg+PST union. blob=False matches the
     subprocess default (blob_log over-detects on textured lawns)."""
     image_path = os.path.abspath(image_path)
-    weights = weights or DEFAULT_WEIGHTS
+    # PLAQSEG_WEIGHTS lets a fine-tuned or alternative checkpoint be evaluated through the
+    # same pipeline without code changes (validation/benchmarks/).
+    weights = weights or os.environ.get("PLAQSEG_WEIGHTS") or DEFAULT_WEIGHTS
     tag = tag or os.path.splitext(os.path.basename(image_path))[0]
     if out_dir is None:
         out_dir = os.path.join(os.path.dirname(image_path), "out_precise")

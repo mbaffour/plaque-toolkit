@@ -304,7 +304,7 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
             if c is None or c < CONTRAST_FLOOR:
                 continue
             diam_mm = (2.0 * r_px) * mm_per_px if mm_per_px else 0.0
-            pst_recovered.append({"x": px, "y": py, "diam_mm": diam_mm})
+            pst_recovered.append({"x": px, "y": py, "diam_mm": diam_mm, "diam_px": 2.0 * r_px})
 
     # ---- Stage 7: optional blob_log recovery (sparse only) --------------- #
     blob_recovered = []
@@ -328,7 +328,7 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
                 if float(np.min(np.hypot(taken[:, 0] - bx, taken[:, 1] - by))) <= match_r:
                     continue
             diam_mm = (2.0 * r_px) * mm_per_px if mm_per_px else 0.0
-            blob_recovered.append({"x": float(bx), "y": float(by), "diam_mm": diam_mm})
+            blob_recovered.append({"x": float(bx), "y": float(by), "diam_mm": diam_mm, "diam_px": 2.0 * r_px})
             taken = np.vstack([taken, [bx, by]]) if len(taken) else np.array([[bx, by]])
 
     # ---- Stage 7.5: OPTIONAL learned precision gate ---------------------- #
@@ -380,15 +380,17 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
     # ---- Stage 8/9: combine + sizing ------------------------------------- #
     final = []
     for d in ps:
+        _a = float(d.get("area_pxl", 0.0) or 0.0)
         final.append({"x": d["x"], "y": d["y"], "diam_mm": d["diam_mm"],
+                      "diam_px": (2.0 * math.sqrt(_a / math.pi) if _a > 0 else 0.0),
                       "source": "plaqseg", "confirmed": True,
                       "p_plaque": d.get("p_plaque")})
     for d in pst_recovered:
-        final.append({"x": d["x"], "y": d["y"], "diam_mm": d["diam_mm"],
+        final.append({"x": d["x"], "y": d["y"], "diam_mm": d["diam_mm"], "diam_px": d.get("diam_px", 0.0),
                       "source": "pst", "confirmed": False,
                       "p_plaque": d.get("p_plaque")})
     for d in blob_recovered:
-        final.append({"x": d["x"], "y": d["y"], "diam_mm": d["diam_mm"],
+        final.append({"x": d["x"], "y": d["y"], "diam_mm": d["diam_mm"], "diam_px": d.get("diam_px", 0.0),
                       "source": "blob", "confirmed": False,
                       "p_plaque": d.get("p_plaque")})
 
@@ -402,12 +404,14 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
     csv_path = os.path.join(out_dir, "precise_%s.csv" % tag)
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["X", "Y", "DIAMETER_MM", "SOURCE", "CONFIRMED", "P_PLAQUE"])
+        # DIAMETER_PXL is additive: without it an uncalibrated plate (no dish) left the app
+        # unable to place Precise's plaques at all (AUDIT-2026-10.md, PT-32 follow-up).
+        w.writerow(["X", "Y", "DIAMETER_MM", "SOURCE", "CONFIRMED", "P_PLAQUE", "DIAMETER_PXL"])
         for d in final:
             pp = d.get("p_plaque")
             w.writerow(["%.1f" % d["x"], "%.1f" % d["y"], "%.3f" % d["diam_mm"],
                         d["source"], "TRUE" if d["confirmed"] else "FALSE",
-                        ("%.4f" % pp) if pp is not None else ""])
+                        ("%.4f" % pp) if pp is not None else "", "%.2f" % float(d.get("diam_px", 0.0) or 0.0)])
 
     ov = bgr.copy()
     if had_plate:                                                         # only when a dish exists
