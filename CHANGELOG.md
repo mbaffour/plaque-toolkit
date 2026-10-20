@@ -67,6 +67,11 @@ None of these touches `plaque_size_tool.py --published` output.
   `compile_excel.py`, `plot_sensitive_violin.py`, `make_figure.py` (PT-22); `--no-small` on
   `measure_samples.py`, `run_viralplaque.py`, `add_scale.py`; `run_viralplaque.py --plate`.
 * The Batch tab's "Small plaques" checkbox.
+* **Per-plaque QC flags** (`plaque_qc.py`): `EDGE` (touches the image border or dish rim),
+  `MERGED?` (far larger than the plate's median, or irregular), `TINY` (only exists because of
+  `-small`/`--sensitive`), `OVERLAP`, `LOW_CONF` (Precise classifier score). Opt-in on the CLI
+  (`plaque_size_tool.py --qc` adds `QC_FLAG`/`QC_REASON`; the default CSV is unchanged) and always
+  present as `QC_FLAG` in the app's table, `data_<plate>.csv` and the Batch tab's `all_plaques.csv`.
 * Provenance (`run_metadata.json`) from the editor's Save and the app's Export all, with
   `edited: true` when hand edits are present.
 * `tests/test_audit_2026_10.py`: 32 regression tests (85 in total).

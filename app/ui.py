@@ -689,7 +689,8 @@ class MeasureTab(QWidget):
             extra = "⚠ Detectors disagree on count — verify by eye."
             flag = (flag + "  " + extra) if flag else extra
         df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
-                                      det["pxl_per_mm"], det["lawn_gray"])
+                                      det["pxl_per_mm"], det["lawn_gray"],
+                                      published=det.get("published"), plate=det.get("plate"))
         self._set_table_df(df)
         n = len(df)
         stats_df = df

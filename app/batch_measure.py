@@ -168,7 +168,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
 
             # ---- measurement table (no file writes) ---------------------- #
             df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray,
-                                          published=(mode == "published"))
+                                          published=(mode == "published"), plate=plate)
 
             # diameter summary stats over this plate's plaques
             if len(df):
@@ -233,7 +233,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
         # empty frame with the expected columns so downstream code never KeyErrors
         all_df = pd.DataFrame(columns=[
             "IMAGE", "INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-            "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "CIRCULARITY", "OVERLAP", "SOURCE"])
+            "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "CIRCULARITY", "OVERLAP", "SOURCE", "QC_FLAG"])
 
     summary_df.to_csv(os.path.join(out_dir, "per_plate.csv"), index=False)
     all_df.to_csv(os.path.join(out_dir, "all_plaques.csv"), index=False)

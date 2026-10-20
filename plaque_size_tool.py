@@ -110,6 +110,9 @@ def parse_args():
                          "lossy temp-file re-encode when dimming, and NO EXIF transpose. Implies "
                          "--published. Use this to reproduce a number produced by the upstream "
                          "tool itself; see docs/UPSTREAM_EXACT.md. Cannot read HEIC.")
+    ap.add_argument("--qc", dest="qc", required=False, action="store_true",
+                    help="add QC_FLAG / QC_REASON columns (EDGE, MERGED?, TINY, OVERLAP) to every CSV; "
+                         "purely additive -- no measurement changes (see plaque_qc.py)")
     ap.add_argument("-o", "--out", required=False, default=None,
                     help="output folder for the CSVs, annotated images and run_metadata.json "
                          "(default: ./out inside the current working directory)")
@@ -400,6 +403,9 @@ def write_one_data(out_dir, image_path, prefix, df):
     cols = list(MEASUREMENT_COLUMNS)
     if 'SOURCE' in df.columns:
         cols.append('SOURCE')
+    for extra in ('QC_FLAG', 'QC_REASON'):      # opt-in (--qc); absent by default
+        if extra in df.columns:
+            cols.append(extra)
     out = df.copy()
     for c in cols:                      # an empty frame may never have gained a column
         if c not in out.columns:
@@ -890,6 +896,20 @@ def _process_one(image_path, plate_size, run_images, args):
 
         green_df_copy = renumerate_df(green_df_copy)
         green_df_copy = add_turbidity(orig_image, plate_df, green_df_copy)
+        if args.get('qc') and len(green_df_copy):
+            try:
+                import plaque_qc
+                dish = None
+                if plate_df is not None and not plate_df.empty:
+                    big = plate_df['ENCL_DIAMETER_PXL'].idxmax()
+                    c = plate_df.loc[big, 'ENCL_CENTER']
+                    dish = (float(c[0]), float(c[1]), float(plate_df.loc[big, 'ENCL_DIAMETER_PXL']) / 2.0)
+                fl, why = plaque_qc.flags_for_dataframe(green_df_copy, image_size, dish=dish)
+                green_df_copy = green_df_copy.copy()
+                green_df_copy['QC_FLAG'] = fl
+                green_df_copy['QC_REASON'] = why
+            except Exception as exc:             # QC must never break a measurement run
+                print("  (QC flags skipped: %s)" % exc)
         renumerate_df(red_df)
         renumerate_df(other_df)
 

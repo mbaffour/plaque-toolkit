@@ -133,3 +133,11 @@ Then open `out\data-green-Plate_2.csv` and `out\out_Plate_2.tif`.
 Tool version: `python plaque_size_tool.py --version` (reads `_version.py`; 1.1.0 at time of writing). The mm‑precision/de‑dup
 corrections, HEIC reading, `--watershed`, `--published`, and `TURBIDITY_REL` are additions to that
 validated tool; the default detection/sizing algorithm is unchanged.
+
+## QC flags (`--qc`)
+
+`python plaque_size_tool.py -i plate.tif -p 90 --qc` appends two columns to `data-green-*.csv`:
+`QC_FLAG` (`OK`, or any of `EDGE`, `MERGED?`, `TINY`, `OVERLAP` joined with `|`) and `QC_REASON`
+(the measurement behind the flag, e.g. "area 3.1x the plate median"). They change no measurement
+and are absent unless you ask, so the default output stays byte-identical. Sort a plate by
+`QC_FLAG` to review only the plaques that need a look; see `plaque_qc.py` for the thresholds.

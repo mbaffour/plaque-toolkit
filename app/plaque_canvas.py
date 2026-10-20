@@ -1066,7 +1066,8 @@ class PlaqueCanvas(QWidget):
         os.makedirs(self.out_dir, exist_ok=True)
         csv_path = os.path.join(self.out_dir, f"data_{name}.csv")
         _pub = self._det_flag("published")
-        df = engine_api.measure_table(self._plaques, self.orig_bgr, self.ppm, self.lawn_gray, published=_pub)
+        df = engine_api.measure_table(self._plaques, self.orig_bgr, self.ppm, self.lawn_gray, published=_pub,
+                                      plate=self.plate)
         df.to_csv(csv_path, index=False)
         try:                                        # provenance for the app's main export (PT-31)
             import provenance

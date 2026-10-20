@@ -129,7 +129,7 @@ def _circularity(p):
     return round(min(1.0, 4.0 * math.pi * area / (per * per)), 3)
 
 
-def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None):
+def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None):
     """Per-plaque DataFrame mirroring what save_results writes, but WITHOUT writing files
     (for live display of the editable plaque set). Adds CIRCULARITY (shape) and OVERLAP
     (touches another plaque) so irregular / confluent plaques are visible and filterable."""
@@ -140,6 +140,12 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None):
     lg = lawn_gray if lawn_gray is not None else pst.estimate_lawn_gray(gray)
     turb = pst.turbidity_indices(means, lg)
     over = overlap_flags(plaques)
+    circs = [_circularity(p) for p in plaques]
+    try:
+        import plaque_qc
+        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs)
+    except Exception:                        # never let QC break the table
+        qc = [("", "")] * len(plaques)
     rows = []
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
@@ -147,11 +153,11 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None):
                      "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": round(area_mm2, 2),
                      "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
                      "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""),
-                     "CIRCULARITY": _circularity(p), "OVERLAP": ("yes" if ov else "no"),
-                     "SOURCE": p["source"]})
+                     "CIRCULARITY": circs[i - 1], "OVERLAP": ("yes" if ov else "no"),
+                     "SOURCE": p["source"], "QC_FLAG": qc[i - 1][0]})
     return pd.DataFrame(rows, columns=["INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
                                        "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL",
-                                       "CIRCULARITY", "OVERLAP", "SOURCE"])
+                                       "CIRCULARITY", "OVERLAP", "SOURCE", "QC_FLAG"])
 
 
 def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=None):
@@ -291,8 +297,14 @@ def _precise_plaques_from_df(pdf, ppm):
             continue
         src = (str(r[sk]).lower() if sk else "plaqseg")
         source = "auto" if src in ("plaqseg", "auto", "") else "region"
+        pk_ = cols.get("P_PLAQUE")
+        try:
+            pp = float(r[pk_]) if pk_ else None
+            pp = pp if pp == pp else None
+        except Exception:
+            pp = None
         out.append({"source": source, "kind": "circle", "center": (x, y),
-                    "radius": r_px, "area_pxl": float(math.pi * r_px * r_px)})
+                    "radius": r_px, "area_pxl": float(math.pi * r_px * r_px), "p_plaque": pp})
     return out
 
 
