@@ -80,7 +80,10 @@ def test_minimum_is_configurable(fake_precise, monkeypatch):
 
 
 def test_gate_fails_when_torch_is_unavailable(monkeypatch, capsys):
-    """The real situation on this runner: no torch -> non-zero, no false green."""
+    """No torch -> non-zero, no false green. Simulated explicitly (the test used to rely
+    on the runner having no torch, so it failed on any machine that had it)."""
+    import precise.pipeline as pipeline
+    monkeypatch.setattr(pipeline, "torch_inprocess_available", lambda: False)
     rc = plaque_app._precise_smoke()
     assert rc != 0
     assert "PRECISE_SMOKE FAIL" in capsys.readouterr().out
