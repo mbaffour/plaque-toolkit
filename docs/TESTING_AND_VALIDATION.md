@@ -22,8 +22,12 @@ by `python plaque_app.py --smoke` (detects the bundled sample plate and fails if
 found). The suite is headless and Qt-free; it covers the engine-level invariants recorded in
 AUDIT-2026-09.md — PT-1 to PT-6 and PT-9 (upstream-exact byte identity, zero-plaque output,
 turbidity linearity, provenance records, the Precise smoke gate, agreement wording) — plus the
-no-hard-coded-paths rule. It does **not** exercise the GUI, the editor, the export paths, the
-Validate tab or the Precise pipeline end to end; those are covered only by manual runs.
+no-hard-coded-paths rule, and since 2026-10 `tests/test_app_gui.py`, which drives the real
+desktop app headlessly (Qt offscreen): the seven tabs, Measure-tab detection and engine flags,
+the busy guard, Orient → labels → Validate consistency, Batch-tab Published with and without
+the small-plaque gates, and the Compare tab on a zero-plaque folder. Still **not** exercised
+automatically: the hand-editing tools, the export dialogs, the Validate and Fiji tabs end to
+end, and the Precise pipeline with torch (CI has no torch).
 
 The table below records a **one-off manual end-to-end run** of 21 checks (all passed). It is
 not repeated by CI, so treat it as a dated snapshot, not a standing guarantee
