@@ -82,6 +82,7 @@ def _envf(name, default):
 
 LAWN_FRAC = _envf("LAWN_FRAC", 0.80)          # lawn ROI = inner 80% of dish radius
 LABEL_DILATE = 15         # blue-label dilation (px)
+BLUE_LABEL_MAX_FRAC = _envf("BLUE_LABEL_MAX_FRAC", 0.30)   # above this the 'label' is the lawn colour
 MIN_TOL_MM = _envf("MIN_TOL_MM", 0.35)        # match-radius floor (mm)
 CONTRAST_FLOOR = _envf("CONTRAST_FLOOR", 0.030)  # center-vs-ring contrast gate on the float-flattened lawn
 RING_K = 2.2              # outer ring radius = RING_K * detection radius
@@ -250,6 +251,15 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
 
     b, g, r = cv2.split(bgr.astype(np.int16))
     blue_label = (b - r > 25) & (b > 90)
+    # This mask exists to ignore blue marker-pen labels on phage plates. On a plate whose
+    # LAWN is blue (a crystal-violet-stained mammalian assay) it covered the whole dish and
+    # rejected 96 % of the detector's plaques (validation/benchmarks/vacvplaque_benchmark.md).
+    # A pen label never covers a large fraction of the dish, so when the blue area exceeds
+    # BLUE_LABEL_MAX_FRAC of the dish it is the lawn colour, not a label, and is ignored.
+    blue_frac = float(blue_label[dish_mask].mean()) if dish_mask.any() else 0.0
+    blue_label_suppressed = blue_frac > BLUE_LABEL_MAX_FRAC
+    if blue_label_suppressed:
+        blue_label = np.zeros_like(blue_label)
     blue_label = cv2.dilate(blue_label.astype(np.uint8),
                             np.ones((LABEL_DILATE, LABEL_DILATE), np.uint8)).astype(bool)
     keep_mask = lawn_mask & (~blue_label)     # accept region for any detection
@@ -465,6 +475,7 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
             "dense_factor": DENSE_FACTOR, "match_tol_scale": MATCH_TOL_SCALE,
             "ring_k": RING_K, "label_dilate": LABEL_DILATE,
             "blob_enabled": bool(blob_enabled), "clf_enabled": bool(clf_used),
+            "blue_label_frac": round(blue_frac, 4), "blue_label_suppressed": bool(blue_label_suppressed),
             "clf_thr": (clf_thr if clf_used else None),
             "env_overrides": {k: v for k, v in os.environ.items() if k.startswith("PRECISE_")},
         },

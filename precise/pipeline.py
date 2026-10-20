@@ -58,6 +58,19 @@ def torch_inprocess_available():
         return False
 
 
+_YOLO_IMGSZ = 1280
+
+
+def _trained_imgsz(weights):
+    """The imgsz a ultralytics checkpoint was trained at, or None."""
+    try:
+        import torch
+        ck = torch.load(weights, map_location="cpu", weights_only=False)
+        return int((ck.get("train_args") or {}).get("imgsz") or 0) or None
+    except Exception:
+        return None
+
+
 def _load_yolo(weights):
     if weights in _YOLO_CACHE:
         return _YOLO_CACHE[weights]
@@ -83,6 +96,17 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
     # PLAQSEG_WEIGHTS lets a fine-tuned or alternative checkpoint be evaluated through the
     # same pipeline without code changes (validation/benchmarks/).
     weights = weights or os.environ.get("PLAQSEG_WEIGHTS") or DEFAULT_WEIGHTS
+    # Inference size must match what the checkpoint was trained at: the shipped weights were
+    # tuned at 1280; a checkpoint fine-tuned at 640 lost 80 % of its recall when run at 1280
+    # (validation/benchmarks/vacvplaque_benchmark.md). PLAQSEG_IMGSZ overrides; otherwise the
+    # checkpoint's own training size is used when it records one.
+    global _YOLO_IMGSZ
+    if os.environ.get("PLAQSEG_IMGSZ"):
+        _YOLO_IMGSZ = int(os.environ["PLAQSEG_IMGSZ"])
+    elif os.path.abspath(str(weights)) == os.path.abspath(DEFAULT_WEIGHTS):
+        _YOLO_IMGSZ = 1280          # the shipped weights: validated at 1280, never auto-changed
+    else:
+        _YOLO_IMGSZ = int(_trained_imgsz(weights) or 1280)
     tag = tag or os.path.splitext(os.path.basename(image_path))[0]
     if out_dir is None:
         out_dir = os.path.join(os.path.dirname(image_path), "out_precise")
@@ -128,7 +152,8 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
         ta = threading.Thread(target=_guard, args=("pst",
                               lambda: pst_front.detect(image_path, str(plate_mm), base=base)))
         tb = threading.Thread(target=_guard, args=("ps",
-                              lambda: detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mmpp0 or 0.0))))
+                              lambda: detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mmpp0 or 0.0),
+                                                     imgsz=_YOLO_IMGSZ)))
         ta.start(); tb.start(); ta.join(); tb.join()
         if errs:
             raise next(iter(errs.values()))
@@ -140,7 +165,8 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
         pst = pst_front.detect(image_path, str(plate_mm), base=base)
         mm_per_px = pst["mm_per_px"] or _embedded_mm(None)
         pst["mm_per_px"] = mm_per_px
-        ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mm_per_px or 0.0))
+        ps_rows, _raw = detect_plaqseg(model, bgr, conf=conf, iou=iou, ppm=(mm_per_px or 0.0),
+                                       imgsz=_YOLO_IMGSZ)
 
     # detect_plaqseg returns the CSV schema (X,Y,AREA_PXL,...); combine expects the
     # lowercase load_plaqseg schema. Convert in-memory (no CSV round-trip).
@@ -177,7 +203,7 @@ def run_inprocess(image_path, plate_mm=100, out_dir=None, clf=True, clf_thr=None
                 vers[mod] = "?"
         keep_edge = os.environ.get("PLAQSEG_KEEP_EDGE", "0") not in ("0", "", "false", "False")
         summary["yolo"] = {"weights": os.path.basename(wpath), "weights_sha256_16": wsha,
-                           "conf": float(conf), "iou": float(iou),
+                           "conf": float(conf), "iou": float(iou), "imgsz": int(_YOLO_IMGSZ),
                            "tile_edge_fragments_dropped": not keep_edge}
         summary["library_versions"] = vers
         with open(os.path.join(out_dir, "summary_%s.json" % tag), "w") as fh:

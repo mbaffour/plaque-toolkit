@@ -39,7 +39,9 @@ def detect_plaqseg(model, img, conf=0.1, iou=0.5, ppm=0.0,
     for y0 in starts(H, tile, stride):
         for x0 in starts(W, tile, stride):
             crop = img[y0:y0 + tile, x0:x0 + tile]
-            r = model.predict(crop, imgsz=imgsz, conf=conf, iou=iou, verbose=False)[0]
+            # max_det: ultralytics silently keeps only its 300 best boxes per call, which
+            # truncated dense tiles (validation/benchmarks/vacvplaque_benchmark.md).
+            r = model.predict(crop, imgsz=imgsz, conf=conf, iou=iou, verbose=False, max_det=_MAX_DET)[0]
             if r.boxes is None or len(r.boxes) == 0:
                 continue
             xyxy = r.boxes.xyxy.cpu().numpy()
@@ -80,6 +82,7 @@ def detect_plaqseg(model, img, conf=0.1, iou=0.5, ppm=0.0,
 
 
 _KEEP_EDGE = os.environ.get("PLAQSEG_KEEP_EDGE", "0") not in ("0", "", "false", "False")
+_MAX_DET = int(os.environ.get("PLAQSEG_MAX_DET", "1000"))
 
 
 def _touches_internal_edge(b, x0, y0, cw, ch, W, H, margin=1.0):

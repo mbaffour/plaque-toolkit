@@ -43,6 +43,12 @@ None of these touches `plaque_size_tool.py --published` output.
   ANOVA + Tukey when Levene rejects equal variances; grouped control comparisons are
   Holm-adjusted within each group (raw p kept as `p_raw`).
 
+* **Precise, dense plates (PlaqSeg cap).** The detector kept at most 300 boxes per tile call
+  (an ultralytics default); the cap is now 1,000 (`PLAQSEG_MAX_DET`). Counts on tiles with more
+  than 300 candidate plaques can rise. Found on the VACVPlaque benchmark.
+* **Precise, blue-lawn plates.** The blue pen-label mask is ignored when it would cover more than
+  30 % of the dish (it is then the lawn colour); phage plates with a small pen label are unaffected.
+
 ### Output files that change (columns added, no cell changed)
 
 * `summary.csv`: `MM_CALIBRATED`; plates in natural order (`Plate_2` before `Plate_10`);
@@ -65,6 +71,10 @@ None of these touches `plaque_size_tool.py --published` output.
   `edited: true` when hand edits are present.
 * `tests/test_audit_2026_10.py`: 32 regression tests (85 in total).
 * `releases/v1.1.0/`: the frozen record of the previous release and its outputs.
+* `validation/benchmarks/`: an external benchmark on the public VACVPlaque dataset (converter,
+  YOLO training-set exporter, results), `PLAQSEG_WEIGHTS` / `PLAQSEG_IMGSZ` / `PLAQSEG_MAX_DET`
+  overrides so alternative or fine-tuned detector weights run through the unchanged pipeline, and
+  a `DIAMETER_PXL` column in the Precise CSV. See `validation/benchmarks/vacvplaque_benchmark.md`.
 
 ### Fixed
 

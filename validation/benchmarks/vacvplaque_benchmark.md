@@ -43,7 +43,26 @@ Size agreement from boxes (box area → equivalent diameter) overestimates the m
 
 ## 3. Fine-tuned weights through the full Precise pipeline
 
-_Pending: `per_well_precise_finetuned_x1.csv` — run via `PLAQSEG_WEIGHTS=... python app/validate.py <wells> --modes precise`._
+`PLAQSEG_WEIGHTS=_research/models/plaqseg_vacv_ft_x1_best.pt python app/validate.py <wells> --modes precise`
+(native scale; inference size follows the checkpoint's training size, 640; conf 0.10; classifier gate on):
+
+| Pipeline | Wells | TP | FP | FN | Precision | Recall | F1 | Size MAE | Size bias | Size r |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Precise, fine-tuned weights, first run | 126 | 1372 | 711 | 10579 | 0.66 | 0.11 | 0.20 | — | — | — |
+| after matching the inference size to the checkpoint | 126 | 1743 | 549 | 10208 | 0.76 | 0.15 | 0.24 | — | — | — |
+| after the lawn-colour fix and lifting the 300-box cap | 126 | 6195 | 2109 | 5756 | 0.75 | 0.52 | 0.61 | 0.32 mm | +0.16 mm | 0.79 |
+
+Two pipeline defects surfaced only because of this out-of-domain test, and both are now fixed:
+
+* The **blue pen-label mask** (meant to ignore marker labels on phage plates) classified the entire
+  crystal-violet lawn as a label and rejected 96 % of the detector's plaques on sparse wells. It is now
+  ignored when it would cover more than 30 % of the dish (`PRECISE_BLUE_LABEL_MAX_FRAC`), and the
+  fraction is recorded in `summary_<tag>.json`. Phage plates are unaffected (the bundled sample: 0 %).
+* ultralytics keeps at most **300 boxes per prediction call** by default; dense wells (up to 859 plaques)
+  were silently truncated. The cap is now 1,000 (`PLAQSEG_MAX_DET`). This can raise Precise counts on
+  very dense phage plates too, and is listed under "Numbers that change" in the CHANGELOG.
+* The detector's **inference size** now follows the checkpoint's training size for non-default weights;
+  the shipped weights stay at their validated 1280 (`PLAQSEG_IMGSZ` overrides).
 
 ## What this shows
 
