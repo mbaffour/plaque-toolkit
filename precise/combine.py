@@ -36,7 +36,14 @@ import json
 
 import numpy as np
 import cv2
-from skimage.feature import blob_log
+# scikit-image is only needed by the OPTIONAL blob_log recovery stage; importing it at
+# module level made the whole pipeline (and the light build's smoke gate) fail with a
+# 'skimage' error that had nothing to do with the real cause (missing torch).
+try:
+    from skimage.feature import blob_log
+except ImportError:          # pragma: no cover
+    def blob_log(*_a, **_k):
+        raise ImportError("blob_log recovery needs scikit-image: pip install scikit-image")
 
 # repo root: under a PyInstaller bundle the data files (_research/clf) are extracted
 # under sys._MEIPASS; from source they sit at the project root (two dirs up).
