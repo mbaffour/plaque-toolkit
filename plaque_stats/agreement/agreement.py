@@ -519,7 +519,8 @@ def run(args):
     # stats CSV (one row)
     row = {k: s[k] for k in ("n", "mean_tool", "mean_fiji", "bias", "sd", "loa_lo", "loa_hi",
                              "rmse", "pct_bias", "mae", "r", "r2", "pearson_p", "t_stat", "t_p",
-                             "icc", "icc_lo", "icc_hi", "ccc", "slope", "intercept")}
+                             "icc", "icc_lo", "icc_hi", "ccc", "slope", "intercept",
+                             "ba_slope", "ba_slope_p", "loa_ci_halfwidth")}
     row["icc_grade"] = icc_grade(s["icc"])
     pd.DataFrame([row]).to_csv(os.path.join(out, "agreement_stats_%s.csv" % suf), index=False)
 
