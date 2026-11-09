@@ -157,6 +157,23 @@ Upload your CSV (or click **Load example data**), pick the `group` / `replicate`
 toggle the options, and **download** the figure (PNG/SVG/PDF) and the summary/stats tables. The
 **Data format** tab restates the format above.
 
+**One style for the whole paper.** The app reads the `paper_style.json` that
+[CFU Plot Studio](https://github.com/mbaffour/cfu-plot-studio) 0.4.0 writes (**Save as paper
+style**): put it beside `app.R`, or point the `CFU_PAPER_STYLE` environment variable at it, and
+at every start the app takes its sample colours (`sample_palette`, merged **by sample name** —
+names your data lacks are kept, so one file can name every strain of the paper), font
+(`font_family` / `font_family_custom`), base font size (`font_size`), axis colour
+(`axis_color`) and axis line width (`axis_line_width`); everything else in the file (plot title,
+legend position, download size, y limits, `time_palette`, …) is ignored. The line under the look
+inputs names the file and when it was saved, or says `No paper style (looked for …)`. Sample
+colours are keyed by name in any case: load another CSV and every sample the session has seen
+keeps its colour, a new one takes the first unused colour of the theme, and choosing another
+theme recolours the loaded names in order. **Font**, **Base font size**, **Axis colour** and
+**Axis line width** reach the figure, the n row, the brackets and the legend key alike; a font
+this machine lacks is drawn in the default sans and the app says so. With every input at its
+default the figure is unchanged from 1.2.0 (byte-identical SVG). See the toolkit README →
+"One style for the whole paper" for the full mapping table.
+
 ### Python Shiny — the browser app (`app_py.py`)
 
 A **web app (HTML in your browser)** that **imports `plaque_stats.py` directly** — the same

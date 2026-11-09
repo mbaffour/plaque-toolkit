@@ -156,6 +156,46 @@ SVG and PDF keys keep the names as real text (editable in Illustrator/Inkscape).
 that colour no sample or group (annotated plates, Fiji-agreement plots, box plots, tables)
 have no key — see the 1.2.0 entry in [CHANGELOG.md](CHANGELOG.md) for the full list.
 
+## One style for the whole paper (R Shiny app)
+
+The R Shiny app (`plaque_stats/app.R`) reads the same `paper_style.json` that
+[CFU Plot Studio](https://github.com/mbaffour/cfu-plot-studio) 0.4.0 writes with **Save as
+paper style**, so one file gives every figure of a paper — CFU plots and plaque violins alike —
+the same strain colours and font.
+
+* **Colours belong to names.** A sample's colour is stored against its NAME, not its position
+  in the file: load another CSV and every name the app has seen keeps its colour, and a new
+  name takes the first colour of the current theme no other name is using. Choosing another
+  colour theme (or typing custom hex) recolours the names loaded now, in order. The legend key
+  and the text starter follow, since they are built from the same mapping.
+* **Font and look.** The sidebar's **Font** menu (Default sans, Arial, Helvetica, Times New
+  Roman, Serif, Custom…), **Base font size**, **Axis colour** and **Axis line width** are
+  threaded through the figure, the n row, the significance brackets, the key placed on the
+  figure and the stand-alone key files, so all of them share one font and size. A font this
+  machine does not have is drawn in the default sans; the app says so once and in the line
+  under the inputs.
+* **The paper style.** At every start the app looks for `paper_style.json` beside `app.R`
+  (or wherever the `CFU_PAPER_STYLE` environment variable points) and applies it; the line
+  under the look inputs says `Paper style: <path>, saved <when>` or `No paper style (looked
+  for <path>)`. An unreadable file says so and changes nothing. The file is git-ignored.
+
+Only the settings both apps share are taken (an explicit allowlist); everything else in the
+file is ignored:
+
+| `paper_style.json` → `settings` | R Shiny input | how |
+|---|---|---|
+| `font_family` (+ `font_family_custom`) | **Font** (+ **Custom font name**) | a family the menu lacks goes through *Custom…* |
+| `font_size` | **Base font size** | ggplot `base_size` |
+| `axis_color` | **Axis colour** | `axis.line`, `axis.ticks`, the frame |
+| `axis_line_width` | **Axis line width** | `axis.line`, `axis.ticks`; the frame is 0.1 heavier, as before |
+| `sample_palette` (name → hex) | the colour registry | merged BY NAME; names your data lacks are kept; the violins are coloured by sample even with plates present |
+| `title_size`, `time_palette`, `plot_title`, `legend_position`, `x_angle`, `download_width`, `download_height`, `y_min`, `y_max`, `plot_mode`, `box_line_width`, … | — | ignored |
+
+With every input at its default the figure is byte-identical to 1.2.0
+(`tests/test_paper_style.py` renders it with both versions of `app.R` and compares the SVGs).
+The Python front-ends (`plaque_stats.py`, `app_py.py`, the Analyze tab) do not read the file
+yet.
+
 ---
 
 ## Citation

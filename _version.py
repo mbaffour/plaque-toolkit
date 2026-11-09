@@ -10,4 +10,4 @@ Keep it dependency-free and import-light: it is imported by the engine modules
 and by the frozen app at start-up.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"

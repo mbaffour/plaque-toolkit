@@ -33,6 +33,9 @@ _research/**/*.log
 _research/sweep_out/
 _research/val_out/
 
+# the paper style the R Shiny app reads (CFU Plot Studio's paper_style.json; per paper, not per repo)
+plaque_stats/paper_style.json
+
 # --- secrets / keys ---
 _roboflow_key.txt
 env_paths.json

@@ -9,6 +9,49 @@ the conditions. A release with no such heading changed no number.
 
 ---
 
+## 1.3.0 — unreleased: paper style for the R Shiny app (branch `claude/paper-style`, on top of 1.2.0)
+
+The R Shiny app (`plaque_stats/app.R`) reads the `paper_style.json` that CFU Plot Studio 0.4.0
+writes, so one style file gives every figure of a paper the same strain colours and font. See
+README → "One style for the whole paper (R Shiny app)". **No measurement or statistic
+changes**: this release touches the R app's figure styling only, and with every input at its
+default the figure is byte-identical to 1.2.0 (`tests/test_paper_style.py` renders the default
+violin, the composed figure with the key, the coloured/framed variant and the stand-alone key
+files with the 1.2.0 `app.R` and with this one, in separate R processes, and compares the SVGs
+byte for byte).
+
+* **Colours keyed by sample NAME.** A per-session colour registry (`extend_colour_registry()`,
+  `registry_colours()`, the same semantics as CFU Plot Studio) replaces the positional palette
+  in `style_map()`: loading another CSV keeps every name's colour and gives a new name the first
+  colour of the current theme no other name uses; choosing another theme or typing custom hex
+  reassigns the loaded names in level order (names not loaded keep theirs). The legend key and
+  text starter follow, as they are built from the same map.
+* **Font family and the shared look.** New sidebar inputs **Font** (Default sans, Arial,
+  Helvetica, Times New Roman, Serif, Custom…), **Base font size**, **Axis colour** and **Axis
+  line width**, threaded through `theme_classic()`, the n row, the significance brackets
+  (`stat_pvalue_manual(..., family =)` reaches `geom_bracket`), the key placed on the figure and
+  the key files, so figure and key share one font and size. `resolve_font_family()` checks a
+  named font with systemfonts and falls back to the default sans when the machine lacks it; the
+  app says so once (notification) and in the status line.
+* **Paper style on start.** `paper_style_path()`: `CFU_PAPER_STYLE` if set, else
+  `paper_style.json` beside `app.R`. Read after the first flush with jsonlite through an explicit
+  allowlist: `font_family`/`font_family_custom` → Font, `font_size` → Base font size,
+  `axis_color` → Axis colour, `axis_line_width` → Axis line width, `sample_palette` → merged
+  into the registry by name (names the data lacks are kept; the violins are then coloured by
+  sample even under the grey SuperPlot default). `title_size`, `time_palette`, `plot_title`,
+  `legend_position`, `x_angle`, `download_width`, `y_min`, … are ignored. The status line says
+  `Paper style: <path>, saved <when>` or `No paper style (looked for <path>)`; an unreadable file
+  says so and applies nothing. `plaque_stats/paper_style.json` is git-ignored.
+* Tests: `tests/test_paper_style.py` drives `tests/r_paper_style_check.R` (shiny::testServer;
+  skipped without R or the app's packages, as the legend key test is): byte-identical defaults
+  vs commit 176656b (skipped with a note when the commit is absent), name-keyed colours across
+  two files, the Times New Roman fixture, a fixture asking for a font this machine lacks, and no
+  file at all. Fixtures in `tests/fixtures/` are real CFU Plot Studio 0.4.0 output.
+* Not yet: the Python front-ends (`plaque_stats.py`, `app_py.py`, the Analyze tab) do not read
+  the paper style.
+
+---
+
 ## 1.2.0 — unreleased: legend key (branch `claude/legend-key`, on top of the 2026-10 audit)
 
 Every figure that colours its samples, plates or phages now ships a **legend key**: a
