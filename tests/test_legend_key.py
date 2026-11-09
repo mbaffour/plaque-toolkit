@@ -5,6 +5,7 @@ The five required checks run on the shared statistics engine (the violin SuperPl
 desktop Analyze tab, the Plaque Stats CLI and its web app); further tests cover the grouped
 plot, make_figure.py, the turbidity histograms and the Analyze tab itself (headless Qt).
 """
+import importlib.util
 import os
 import subprocess
 import sys
@@ -281,9 +282,10 @@ def test_turbidity_histograms_write_their_key(tmp_path):
 
 
 # --------------------------------------------------------------------------- desktop Analyze tab
+@pytest.mark.skipif(importlib.util.find_spec("PySide6") is None
+                    or importlib.util.find_spec("pytestqt") is None,
+                    reason="needs PySide6 + pytest-qt")
 def test_analyze_tab_key_follows_renames(qtbot, tmp_path):
-    pytest.importorskip("PySide6")
-    pytest.importorskip("pytestqt")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from app import ui as appui
     win = appui.MainWindow(); qtbot.addWidget(win)
