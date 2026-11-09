@@ -968,12 +968,36 @@ class CompareTab(QWidget):
         import glob
         for png in sorted(glob.glob(os.path.join(out_dir, "compare_*.png"))) + \
                    sorted(glob.glob(os.path.join(out_dir, "hist_*.png"))):
+            if png.endswith("_legend_key.png"):      # a figure's key file, not a figure
+                continue
             lbl = QLabel(); pm = QPixmap(png)
             if not pm.isNull():
                 lbl.setPixmap(pm.scaledToWidth(520, Qt.SmoothTransformation))
             self.figs_layout.addWidget(lbl)
+            self._add_key_text_row(png)
         self.figs_layout.addStretch()
         self.window().statusBar().showMessage(f"Done → {out_dir}")
+
+    def _add_key_text_row(self, png):
+        """Under a figure that colours its phages: where its legend key was saved (written by the
+        same run, beside the figure) and its legend text starter with a Copy button."""
+        txt = os.path.splitext(png)[0] + "_legend_text.txt"
+        if not os.path.exists(txt):
+            return                                    # box plots colour nothing: no key
+        try:
+            with open(txt, encoding="utf-8") as fh:
+                sentence = fh.read().strip()
+        except OSError:
+            return
+        box = QLineEdit(sentence); box.setReadOnly(True); box.setCursorPosition(0)
+        box.setToolTip("Legend key saved beside the figure: %s"
+                       % os.path.basename(os.path.splitext(png)[0] + "_legend_key.png"))
+        copy = QPushButton("Copy")
+        copy.clicked.connect(lambda _=False, b=box: QApplication.clipboard().setText(b.text()))
+        cap = QLabel("Legend text starter"); cap.setObjectName("FieldLabel")
+        row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0, 0, 0, 8)
+        rl.addWidget(cap); rl.addWidget(box, 1); rl.addWidget(copy)
+        self.figs_layout.addWidget(row)
 
     def on_error(self, msg):
         self.run_btn.setEnabled(True)

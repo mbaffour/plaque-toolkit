@@ -692,8 +692,35 @@ def write_metadata(out_dir, args_dict, images, qc_rows, errors, labels=None):
         json.dump(meta, f, indent=2)
 
 
-def write_plots(df, out_dir):
-    """Per-phage comparison box plots + overlaid histograms for size & turbidity."""
+def _legend_key_module():
+    """The shared legend-key helper (plaque_stats/legend_key.py), or None when this module runs
+    without the rest of the toolkit (e.g. the root wheel alone): the plots are then written
+    without their key files."""
+    try:
+        from plaque_stats import legend_key
+        return legend_key
+    except Exception:                                    # noqa: BLE001
+        try:
+            import legend_key                             # plaque_stats/ itself on sys.path
+            return legend_key
+        except Exception:                                # noqa: BLE001
+            return None
+
+
+def phage_colours(phages):
+    """The one phage -> colour mapping of the overlaid histograms: matplotlib's default colour
+    cycle, in phage order (what the histograms always used), now an explicit dict that the bars
+    are drawn from and the legend key is built from."""
+    import matplotlib
+    cyc = [d["color"] for d in matplotlib.rcParams["axes.prop_cycle"]] or ["#1f77b4"]
+    return {p: cyc[i % len(cyc)] for i, p in enumerate(phages)}
+
+
+def write_plots(df, out_dir, legend_key=True):
+    """Per-phage comparison box plots + overlaid histograms for size & turbidity.
+    The histograms colour each phage, so each one also gets its legend key
+    (hist_<metric>_legend_key.png + hist_<metric>_legend_text.txt); the box plots carry no
+    phage colour (the phage is the x-axis label), so they need none."""
     if df.empty:
         return
     try:
@@ -702,6 +729,7 @@ def write_plots(df, out_dir):
         from matplotlib.figure import Figure
     except Exception:
         return
+    lk = _legend_key_module() if legend_key else None
     for metric in ("DIAMETER_MM", "TURBIDITY", "TRANSMITTANCE"):
         if metric not in df.columns:
             continue
@@ -723,14 +751,24 @@ def write_plots(df, out_dir):
 
             fig = Figure(figsize=(6, 4))
             ax = fig.add_subplot(111)
+            pcol = phage_colours(list(groups))
             for phage, v in groups.items():
-                ax.hist(v, bins=20, alpha=0.5, label=str(phage))
+                ax.hist(v, bins=20, alpha=0.5, label=str(phage), color=pcol[phage])
             ax.set_xlabel(metric)
             ax.set_ylabel("plaque count")
             ax.set_title(f"{metric} distribution")
-            ax.legend(fontsize=8)
+            base = os.path.join(out_dir, f"hist_{metric}")
+            if lk is not None:                       # key from the same phage -> colour dict
+                key = lk.attach(fig, lk.make_key(
+                    [lk.entry(str(p), pcol[p], kind="patch", edge="none", alpha=0.5, shape="bars")
+                     for p in groups], fontsize=8, frameon=True))
+                lk.embed(ax, key, loc="best")        # the plot's own legend convention
+            else:
+                ax.legend(fontsize=8)
             fig.tight_layout()
-            fig.savefig(os.path.join(out_dir, f"hist_{metric}.png"), dpi=120)
+            fig.savefig(base + ".png", dpi=120)
+            if lk is not None:
+                lk.write_key_files(lk.from_figure(fig), base, ("png",), dpi=120)
         except Exception as e:
             print(f"  (plot failed for {metric}: {e})")
 

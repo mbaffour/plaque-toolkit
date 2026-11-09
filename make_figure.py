@@ -12,6 +12,9 @@ Usage:
     python make_figure.py                         # normal mode, diameter, y-capped at 2 mm
     python make_figure.py --mode sensitive
     python make_figure.py --metric AREA_MM2 --ymax 3 --out fig_area
+    python make_figure.py --legend-key            # also write <out>_legend_key.(png|pdf|svg) +
+                                                  # <out>_legend_text.txt (colour key + text starter)
+    python make_figure.py --key-on-figure         # draw the same key on the figure (outside right)
 
 Tweak the figure by editing the CONFIG block below (colours, order, fonts, size).
 """
@@ -21,6 +24,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from plaque_stats import legend_key
 
 # ---------------------------- CONFIG (edit me) ----------------------------- #
 ORDER   = ["WT", "2-4", "DTR", "G12E", "I70T", "T65I", "T71A"]   # x-axis order
@@ -39,6 +44,24 @@ FONT = 12
 # --------------------------------------------------------------------------- #
 
 
+def sample_colours(samples):
+    """The one sample -> colour mapping: the violins are drawn from it and the key built from it."""
+    return {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(samples)}
+
+
+def figure_key(samples, colours):
+    """Legend key: one entry per sample, styled exactly as its violin (and points, when the points
+    are coloured by sample). Plate medians and black points carry no sample colour."""
+    entries = []
+    for s in samples:
+        c = colours[s]
+        em = (dict(marker="o", colour=c, edge="none", alpha=POINT_ALPHA, size=4.0)
+              if (SHOW_POINTS and not POINT_COLOR) else None)
+        entries.append(legend_key.entry(s, c, kind="patch", edge="black", alpha=0.80,
+                                        linewidth=0.8, shape="violin", extra_marker=em))
+    return legend_key.make_key(entries, fontsize=FONT - 2, frameon=False)
+
+
 def main():
     global ORDER
     ap = argparse.ArgumentParser()
@@ -47,6 +70,10 @@ def main():
     ap.add_argument("--metric", default="DIAMETER_MM")
     ap.add_argument("--ymax", type=float, default=2.0, help="y-axis cap (mm); set 0 to show all")
     ap.add_argument("--out", default=None, help="output basename (default: <mode>_<metric>_figure)")
+    ap.add_argument("--legend-key", action="store_true",
+                    help="also write <out>_legend_key.(png|pdf|svg) and <out>_legend_text.txt")
+    ap.add_argument("--key-on-figure", action="store_true",
+                    help="draw the legend key on the figure, outside the top-right corner")
     ap.add_argument("--order", default=None, help="comma-separated sample order for the x-axis / sheet order, e.g. 'WT,2-4,DTR' (default: %s; samples not listed follow, sorted)" % ",".join(ORDER))
     a = ap.parse_args()
     if a.order:
@@ -65,11 +92,12 @@ def main():
     samples += [s for s in sorted(df["SAMPLE"].unique()) if s not in samples]
 
     fig, ax = plt.subplots(figsize=(1.15 * len(samples) + 1.5, 5.6))
+    colours = sample_colours(samples)
     rng = np.random.default_rng(0)
     hidden = 0
     for i, s in enumerate(samples):
         vals = df.loc[df["SAMPLE"] == s, a.metric].values
-        color = PALETTE[i % len(PALETTE)]
+        color = colours[s]
         vp = ax.violinplot(vals, positions=[i + 1], widths=0.82, showextrema=False)
         for b in vp["bodies"]:
             b.set_facecolor(color); b.set_edgecolor("black"); b.set_alpha(0.80); b.set_linewidth(0.8)
@@ -107,12 +135,18 @@ def main():
         ax.annotate("%d plaque(s) > %.1f mm not shown" % (hidden, a.ymax),
                     (1, 1), xytext=(-4, -4), xycoords="axes fraction",
                     textcoords="offset points", ha="right", va="top", fontsize=8, color="#888")
+    key = legend_key.attach(fig, figure_key(samples, colours))
+    if a.key_on_figure:
+        legend_key.embed(ax, key)
     fig.tight_layout()
 
     out = a.out or ("%s_%s_figure" % (a.mode, a.metric.lower()))
     out = out if os.path.isabs(out) else os.path.join(os.path.dirname(os.path.abspath(a.csv)) or ".", out)
     for ext in ("png", "pdf", "svg"):
         fig.savefig("%s.%s" % (out, ext), dpi=300, bbox_inches="tight")
+    if a.legend_key:
+        legend_key.write_key_files(key, out, ("png", "pdf", "svg"), dpi=300)
+        print("SAVED %s_legend_key.(png|pdf|svg) + %s_legend_text.txt" % (out, out))
     print("SAVED %s.(png|pdf|svg)  | %s mode | %d samples | %d plaques%s" %
           (out, a.mode, len(samples), len(df), ("  (%d hidden > %.1f mm)" % (hidden, a.ymax)) if hidden else ""))
 
