@@ -351,12 +351,29 @@ class StudyTab(QWidget):
         self.zip_btn = QPushButton("Export everything (ZIP)…"); self.zip_btn.clicked.connect(self._export_zip)
         self.zip_btn.setToolTip("Figure in every format + summaries + pairwise + report + provenance, "
                                 "the same bundle as the standalone app.")
+        self.key_btn = QPushButton("Legend key…"); self.key_btn.clicked.connect(self._save_key)
+        self.key_btn.setToolTip("Save the figure's legend key: every sample/plate with its exact "
+                                "colour and marker, in the figure's font and format.")
         s = QHBoxLayout()
-        for b in (self.savefig_btn, self.savesum_btn, self.savedata_btn, self.zip_btn):
+        for b in (self.savefig_btn, self.key_btn):
+            s.addWidget(b)
+        s.addWidget(self.legend_cb)
+        s.addSpacing(10)
+        for b in (self.savesum_btn, self.savedata_btn, self.zip_btn):
             s.addWidget(b)
         s.addStretch()
         v.addLayout(s)
-        self._export_buttons = [self.savefig_btn, self.savesum_btn, self.savedata_btn, self.zip_btn]
+        # legend text starter: read-only, follows the figure on screen, one Copy button
+        self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
+        self.key_text.setPlaceholderText("Analyze to get a sentence listing every sample with its colour.")
+        self.key_copy_btn = QPushButton("Copy"); self.key_copy_btn.clicked.connect(self._copy_key_text)
+        kt = QHBoxLayout()
+        kcap = QLabel("Legend text starter"); kcap.setObjectName("FieldLabel")
+        kt.addWidget(kcap); kt.addWidget(self.key_text, 1); kt.addWidget(self.key_copy_btn)
+        v.addLayout(kt)
+        self._fig_ext = ".png"        # the format last chosen in "Save figure…" (the key follows it)
+        self._export_buttons = [self.savefig_btn, self.key_btn, self.key_copy_btn, self.savesum_btn,
+                                self.savedata_btn, self.zip_btn]
         for b in self._export_buttons:
             b.setEnabled(False)
 
@@ -436,7 +453,11 @@ class StudyTab(QWidget):
         self.show_points = QCheckBox("raw plaques"); self.show_points.setChecked(True)
         self.show_n = QCheckBox("n labels"); self.show_n.setChecked(True)
         self.show_value = QCheckBox("center value"); self.show_value.setChecked(True)
-        self.legend_cb = QCheckBox("legend"); self.legend_cb.setChecked(True)
+        # "Place key on figure": the legend key drawn on the figure (outside its top-right corner).
+        # It lives in the export bar beside "Legend key…" -- see _build_analyse_card.
+        self.legend_cb = QCheckBox("Place key on figure"); self.legend_cb.setChecked(True)
+        self.legend_cb.setToolTip("Draw the legend key on the figure itself (the same entries as the "
+                                  "stand-alone key from “Legend key…”).")
         self.logy_cb = QCheckBox("log Y"); self.logy_cb.setChecked(False)
         self.frame_cb = QCheckBox("full frame"); self.frame_cb.setChecked(False)
 
@@ -448,7 +469,7 @@ class StudyTab(QWidget):
         add(4, 0, "Width (in)", self.width_in); add(4, 1, "Height (in)", self.height_in); add(4, 2, "Export DPI", self.dpi_in)
         add(5, 0, "Theme", self.theme_sel); add(5, 1, "Seed", self.seed_in)
         cbrow = QHBoxLayout()
-        for cb in (self.show_points, self.show_n, self.show_value, self.legend_cb, self.logy_cb, self.frame_cb):
+        for cb in (self.show_points, self.show_n, self.show_value, self.logy_cb, self.frame_cb):
             cbrow.addWidget(cb)
         cbrow.addStretch()
         g.addLayout(cbrow, 5, 4, 1, 2)
@@ -1087,6 +1108,14 @@ class StudyTab(QWidget):
         self._fig_container = container
         self.canvas, self.toolbar, self._last_fig = canvas, toolbar, fig
         canvas.draw()
+        self._refresh_key_text(fig)
+
+    def _refresh_key_text(self, fig=None):
+        """The text starter always comes from the figure on screen (never a stored copy)."""
+        from plaque_stats import legend_key
+        key = legend_key.from_figure(fig) if fig is not None else None
+        self.key_text.setText(legend_key.text_starter(key) if key else "")
+        self.key_text.setCursorPosition(0)
 
     # ---------------------------------------------------------------- results helpers
     def _set_table(self, view, df):
@@ -1110,6 +1139,8 @@ class StudyTab(QWidget):
                 self._set_table(tv, pd.DataFrame())
         if hasattr(self, "report"):
             self.report.clear()
+        if hasattr(self, "key_text"):
+            self.key_text.clear()
         for b in getattr(self, "_export_buttons", []):
             b.setEnabled(False)
 
@@ -1156,6 +1187,7 @@ class StudyTab(QWidget):
         if want:
             path = os.path.splitext(path)[0] + want
         ext = os.path.splitext(path)[1].lower()
+        self._fig_ext = ext or ".png"
         import matplotlib as mpl
         mpl.rcParams["svg.fonttype"] = "none"; mpl.rcParams["pdf.fonttype"] = 42; mpl.rcParams["ps.fonttype"] = 42
         opts = self._opts(self._last[1]["metric_key"])
@@ -1175,6 +1207,52 @@ class StudyTab(QWidget):
             if fig is not None:
                 plt.close(fig)                    # always release the export figure
         self.window().statusBar().showMessage("Figure saved (%s, %d dpi): %s" % (ext.lstrip("."), dpi, path), 6000)
+
+    _FIG_FILTERS = ("PNG image (*.png);;SVG — vector, editable (*.svg);;PDF — vector (*.pdf);;"
+                    "TIFF — journal raster (*.tiff);;EPS — vector (*.eps)")
+
+    def _save_key(self, path=None):
+        """Save the legend key of the CURRENT figure (re-drawn from the current samples, names,
+        palette and selection), in the figure's format -- the one last used in Save figure."""
+        if self._last is None:
+            return None
+        from plaque_stats import legend_key
+        if path is None:
+            ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
+            first = next((k for k, e in ext_for.items() if e == self._fig_ext), "PNG")
+            filters = self._FIG_FILTERS.split(";;")
+            sel0 = next((f for f in filters if f.startswith(first)), filters[0])
+            path, sel = QFileDialog.getSaveFileName(self, "Save legend key",
+                                                    "plaque_figure_legend_key" + self._fig_ext,
+                                                    self._FIG_FILTERS, sel0)
+            if not path:
+                return None
+            want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
+            if want:
+                path = os.path.splitext(path)[0] + want
+        ext = os.path.splitext(path)[1].lower()
+        opts = self._opts(self._last[1]["metric_key"])
+        dpi = 600 if ext in (".tif", ".tiff") else int(opts["dpi"])
+        import matplotlib.pyplot as plt
+        fig = None
+        try:
+            fig = self._build_fig(opts)
+            key = legend_key.from_figure(fig)
+            if not key or not key.get("entries"):
+                self._warn("This figure has no sample or plate colours to key."); return None
+            legend_key.save_key(key, path, dpi=dpi)
+        except Exception as e:
+            self._warn("Could not save the legend key: %s" % e); return None
+        finally:
+            if fig is not None:
+                plt.close(fig)
+        self.window().statusBar().showMessage("Legend key saved: %s" % path, 6000)
+        return path
+
+    def _copy_key_text(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(self.key_text.text())
+        self.window().statusBar().showMessage("Legend text copied to the clipboard.", 3000)
 
     def _save_summary(self):
         if self._last is None:

@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from shiny import App, ui, render, reactive, req
 
 import plaque_stats as ps          # the shared engine (same code as the CLI)
+import legend_key                  # the figure's legend key (image + text starter), shared helper
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -166,7 +167,14 @@ app_ui = ui.page_sidebar(
                      ui.output_plot("violin", height="560px"),
                      ui.div(ui.download_button("dl_png", "PNG"),
                             ui.download_button("dl_svg", "SVG (editable)"),
-                            ui.download_button("dl_pdf", "PDF (editable)"))),
+                            ui.download_button("dl_pdf", "PDF (editable)"),
+                            ui.download_button("dl_key", "Legend key (PNG + SVG + PDF)"),
+                            ui.input_checkbox("place_key", "Place key on figure", True)),
+                     ui.h6("Legend text starter"),
+                     ui.output_text_verbatim("key_text"),
+                     ui.tags.button("Copy", class_="btn btn-sm btn-outline-secondary",
+                                    onclick="navigator.clipboard.writeText("
+                                            "document.getElementById('key_text').innerText)")),
         ui.nav_panel("Statistics",
                      ui.h5("Omnibus test"), ui.output_text_verbatim("omni"),
                      ui.h5("Pairwise (Sample A vs B — mean of all plates)"),
@@ -283,6 +291,7 @@ def server(input, output, session):
                     show_points=bool(input.show_points()),
                     annotate=("auto" if input.show_sig() else "none"),
                     log_y=bool(input.log_y()), width=float(input.width()), height=float(input.height()),
+                    legend=bool(input.place_key()),
                     title=input.title() or None, ylabel=input.ylabel() or None)
         pname = input.palette_name()
         chose_theme = False
@@ -424,6 +433,27 @@ def server(input, output, session):
     @render.download(filename=lambda: "violin.pdf")
     def dl_pdf():
         yield _fig_bytes("pdf")
+
+    @render.text
+    def key_text():
+        fig = _make_fig(analysis())               # the key of the figure as it is drawn right now
+        try:
+            return legend_key.text_starter(legend_key.from_figure(fig)) or "(no sample colours to key)"
+        finally:
+            plt.close(fig)
+
+    @render.download(filename=lambda: "violin_legend_key.zip")
+    def dl_key():
+        fig = _make_fig(analysis())
+        key = legend_key.from_figure(fig)
+        plt.close(fig)
+        tmp = tempfile.mkdtemp()
+        paths = legend_key.write_key_files(key, os.path.join(tmp, "violin"), ["png", "svg", "pdf"])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for fp in paths:
+                z.write(fp, os.path.basename(fp))
+        yield buf.getvalue()
 
     @render.download(filename=lambda: "summary_by_group.csv")
     def dl_sumg():
