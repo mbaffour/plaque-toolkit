@@ -125,6 +125,38 @@ mm values require the dish diameter (`-p`, e.g. `100`). Without it you still get
 
 ---
 
+## Legend key
+
+Every figure that colours its samples, plates or phages comes with a **legend key**: a small
+image listing each one with the exact colour, marker and fill it has in the figure, in the
+figure's font, plus a **legend text starter** to paste into your figure legend, e.g.
+
+> WT (gold, filled violin with black outline); 2-4 (sky blue, filled violin with black outline); plate1 (blue, filled circles with black outline).
+
+Format: `NAME (colour, marker or line); NAME (...); ...` — plain colour names, *filled*/*open*
+markers, the outline colour when it differs. Edit it freely; it is a starting point.
+
+* **Desktop app, Analyze tab:** beside **Save figure…** — **Legend key…** (saves the key in the
+  figure's format: PNG, SVG, PDF, TIFF or EPS), **Place key on figure** (draws the same key just
+  outside the plot's top-right corner), and the read-only **Legend text starter** line with
+  **Copy**. The key always follows the figure on screen: rename a sample or change the palette
+  and re-Analyze, and the key and the sentence change with it. **Export everything (ZIP)**
+  includes `violin_<metric>_legend_key.(png|svg|pdf|tiff)` and `violin_<metric>_legend_text.txt`.
+* **Compare turbidity:** each colour histogram is saved with `hist_<metric>_legend_key.png` and
+  `hist_<metric>_legend_text.txt` beside it; the tab shows the text starter with **Copy**.
+* **Plaque Stats (CLI and web app):** the CLI writes `<figure>_legend_key.<fmt>` and
+  `<figure>_legend_text.txt` beside every violin/grouped figure (`--no-legend-key` to skip,
+  `--no-legend` to keep the key off the figure); the web app has a *Legend key* download,
+  *Place key on figure* and the text starter with *Copy*.
+* **`make_figure.py`:** `--legend-key` writes `<out>_legend_key.(png|pdf|svg)` +
+  `<out>_legend_text.txt`; `--key-on-figure` draws it on the figure.
+
+SVG and PDF keys keep the names as real text (editable in Illustrator/Inkscape). Figures
+that colour no sample or group (annotated plates, Fiji-agreement plots, box plots, tables)
+have no key — see the 1.2.0 entry in [CHANGELOG.md](CHANGELOG.md) for the full list.
+
+---
+
 ## Citation
 
 If you use this for published work, cite the underlying validated tool, and describe any

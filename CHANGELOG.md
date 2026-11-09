@@ -9,6 +9,42 @@ the conditions. A release with no such heading changed no number.
 
 ---
 
+## 1.2.0 — unreleased: legend key (branch `claude/legend-key`, on top of the 2026-10 audit)
+
+Every figure that colours its samples, plates or phages now ships a **legend key**: a
+stand-alone key image (same formats as the figure; names stay text in SVG/PDF), a
+**legend text starter** sentence, and a **Place key on figure** switch. See README →
+"Legend key". **No measurement or statistic changes**: this release touches figure export
+and annotation only. `plaque_stats` (the statistics engine) goes to 1.1.0.
+
+* One helper, `plaque_stats/legend_key.py`, draws the stand-alone key, the on-figure key
+  and the text starter. Each figure builds its key from the same colour dict it is drawn
+  from and carries it (`fig.legend_key`), so callers never hold a copy.
+* Figure changes (appearance only): the violin SuperPlot's in-plot legend is now the key,
+  so when the violins are coloured by sample (or there are no plates and the points carry
+  the sample colour) the samples are listed too; with grey violins and plates (the default)
+  it is the same plate legend as before. In the Analyze tab the old "legend" checkbox is now
+  "Place key on figure", beside Save figure. The grouped plot's key matches its marks when
+  there are no replicates (translucent points, no outline).
+
+### Every figure, and whether it has a key
+
+| Figure | Where it is made | Encodes samples/groups? | Key |
+|---|---|---|---|
+| Violin SuperPlot | `plaque_stats.plot_violin` — Analyze tab (screen, Save figure, ZIP), Plaque Stats CLI, Plaque Stats web app (`plaque_stats/app_py.py`) | samples (violin / point colour), plates (plate-mean colour) | **yes** — button, text box, switch; files in every bundle |
+| Grouped control-comparison plot | `plaque_stats.plot_grouped` — same three places | 2nd-factor values (colour), control marked | **yes** |
+| Sample violin figure | `make_figure.py` | samples (violin colour) | **yes** — `--legend-key`, `--key-on-figure` |
+| Overlaid histograms `hist_<metric>.png` | `plaque_turbidity.write_plots` — CLI batch and Compare turbidity tab | phages (bar colour) | **yes** — always written in the batch output; text starter in the tab |
+| Box plots `compare_<metric>.png` | `plaque_turbidity.write_plots` | no — one style, the phage is the x label | none needed |
+| Sensitive-mode violin | `plot_sensitive_violin.py` | no — every violin the same blue, samples are x labels | none needed |
+| Stats / pairwise table images | `plaque_stats.save_stats_table`, `save_pairwise_table` | no — tables | none needed |
+| Fiji agreement (method comparison + Bland–Altman) | `app/agreement.py` (Fiji agreement tab), `plaque_stats/agreement/agreement.py` (CLI + web app) | no samples — point/line classes (within/outside limits, bias, ±1.96 SD) already have their own in-figure key | none needed |
+| Annotated plates, side-by-side comparison | `plaque_gui.annotate_plaques` / `save_figure` / `save_comparison`, editor export, `plaque_size_tool` `out_*` images, web app (`webapp/app.py`) download, Precise overlays, dish-check JPEGs | no samples — outline colour marks auto vs manual detection on a single plate | none needed |
+| Editor canvases | `plaque_gui` editor, `app/canvas_editor.py`, `app/plaque_canvas.py` | interactive, not exported figures | none needed |
+| R Shiny app violin | `plaque_stats/app.R` (ggplot2) | samples, plates | **not wired** in this release (R, outside the Python helper) |
+
+---
+
 ## Unreleased — the 2026-10 audit (branch `claude/audit-2026-10`)
 
 A second audit, this time of the desktop app, the statistics packages, the Precise/ML
