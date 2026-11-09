@@ -57,7 +57,12 @@ matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.font
 import scipy
 from scipy import stats as st
 
-__version__ = "1.0.0"
+try:                                    # flat: python plaque_stats.py, the wheel, the Shiny app
+    import legend_key as _lk
+except ImportError:                     # imported as plaque_stats.plaque_stats (desktop app, repo root)
+    from . import legend_key as _lk
+
+__version__ = "1.1.0"
 
 # Okabe–Ito colour-blind-safe qualitative palette (the publication default, for the group violins)
 OKABE_ITO = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9",
@@ -91,6 +96,7 @@ DEFAULTS = {
     "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
     "show_n": True, "show_value": True, "center": "mean", "error": "auto", "frame": False,
     "stats_table": True,
+    "legend_key": True,            # write <figure>_legend_key.<fmt> + <figure>_legend_text.txt
 }
 
 # named colour themes for --palette (or pass your own comma-separated hex list)
@@ -480,30 +486,27 @@ def plot_violin(df, order, opts, metric_name, posthoc):
                          "font.size": 12, "font.family": "sans-serif", "axes.linewidth": 0.9})
     rng = np.random.default_rng(opts["seed"])
     fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
-    gpal = opts["palette"]
     rm = replicate_means(df)
-    reps = sorted(df["replicate"].dropna().unique().tolist()) if rm is not None else []
-    rcol = {r: REP_PALETTE[i % len(REP_PALETTE)] for i, r in enumerate(reps)}
+    # the colour mapping this figure is drawn from -- and its legend key is built from
+    gcol, rcol, neutral, reps = violin_colours(df, order, opts, rm)
 
     data = [df.loc[df["group"] == g, "value"].values for g in order]
     pos = np.arange(1, len(order) + 1)
 
-    vfill = opts.get("violin_fill", "auto")
-    neutral = (vfill == "neutral") or (vfill == "auto" and rm is not None)  # grey when points carry plate colour
     afac = float(opts.get("violin_alpha", 0.55)) / 0.55   # 0.55 (default) keeps the tuned look; scales from there
     parts = ax.violinplot(data, positions=pos, showextrema=False, widths=0.80)
     for i, b in enumerate(parts["bodies"]):
         if neutral:
             b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74"); b.set_alpha(min(1.0, 0.38 * afac))
         else:
-            c = gpal[i % len(gpal)]
+            c = gcol[order[i]]
             b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(min(1.0, 0.22 * afac))
         b.set_linewidth(0.9)
         verts = b.get_paths()[0].vertices                 # trim the violin to the data range
         verts[:, 1] = np.clip(verts[:, 1], float(np.min(data[i])), float(np.max(data[i])))
 
     for i, g in enumerate(order):
-        v = data[i]; x0 = pos[i]; c = gpal[i % len(gpal)]
+        v = data[i]; x0 = pos[i]; c = gcol[g]
         sub = df[df["group"] == g]
         if rm is not None:                                # ---------- Violin SuperPlot ----------
             if opts["show_points"]:
@@ -551,12 +554,10 @@ def plot_violin(df, order, opts, metric_name, posthoc):
         ax.set_yscale("log")
     _style_axes(ax, opts)
 
-    if rm is not None and opts.get("legend", True) and reps:
-        from matplotlib.lines import Line2D
-        handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=rcol[r],
-                          markeredgecolor="#12211d", markersize=7, label=str(r)) for r in reps]
-        ax.legend(handles=handles, title="plate", frameon=False, fontsize=9, title_fontsize=9,
-                  loc="upper left", bbox_to_anchor=(1.005, 1.0), handletextpad=0.3, borderaxespad=0.2)
+    key = _lk.attach(fig, violin_key(order, gcol, rcol, reps, neutral, rm is not None, opts))
+    if opts.get("legend", True):                 # "Place key on figure": the SAME key, outside right
+        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), handletextpad=0.3,
+                  borderaxespad=0.2)
 
     pairs = _pairs_to_annotate(order, posthoc, opts["annotate"])
     if pairs:
@@ -585,6 +586,46 @@ def plot_violin(df, order, opts, metric_name, posthoc):
 
     fig.tight_layout()
     return fig
+
+
+def violin_colours(df, order, opts, rm=None):
+    """The single colour mapping of the violin SuperPlot: (sample -> colour, plate -> colour,
+    neutral violins?, plates). plot_violin draws from it and violin_key builds the key from it."""
+    if rm is None:
+        rm = replicate_means(df)
+    gpal = opts["palette"]
+    gcol = {g: gpal[i % len(gpal)] for i, g in enumerate(order)}
+    reps = sorted(df["replicate"].dropna().unique().tolist()) if rm is not None else []
+    rcol = {r: REP_PALETTE[i % len(REP_PALETTE)] for i, r in enumerate(reps)}
+    vfill = opts.get("violin_fill", "auto")
+    neutral = (vfill == "neutral") or (vfill == "auto" and rm is not None)  # grey when points carry plate colour
+    return gcol, rcol, neutral, reps
+
+
+def violin_key(order, gcol, rcol, reps, neutral, have_rep, opts):
+    """Legend key of the violin SuperPlot, from the same dicts the figure was drawn with.
+    Samples are listed when colour encodes them (coloured violins, or coloured points without
+    replicates); plates when the plate colour encodes the plate means."""
+    afac = float(opts.get("violin_alpha", 0.55)) / 0.55
+    entries = []
+    pts_by_group = (not have_rep) and opts.get("show_points", True)
+    if not neutral or pts_by_group:
+        for g in order:
+            c = gcol[g]
+            em = (dict(marker="o", colour=c, edge="none", alpha=0.42, size=5.0)
+                  if pts_by_group else None)
+            if not neutral:
+                entries.append(_lk.entry(g, c, kind="patch", edge=_darken(c),
+                                         alpha=min(1.0, 0.22 * afac), linewidth=0.9,
+                                         shape="violin", section="sample", extra_marker=em))
+            else:
+                entries.append(_lk.entry(g, c, kind="marker", marker="o", edge="none", alpha=0.42,
+                                         size=5.0, section="sample"))
+    if have_rep:
+        for r in reps:
+            entries.append(_lk.entry(r, rcol[r], kind="marker", marker="o", edge="#12211d",
+                                     size=7, section="plate"))
+    return _lk.make_key(entries, fontsize=9, frameon=False)
 
 
 def _pairs_to_annotate(order, posthoc, mode):
@@ -1010,15 +1051,26 @@ def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     if opts.get("log_y"):
         ax.set_yscale("log")
     _style_axes(ax, opts)
-    if opts.get("legend", True):
-        from matplotlib.lines import Line2D
-        handles = [Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=scol[s],
-                          markeredgecolor="#12211d", markersize=8,
-                          label=("%s (control)" % s if s == control else s)) for s in sub_order]
-        ax.legend(handles=handles, title=opts.get("_sublabel", "subgroup"), frameon=True, fontsize=9,
-                  title_fontsize=9, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+    # legend key from the SAME subgroup -> colour dict the marks were drawn with
+    key = _lk.attach(fig, grouped_key(sub_order, control, scol, pm is not None,
+                                      opts.get("_sublabel", "subgroup")))
+    if opts.get("legend", True):                 # "Place key on figure"
+        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0))
     fig.tight_layout()
     return fig
+
+
+def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup"):
+    """Legend key of the grouped plot: one entry per subgroup, styled as its marks are drawn
+    (plate means: filled circles with a dark outline; no replicates: plain translucent points)."""
+    entries = []
+    for s in sub_order:
+        lab = "%s (control)" % s if s == control else s
+        if have_rep:
+            entries.append(_lk.entry(lab, scol[s], marker="o", edge="#12211d", size=8))
+        else:
+            entries.append(_lk.entry(lab, scol[s], marker="o", edge="none", alpha=0.40, size=6))
+    return _lk.make_key(entries, title=sublabel, fontsize=9, frameon=True)
 
 
 def _write_grouped_report(path, metric, summ, comp, unit, control, args):
@@ -1069,6 +1121,8 @@ def run_grouped(args):
         if fmt in ("tif", "tiff"):
             kw["pil_kwargs"] = {"compression": "tiff_lzw"}
         fig.savefig("%s.%s" % (base, fmt), **kw)
+    if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
+        _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     plt.close(fig)
 
     _write_grouped_report(os.path.join(out, "grouped_report_%s.md" % mt),
@@ -1123,6 +1177,8 @@ def run(args):
         if fmt in ("tif", "tiff"):
             kw["pil_kwargs"] = {"compression": "tiff_lzw"}
         fig.savefig(f"{base}.{fmt}", **kw)
+    if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
+        _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     plt.close(fig)
 
     write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
@@ -1181,6 +1237,13 @@ def build_args():
     p.add_argument("--frame", dest="frame", action="store_true", help="box the plot (all 4 spines)")
     p.add_argument("--no-stats-table", dest="stats_table", action="store_false",
                    help="skip the descriptive-stats table PNG")
+    p.add_argument("--legend-key", dest="legend_key", action="store_true", default=None,
+                   help="write <figure>_legend_key.<fmt> + <figure>_legend_text.txt beside the "
+                        "figure (the default)")
+    p.add_argument("--no-legend-key", dest="legend_key", action="store_false",
+                   help="do not write the legend key files")
+    p.add_argument("--no-legend", dest="legend", action="store_false", default=None,
+                   help="do not place the key on the figure itself")
     return p
 
 

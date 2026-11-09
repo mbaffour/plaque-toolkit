@@ -97,7 +97,7 @@ hiddenimports += _maybe([
     # shiny markdown / linkify dependency chain
     "linkify_it", "uc_micro", "markdown_it",
     # our own app modules (also forced via freeze_entry, listed here for belt-and-braces)
-    "app_py", "plaque_stats", "plaque_stats_launch",
+    "app_py", "plaque_stats", "legend_key", "plaque_stats_launch",
     "shiny", "shiny._main",
     # data / stats / io engine
     "openpyxl", "pandas", "scipy", "scipy.stats",

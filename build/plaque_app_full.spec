@@ -63,7 +63,7 @@ hiddenimports += [
     "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
     "app.agreement", "app.study_tab",
     # the standalone stats engine, reused in-process by the Analyze tab
-    "plaque_stats", "plaque_stats.plaque_stats",
+    "plaque_stats", "plaque_stats.plaque_stats", "plaque_stats.legend_key",
     # the in-process Precise package
     "precise", "precise.pipeline", "precise.combine", "precise.pst_front",
     "_plaqseg", "_plaqseg.run_plaqseg",

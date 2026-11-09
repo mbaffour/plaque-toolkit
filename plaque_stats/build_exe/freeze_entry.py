@@ -14,6 +14,7 @@ matplotlib.use("Agg")
 
 # --- explicit imports so PyInstaller bundles the whole app + engine ---
 import plaque_stats          # noqa: F401  shared stats/plot engine (same code as the CLI)
+import legend_key            # noqa: F401  legend key (key image + text starter) for every figure
 import app_py                # noqa: F401  Shiny UI + server; defines app_py.app
 import plaque_stats_launch   # the launcher: local server + browser
 

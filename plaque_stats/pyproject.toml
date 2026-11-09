@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plaque-stats"
-version = "1.0.0"
+version = "1.1.0"
 description = "Publication-ready violin plots + statistics for grouped plaque measurements (CLI + Shiny web app)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -44,11 +44,11 @@ plaque-stats = "plaque_stats:main"
 plaque-stats-app = "plaque_stats_launch:main"
 
 # ---------------------------------------------------------------------------
-# FLAT layout: the three top-level modules are shipped as-is. No package dir,
+# FLAT layout: the four top-level modules are shipped as-is. No package dir,
 # no rename, no move — so every existing invocation keeps working.
 # ---------------------------------------------------------------------------
 [tool.setuptools]
-py-modules = ["plaque_stats", "app_py", "plaque_stats_launch"]
+py-modules = ["plaque_stats", "legend_key", "app_py", "plaque_stats_launch"]
 include-package-data = true
 
 # Ship the data files inside the wheel. With a flat py-modules layout there is
