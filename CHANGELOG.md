@@ -26,6 +26,11 @@ and annotation only. `plaque_stats` (the statistics engine) goes to 1.1.0.
   it is the same plate legend as before. In the Analyze tab the old "legend" checkbox is now
   "Place key on figure", beside Save figure. The grouped plot's key matches its marks when
   there are no replicates (translucent points, no outline).
+* R Shiny app (`plaque_stats/app.R`): the key replaces ggplot's plate legend (placed beside
+  the plot by "Place key on figure"). Fixed on the way: with violins coloured by sample AND
+  plates, the plate fill scale silently replaced the sample colours of the violins (two
+  `scale_fill_manual` calls); each violin is now drawn in its own mapped colour, and more
+  than nine plates recycle the plate palette instead of erroring.
 
 ### Every figure, and whether it has a key
 
@@ -41,7 +46,7 @@ and annotation only. `plaque_stats` (the statistics engine) goes to 1.1.0.
 | Fiji agreement (method comparison + Bland–Altman) | `app/agreement.py` (Fiji agreement tab), `plaque_stats/agreement/agreement.py` (CLI + web app) | no samples — point/line classes (within/outside limits, bias, ±1.96 SD) already have their own in-figure key | none needed |
 | Annotated plates, side-by-side comparison | `plaque_gui.annotate_plaques` / `save_figure` / `save_comparison`, editor export, `plaque_size_tool` `out_*` images, web app (`webapp/app.py`) download, Precise overlays, dish-check JPEGs | no samples — outline colour marks auto vs manual detection on a single plate | none needed |
 | Editor canvases | `plaque_gui` editor, `app/canvas_editor.py`, `app/plaque_canvas.py` | interactive, not exported figures | none needed |
-| R Shiny app violin | `plaque_stats/app.R` (ggplot2) | samples, plates | **not wired** in this release (R, outside the Python helper) |
+| R Shiny app violin | `plaque_stats/app.R` (ggplot2) | samples (violin colour), plates (plate-mean colour) | **yes** — the R twin of the helper inside `app.R` (`style_map` → `key_entries` → `key_plot` / `text_starter`); Legend key download (ZIP of PNG/SVG/PDF + text), text starter with Copy, Place key on figure |
 
 ---
 

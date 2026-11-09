@@ -53,6 +53,125 @@ summary_fun <- function(center, error) {
   }
 }
 
+# ---------------------------------------------------------------------------------------------
+# Legend key (the owner's rule: every figure ships one). The R twin of plaque_stats/legend_key.py:
+# style_map() is THE colour mapping -- the violin is drawn from it and the key is built from it.
+# key_entries() -> key_plot() (stand-alone key AND the key placed on the figure: same ggplot)
+# and text_starter() (the paste-ready sentence). Same wording rules as the Python helper.
+# ---------------------------------------------------------------------------------------------
+KEY_COLOUR_NAMES <- c(
+  "black" = "#000000", "dark grey" = "#595959", "grey" = "#808080", "light grey" = "#BFBFBF",
+  "white" = "#FFFFFF", "red" = "#E41A1C", "dark red" = "#8B0000", "orange" = "#FF7F00",
+  "yellow" = "#FFD700", "green" = "#4DAF4A", "dark green" = "#006400", "teal" = "#008080",
+  "cyan" = "#00BFFF", "blue" = "#377EB8", "dark blue" = "#00008B", "navy" = "#000080",
+  "purple" = "#984EA3", "magenta" = "#FF00FF", "pink" = "#F781BF", "brown" = "#A65628",
+  "olive" = "#808000", "gold" = "#DAA520", "sky blue" = "#56B4E9", "vermillion" = "#D55E00",
+  "bluish green" = "#009E73", "reddish purple" = "#CC79A7", "yellow-green" = "#9ACD32")
+
+hex_to_lab <- function(hex) grDevices::convertColor(t(grDevices::col2rgb(hex)) / 255,
+                                                    from = "sRGB", to = "Lab")
+colour_name <- function(hex) {
+  lab <- hex_to_lab(hex); ref <- hex_to_lab(KEY_COLOUR_NAMES)
+  names(KEY_COLOUR_NAMES)[which.min(colSums((t(ref) - as.numeric(lab[1, ]))^2))]
+}
+to_hex <- function(col) toupper(grDevices::rgb(t(grDevices::col2rgb(col)), maxColorValue = 255))
+
+# the ONE mapping of the violin: sample -> colour, plate -> colour, grey violins?
+style_map <- function(d, palette, vfill, chose_theme, superplot) {
+  levs <- levels(d$group)
+  gcol <- setNames(rep(palette, length.out = length(levs)), levs)
+  reps <- if (superplot) sort(unique(d$replicate[!is.na(d$replicate)])) else character(0)
+  rcol <- setNames(rep(REP_PALETTE, length.out = length(reps)), reps)
+  group_fill <- identical(vfill, "group") || (chose_theme && identical(vfill, "auto"))
+  neutral <- identical(vfill, "neutral") || (!group_fill && superplot)
+  list(gcol = gcol, rcol = rcol, neutral = neutral, superplot = superplot)
+}
+
+# one row per keyed sample/plate, styled as drawn: coloured violins (alpha .25, no outline);
+# plate means are filled circles (pch 21) with the dark #12211d outline
+key_entries <- function(sm) {
+  rows <- list()
+  if (!sm$neutral)
+    for (g in names(sm$gcol))
+      rows[[length(rows) + 1]] <- data.frame(label = g, section = "sample", kind = "patch",
+        colour = to_hex(sm$gcol[[g]]), edge = NA_character_, alpha = 0.25, shape = NA_integer_,
+        stringsAsFactors = FALSE)
+  if (sm$superplot)
+    for (r in names(sm$rcol))
+      rows[[length(rows) + 1]] <- data.frame(label = r, section = "plate", kind = "marker",
+        colour = to_hex(sm$rcol[[r]]), edge = "#12211D", alpha = 1, shape = 21L,
+        stringsAsFactors = FALSE)
+  if (!length(rows)) return(data.frame(label = character(0), section = character(0),
+                                       kind = character(0), colour = character(0),
+                                       edge = character(0), alpha = numeric(0),
+                                       shape = integer(0), stringsAsFactors = FALSE))
+  do.call(rbind, rows)
+}
+
+text_starter <- function(e) {
+  if (!nrow(e)) return("")
+  words <- vapply(e$colour, colour_name, "")
+  for (w in unique(words)) {                 # same word, different colours -> light/dark
+    idx <- which(words == w); hx <- unique(e$colour[idx])
+    if (length(hx) < 2) next
+    L <- hex_to_lab(hx)[, 1]; ranked <- hx[order(L)]
+    shade <- setNames(ifelse(seq_along(ranked) == 1, paste("dark", w),
+                      ifelse(seq_along(ranked) == length(ranked), paste("light", w),
+                             paste("medium", w))), ranked)
+    words[idx] <- shade[e$colour[idx]]
+  }
+  desc <- vapply(seq_len(nrow(e)), function(i) {
+    if (e$kind[i] == "patch") return(paste0(words[i], ", filled violin"))
+    out <- paste0(words[i], ", filled circles")
+    if (!is.na(e$edge[i]) && e$edge[i] != e$colour[i] && !grepl(colour_name(e$edge[i]), words[i], fixed = TRUE))
+      out <- paste0(out, " with ", colour_name(e$edge[i]), " outline")
+    out
+  }, "")
+  paste0(paste0(e$label, " (", desc, ")", collapse = "; "), ".")
+}
+
+# the key as a ggplot: section headers in bold when samples AND plates are keyed, the figure's
+# font (theme_classic base_size) -- used stand-alone and placed beside the figure alike
+key_plot <- function(e, base_size = 14) {
+  secs <- unique(e$section)
+  rows <- if (length(secs) > 1)
+    do.call(rbind, lapply(secs, function(s) rbind(
+      data.frame(label = s, section = s, kind = "header", colour = NA, edge = NA, alpha = NA,
+                 shape = NA, stringsAsFactors = FALSE), e[e$section == s, ])))
+  else rbind(data.frame(label = secs, section = secs, kind = "header", colour = NA, edge = NA,
+                        alpha = NA, shape = NA, stringsAsFactors = FALSE), e)
+  rows$y <- rev(seq_len(nrow(rows)))
+  tsize <- base_size * 0.8 / ggplot2::.pt
+  hdr <- rows[rows$kind == "header", ]; pat <- rows[rows$kind == "patch", ]
+  mk <- rows[rows$kind == "marker", ]; ent <- rows[rows$kind != "header", ]
+  p <- ggplot() +
+    geom_text(data = hdr, aes(x = 0.05, y = y, label = label), hjust = 0, fontface = "bold",
+              size = tsize) +
+    geom_text(data = ent, aes(x = 0.45, y = y, label = label), hjust = 0, size = tsize)
+  if (nrow(pat)) p <- p + geom_tile(data = pat, aes(x = 0.22, y = y), width = 0.3, height = 0.55,
+                                    fill = pat$colour, alpha = pat$alpha, colour = NA)
+  if (nrow(mk)) p <- p + geom_point(data = mk, aes(x = 0.22, y = y), shape = 21, size = 4.2,
+                                    stroke = 0.9, fill = mk$colour, colour = mk$edge)
+  # x is in inches of the saved key (key_size), so the names never clip
+  p + scale_x_continuous(limits = c(0, key_size(e, base_size)[["width"]]), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0.4, nrow(rows) + 0.6)) +
+    theme_void(base_size = base_size) + theme(plot.background = element_rect(fill = "white", colour = NA))
+}
+write_key_files <- function(e, base, dpi = 300) {
+  sz <- key_size(e); kp <- key_plot(e)
+  out <- c(png = paste0(base, "_legend_key.png"), svg = paste0(base, "_legend_key.svg"),
+           pdf = paste0(base, "_legend_key.pdf"), txt = paste0(base, "_legend_text.txt"))
+  ggsave(out[["png"]], kp, width = sz[["width"]], height = sz[["height"]], dpi = dpi)
+  ggsave(out[["svg"]], kp, width = sz[["width"]], height = sz[["height"]], device = svglite::svglite)
+  ggsave(out[["pdf"]], kp, width = sz[["width"]], height = sz[["height"]], device = "pdf")
+  writeLines(text_starter(e), out[["txt"]])
+  unname(out)
+}
+key_size <- function(e, base_size = 14) {
+  n <- nrow(e) + length(unique(e$section))
+  c(width = 0.6 + 0.105 * max(nchar(c(e$label, e$section))) * base_size / 14, height = 0.25 + 0.24 * n)
+}
+
 format_help <- function() {
   HTML(paste0(
     "<h4>Input data format (one row per plaque)</h4>",
@@ -114,7 +233,12 @@ ui <- fluidPage(
           plotOutput("violin", height = "560px"),
           br(),
           downloadButton("dl_png", "PNG"), downloadButton("dl_svg", "SVG (editable)"),
-          downloadButton("dl_pdf", "PDF (editable)")),
+          downloadButton("dl_pdf", "PDF (editable)"),
+          downloadButton("dl_key", "Legend key (PNG + SVG + PDF)"),
+          checkboxInput("place_key", "Place key on figure", TRUE),
+          h5("Legend text starter"), verbatimTextOutput("key_text"),
+          tags$button("Copy", class = "btn btn-sm btn-default",
+                      onclick = "navigator.clipboard.writeText(document.getElementById('key_text').innerText)")),
         tabPanel("Statistics",
           br(), h4("Omnibus test"), verbatimTextOutput("omni"),
           h4("Pairwise (adjusted)"), DTOutput("pairwise"),
@@ -275,24 +399,33 @@ server <- function(input, output, session) {
     if (length(p)) p else OKABE_ITO
   })
 
-  build_plot <- reactive({
+  # THE colour mapping of the figure (and of its legend key)
+  style <- reactive({
     d <- dat(); req(nrow(d) > 0)
-    gpal <- rep(palette_vec(), length.out = nlevels(d$group))
-    superplot <- isTRUE(has_rep())      # Violin SuperPlot when we have >=2 plates per group
     chose_theme <- (!is.null(input$palette_name) && input$palette_name != "" &&
                     !is.null(PALETTES[[input$palette_name]])) || nzchar(trimws(input$palette))
     # colour the violins by group when the user asks for group fill, OR picks a colour theme
     # (otherwise the theme silently does nothing under the neutral grey SuperPlot default);
     # otherwise keep the grey SuperPlot violin so the plate colours carry the hue.
-    group_fill <- identical(input$vfill, "group") || (chose_theme && identical(input$vfill, "auto"))
-    neutral_violin <- identical(input$vfill, "neutral") || (!group_fill && superplot)
+    style_map(d, palette_vec(), input$vfill, chose_theme, isTRUE(has_rep()))
+  })
+  key <- reactive(key_entries(style()))
+
+  build_main <- reactive({
+    d <- dat(); req(nrow(d) > 0)
+    sm <- style()
+    gpal <- unname(sm$gcol)
+    superplot <- sm$superplot           # Violin SuperPlot when we have >=2 plates per group
+    neutral_violin <- sm$neutral
     g <- ggplot(d, aes(group, value))
     if (neutral_violin) {
       g <- g + geom_violin(fill = "#b9c2bd", color = "#6f7b74", alpha = 0.38,
                            width = 0.85, trim = TRUE, linewidth = 0.5)
     } else {
-      g <- g + geom_violin(aes(fill = group), color = NA, alpha = 0.25, width = 0.85, trim = TRUE) +
-        scale_fill_manual(values = gpal, guide = "none")
+      # one layer per sample in its mapped colour: the plate means below own the fill scale
+      for (lv in levels(d$group))
+        g <- g + geom_violin(data = d[d$group == lv, ], fill = sm$gcol[[lv]], color = NA,
+                             alpha = 0.25, width = 0.85, trim = TRUE)
     }
     if (input$show_points) {
       if (superplot)
@@ -311,8 +444,8 @@ server <- function(input, output, session) {
                      width = 0.34, linewidth = 0.7, color = "#12211d", fatten = 0) +
         geom_point(data = rm, aes(group, value, fill = replicate), shape = 21,
                    size = 4.2, color = "#12211d", stroke = 0.9) +
-        scale_fill_manual(values = REP_PALETTE, name = "plate") +
-        scale_color_manual(values = REP_PALETTE, name = "plate")
+        scale_fill_manual(values = sm$rcol, name = "plate", guide = "none") +
+        scale_color_manual(values = sm$rcol, name = "plate", guide = "none")
     } else {
       # no replicates: a THIN, unfilled box (median + IQR) — lines only, not a filled rectangle
       g <- g + geom_boxplot(width = 0.12, outlier.shape = NA, fill = NA,
@@ -325,7 +458,7 @@ server <- function(input, output, session) {
       theme_classic(base_size = 14) +
       theme(plot.title = element_text(face = "bold"),
             axis.text.x = element_text(face = "bold"), axis.title = element_text(face = "bold"),
-            legend.position = if (superplot) "right" else "none",
+            legend.position = "none",       # the legend key (below) replaces ggplot's legend
             plot.margin = margin(t = 16, r = 12, b = 6, l = 6),
             panel.border = if (isTRUE(input$frame))
               element_rect(fill = NA, color = "#33413c", linewidth = 0.7) else element_blank(),
@@ -357,7 +490,19 @@ server <- function(input, output, session) {
     g
   })
 
+  # the figure: the main plot, plus the legend key beside it when "Place key on figure" is on --
+  # the very same key_plot() the "Legend key" download saves
+  build_plot <- reactive({
+    g <- build_main(); e <- key()
+    if (!isTRUE(input$place_key) || !nrow(e)) return(g)
+    ks <- key_size(e); kw <- ks[["width"]]; kh <- ks[["height"]]
+    side <- ggpubr::ggarrange(key_plot(e), NULL, ncol = 1,      # key at its own size, top-right
+                              heights = c(kh, max(0.1, input$height - kh)))
+    ggpubr::ggarrange(g, side, widths = c(max(1, input$width - kw), kw))
+  })
+
   output$violin <- renderPlot({ build_plot() }, res = 96)
+  output$key_text <- renderText({ s <- text_starter(key()); if (nzchar(s)) s else "(no sample colours to key)" })
 
   summ_group <- reactive({
     d <- dat()
@@ -425,6 +570,15 @@ server <- function(input, output, session) {
   output$dl_png <- dl("png", "png")
   output$dl_svg <- dl("svg", svglite::svglite)
   output$dl_pdf <- dl("pdf", "pdf")
+  output$dl_key <- downloadHandler(
+    filename = function() sprintf("violin_%s_legend_key.zip", metric_name()),
+    content = function(f) {
+      e <- key(); req(nrow(e) > 0)
+      tmp <- tempfile("key"); dir.create(tmp)
+      base <- file.path(tmp, sprintf("violin_%s", metric_name()))
+      files <- write_key_files(e, base, input$dpi)
+      utils::zip(f, files, flags = "-j")
+    })
   output$dl_sumg <- downloadHandler("summary_by_group.csv",
     content = function(f) write_csv(summ_group(), f))
   output$dl_sumr <- downloadHandler("summary_by_replicate.csv",

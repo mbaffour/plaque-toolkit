@@ -319,3 +319,43 @@ def test_analyze_tab_key_follows_renames(qtbot, tmp_path):
     assert "mut ΔX (" in st.key_text.text() and "mut (" not in st.key_text.text()
     path = st._save_key(str(tmp_path / "k2.svg"))
     assert "mut ΔX" in _texts(path)
+
+
+# --------------------------------------------------------------------------- R Shiny app
+def test_r_shiny_app_key(tmp_path):
+    """plaque_stats/app.R: the key comes from the same style map the violins and plate means are
+    drawn from, follows a rename + recolour, and the vector key keeps the names as text."""
+    import shutil
+    rscript = shutil.which("Rscript")
+    if not rscript:
+        pytest.skip("R not installed")
+    pkgs = 'c("shiny","ggplot2","dplyr","tidyr","readr","DT","rstatix","ggpubr","svglite")'
+    ok = subprocess.run([rscript, "-e", "q(status = !all(sapply(%s, requireNamespace, "
+                         "quietly = TRUE)))" % pkgs], capture_output=True)
+    if ok.returncode != 0:
+        pytest.skip("the R app's packages are not installed")
+    r = subprocess.run([rscript, os.path.join(ROOT, "tests", "r_legend_key_check.R")],
+                       cwd=os.path.join(ROOT, "plaque_stats"), capture_output=True, text=True,
+                       env=dict(os.environ, OUT_DIR=str(tmp_path)), timeout=300)
+    assert r.returncode == 0, r.stderr[-2000:]
+    got = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+    key1 = dict(x.split(":") for x in got["KEY1"].split("|"))
+    key2 = dict(x.split(":") for x in got["KEY2"].split("|"))
+    assert list(key1) == ["WT", "T7", "lambda", "plate1", "plate2"]
+    # 1. every keyed colour is a colour the figure actually draws, and vice versa
+    assert set(key1.values()) == set(got["DRAWN1"].split("|"))
+    # 2. rename + recolour reach the key (and the drawing)
+    assert "T7" not in key2 and "T7 mut" in key2 and key2["T7 mut"] == key1["T7"]
+    assert key2["lambda"] == "#D62728" != key1["lambda"]
+    assert set(key2.values()) == set(got["DRAWN2"].split("|"))
+    # 3. text starter: every name once, each with a colour word
+    for name in ("T7 mut (", "WT (", "lambda (", "plate1 (", "plate2 ("):
+        assert got["TEXT2"].count(name) == 1
+    assert "T7 (" not in got["TEXT2"]
+    # 4. "Place key on figure" composes the same key_plot beside the figure; off removes it
+    assert got["PLACED1"] == "TRUE" and got["PLACED2"] == "FALSE"
+    # 5. SVG key keeps the names as text; the text file is the starter
+    svg = "\n".join(_texts(str(tmp_path / "violin_legend_key.svg")))
+    for name in ("WT", "T7", "lambda", "plate1", "plate2"):
+        assert name in svg
+    assert (tmp_path / "violin_legend_text.txt").read_text().strip() == got["TEXT1"].strip()

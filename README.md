@@ -146,7 +146,8 @@ markers, the outline colour when it differs. Edit it freely; it is a starting po
   `hist_<metric>_legend_text.txt` beside it; the tab shows the text starter with **Copy**.
 * **Plaque Stats (CLI and web app):** the CLI writes `<figure>_legend_key.<fmt>` and
   `<figure>_legend_text.txt` beside every violin/grouped figure (`--no-legend-key` to skip,
-  `--no-legend` to keep the key off the figure); the web app has a *Legend key* download,
+  `--no-legend` to keep the key off the figure); the web app (`app_py.py`) and the R Shiny
+  app (`app.R`) each have a *Legend key* download (PNG + SVG + PDF + text, zipped),
   *Place key on figure* and the text starter with *Copy*.
 * **`make_figure.py`:** `--legend-key` writes `<out>_legend_key.(png|pdf|svg)` +
   `<out>_legend_text.txt`; `--key-on-figure` draws it on the figure.
