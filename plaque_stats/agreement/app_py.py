@@ -22,6 +22,42 @@ from shiny import App, ui, render, reactive, req
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import agreement as ag          # the shared engine (same code as the CLI)
+_lk = ag._lk                    # plaque_stats/legend_key.py, loaded by the engine (figure key rule)
+
+# The three figures of the app: (tab label, engine `which`, file base name).
+FIGURES = {"both": ("Both (A + B)", "both", "agreement_both"),
+           "a": ("A · Method comparison", "scatter", "agreement_A_method_comparison"),
+           "b": ("B · Bland–Altman", "bland", "agreement_B_bland_altman")}
+
+
+def make_fig(s, which, unit="mm", label_tool="Plaque Toolkit", label_manual="Fiji / ImageJ",
+             title=None, show_key=True, show_stats=True):
+    """One of the three figures, exactly as previewed and downloaded. ``which`` = both|scatter|bland."""
+    if which == "both":
+        return ag.make_figure(s, unit, label_tool, label_manual, title,
+                              show_key=show_key, show_stats=show_stats)
+    return ag.make_panel(s, which, unit, label_tool, label_manual, title,
+                         show_key=show_key, show_stats=show_stats if which == "scatter" else True)
+
+
+def key_text(fig):
+    """CT-R1 F9: the legend text starter of the figure as drawn now (from its own key)."""
+    key = _lk.from_figure(fig) if _lk is not None else None
+    return _lk.text_starter(key) if key else "(this figure has no key entries)"
+
+
+def key_zip_bytes(fig, base):
+    """CT-R1 F9: the stand-alone legend key of `fig` in the figure's formats (PNG, SVG, PDF) plus
+    the text starter, as one ZIP. Built from the figure's own key, so it always matches it."""
+    key = _lk.from_figure(fig) if _lk is not None else None
+    buf = io.BytesIO()
+    with tempfile.TemporaryDirectory() as tmp:
+        with ag.figure_rc():
+            paths = _lk.write_key_files(key, os.path.join(tmp, base), ["png", "svg", "pdf"]) if key else []
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for fp in paths:
+                z.write(fp, os.path.basename(fp))
+    return buf.getvalue()
 
 LEARN = """
 <div style="max-width:840px;line-height:1.5">
@@ -117,29 +153,28 @@ app_ui = ui.page_sidebar(
         ui.input_text("label_manual", "Reference label", "Fiji / ImageJ"),
         ui.input_text("title", "Figure title", ""),
         ui.hr(),
-        ui.input_checkbox("show_key", "Line / point key (legend)", True),
+        ui.input_checkbox("show_key", "Place key on figure", True),   # CT-R1 F9: the ONE key switch
         ui.input_checkbox("show_stats", "Stats box on Panel A", True),
         width=330,
     ),
     ui.navset_tab(
         ui.nav_panel("Figures",
-                     ui.navset_pill(
-                         ui.nav_panel("Both (A + B)",
-                                      ui.output_plot("fig", height="440px"),
-                                      ui.div(ui.download_button("dl_png", "PNG"),
-                                             ui.download_button("dl_svg", "SVG (editable)"),
-                                             ui.download_button("dl_pdf", "PDF (editable)"))),
-                         ui.nav_panel("A · Method comparison",
-                                      ui.output_plot("fig_a", height="470px"),
-                                      ui.div(ui.download_button("dl_a_png", "PNG"),
-                                             ui.download_button("dl_a_svg", "SVG (editable)"),
-                                             ui.download_button("dl_a_pdf", "PDF (editable)"))),
-                         ui.nav_panel("B · Bland–Altman",
-                                      ui.output_plot("fig_b", height="470px"),
-                                      ui.div(ui.download_button("dl_b_png", "PNG"),
-                                             ui.download_button("dl_b_svg", "SVG (editable)"),
-                                             ui.download_button("dl_b_pdf", "PDF (editable)"))),
-                     )),
+                     ui.navset_pill(*[
+                         ui.nav_panel(FIGURES[k][0],
+                                      ui.output_plot("fig" if k == "both" else "fig_" + k,
+                                                     height="440px" if k == "both" else "470px"),
+                                      ui.div(ui.download_button("dl_png" if k == "both" else "dl_%s_png" % k, "PNG"),
+                                             ui.download_button("dl_svg" if k == "both" else "dl_%s_svg" % k, "SVG (editable)"),
+                                             ui.download_button("dl_pdf" if k == "both" else "dl_%s_pdf" % k, "PDF (editable)"),
+                                             # CT-R1 F9: the figure rule's one-click legend key
+                                             ui.download_button("dl_key_" + k, "Legend key (PNG + SVG + PDF)")),
+                                      ui.h6("Legend text starter", style="margin-top:.6em"),
+                                      ui.output_text_verbatim("key_text_" + k),
+                                      ui.tags.button("Copy", class_="btn btn-sm btn-outline-secondary",
+                                                     onclick="navigator.clipboard.writeText("
+                                                             "document.getElementById('key_text_%s').innerText)" % k))
+                         for k in FIGURES]),
+                     ),
         ui.nav_panel("Statistics",
                      ui.output_data_frame("stats_tbl"),
                      ui.h5("Paste-ready sentence"), ui.output_text_verbatim("sentence"),
@@ -212,15 +247,40 @@ def server(input, output, session):
         s.update(ag.extra_stats(t, m))
         return s
 
+    def _mk(which):
+        return make_fig(stats(), which, _unit(), input.label_tool(), input.label_manual(),
+                        input.title() or None, show_key=input.show_key(), show_stats=input.show_stats())
+
     def _mk_both():
-        return ag.make_figure(stats(), _unit(), input.label_tool(),
-                              input.label_manual(), input.title() or None,
-                              show_key=input.show_key(), show_stats=input.show_stats())
+        return _mk("both")
 
     def _mk_panel(which):
-        return ag.make_panel(stats(), which, _unit(), input.label_tool(),
-                             input.label_manual(), input.title() or None,
-                             show_key=input.show_key(), show_stats=input.show_stats())
+        return _mk(which)
+
+    # CT-R1 F9: legend key download + text starter for each of the three figures, always read
+    # from the figure as it is drawn right now (current labels, columns and switches).
+    def _key_outputs(k):
+        which, base = FIGURES[k][1], FIGURES[k][2]
+
+        def _txt():
+            fig = _mk(which)
+            try:
+                return key_text(fig)
+            finally:
+                plt.close(fig)
+
+        def _dl():
+            fig = _mk(which)
+            try:
+                yield key_zip_bytes(fig, base)
+            finally:
+                plt.close(fig)
+        _txt.__name__, _dl.__name__ = "key_text_" + k, "dl_key_" + k     # output ids
+        render.text(_txt)
+        render.download(filename=lambda: base + "_legend_key.zip")(_dl)
+
+    for _k in FIGURES:
+        _key_outputs(_k)
 
     @render.plot
     def fig():
