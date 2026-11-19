@@ -418,3 +418,35 @@ if (!cairo_pdf_usable()) {
   chk("F4_substituted_font_note", is.character(n1) && grepl("font substituted", n1) && grepl("Georgia", n1), n1)
   chk("F4_default_font_no_note", is.null(n0))
 } else chk("F4_cairo_embeds_any_font", is.null(n1) && is.null(n0))
+
+# ---- F17: the key rows never print on top of each other ------------------------------------------
+many12 <- tidy(tmp("many12.csv", mk(",", groups = paste0("Strain ", sprintf("%02d", 1:12), " long name"), plates = 3, n = 6)))
+m12 <- data.frame(group = as.character(many12$group), replicate = many12$replicate, diameter_mm = many12$value, stringsAsFactors = FALSE)
+testServer(app, {
+  raw(m12); do.call(session$setInputs, modifyList(ui_defaults, list(vfill = "group"))); session$flushReact()
+  e <- key()
+  for (bs in c(10, 14, 24, 40)) {
+    geo <- key_geometry(e, bs); rows <- geo$rows
+    text_in <- bs * 0.8 * 1.2 / 72                       # one text line, in inches
+    ok_pitch <- geo$pitch >= text_in
+    ok_cols <- max(table(rows$col)) <= KEY_ROWS_PER_COL + 1
+    ok_unique <- !anyDuplicated(paste(rows$col, rows$pos))
+    chk(paste0("F17_key_rows_clear_base", bs), ok_pitch && ok_cols && ok_unique,
+        sprintf("pitch %.2f in vs line %.2f in, %d columns, max %d rows", geo$pitch, text_in, max(rows$col), max(table(rows$col))))
+  }
+  kp <- key_place(); chk("F17_12_samples_key_placed_or_said", kp$where %in% c("beside", "below") || (kp$where == "none" && nzchar(kp$note %||% "")), kp$where)
+  session$setInputs(base_size = 40); kp <- key_place()
+  chk("F17_base40_key_never_squeezed", kp$where != "none" || grepl("not placed on the figure", kp$note), kp$where)
+  ok <- !inherits(try(ggplot2::ggplot_build(build_plot()), silent = TRUE), "try-error"); chk("F17_base40_draws", ok)
+  session$setInputs(base_size = 14, height = 12); kp <- key_place()
+  chk("F17_preview_size_follows_figure_size", identical(fig_size()$h, 12))
+})
+raw_ui <- as.character(ui)
+chk("F22_text_boxes_multiline_with_copy", grepl("<textarea[^>]*id=\"sentence\"", raw_ui) && grepl("<textarea[^>]*id=\"key_text\"", raw_ui) &&
+      length(gregexpr("writeText", raw_ui)[[1]]) >= 2)
+chk("F22_tables_scroll_in_own_box", grepl("overflow-x: auto", raw_ui) && isTRUE(dt_opts_probe <- TRUE))
+chk("F5_download_statistics_button", grepl("dl_stats", raw_ui) && grepl("Download statistics \\(CSV\\)", raw_ui))
+chk("F1_variances_select", grepl('id="equal_var"', raw_ui) && grepl("Welch ANOVA", raw_ui))
+chk("F6_annotate_select", grepl('id="annotate"', raw_ui) && grepl("all pairs", raw_ui))
+bat <- readLines(file.path("..", "plaque_stats", "Run R App.bat"), warn = FALSE)
+chk("F24_bat_install_line_has_jsonlite", any(grepl("install.packages", bat) & grepl("jsonlite", bat)))

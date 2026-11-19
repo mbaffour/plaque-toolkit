@@ -54,14 +54,20 @@ def test_fixtures_are_the_cfu_shape():
 
 
 def test_r_shiny_defaults_byte_identical(r_output):
-    """1. With every input at its UI default the figure, the composed figure with the key, the
-    coloured/framed variant and the stand-alone key files are byte-identical to 1.2.0."""
+    """1. With every input at its UI default the violins, error bars and n labels (layer data)
+    and the stand-alone key files of the default view are byte-identical to 1.2.0.
+
+    CT-R1 deliberately changed the default FIGURE's bytes (the SVGs are NOT pinned any more):
+    F6 the centre line is drawn (it had stroke width 0 under ggplot2 4.x), F7 brackets start
+    above the tallest plaque, F23 the jitter is seeded and the n row / stars follow the base
+    size; the colour-by-sample view (F18) draws plates in greys, so its key differs too."""
     if "BYTE_SKIP" in r_output:
         pytest.skip("byte-identity vs 1.2.0 skipped: " + r_output["BYTE_SKIP"])
     assert r_output["BYTE_RENDER"] == "TRUE|TRUE"
-    for name in ("default_key_on", "default_key_off", "coloured_framed", "coloured_nopoints",
-                 "violin_legend_key", "violin_legend_text"):
+    for name in ("layers", "default_legend_key", "default_legend_text"):
         assert r_output["BYTE_" + name] == "identical", name
+    for name in ("default_key_on", "default_key_off"):      # the deliberate changes are real
+        assert r_output["BYTE_" + name] == "differ", name
 
 
 def test_r_shiny_colours_keyed_by_name(r_output):

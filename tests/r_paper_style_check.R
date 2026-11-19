@@ -71,6 +71,11 @@ if (!have_base) {
     '  save <- function(name) { set.seed(1); ggsave(file.path(out, paste0(name, ".svg")), build_plot(),',
     '                             width = 8, height = 5.2, device = svglite::svglite) }',
     '  save("default_key_on")                                   # the UI defaults, key placed',
+    '  write_key_files(key(), file.path(out, "default"), 100)   # CT-R1: the stand-alone key at the defaults',
+    '  lay <- function(g, cls, keep) { b <- ggplot2::ggplot_build(g); for (i in seq_along(g$layers)) if (inherits(g$layers[[i]]$geom, cls)) {',
+    '      x <- b$data[[i]]; if (!is.null(keep)) x <- x[, intersect(keep, names(x)), drop = FALSE]; return(paste(deparse(x), collapse = "")) }; "none" }',
+    '  g0 <- build_main()',
+    '  writeLines(c(lay(g0, "GeomViolin", NULL), lay(g0, "GeomErrorbar", NULL), lay(g0, "GeomText", c("label", "x"))), file.path(out, "layers.txt"))',
     '  session$setInputs(place_key = FALSE); save("default_key_off")',
     '  session$setInputs(place_key = TRUE, vfill = "group", frame = TRUE); save("coloured_framed")',
     '  session$setInputs(frame = FALSE, show_sig = TRUE, show_points = FALSE); save("coloured_nopoints")',
@@ -89,7 +94,13 @@ if (!have_base) {
   ok_old <- render_with(base_app, old_dir)
   ok_new <- render_with(normalizePath("app.R"), new_dir)
   emit("BYTE_RENDER", c(old = ok_old, new = ok_new))
-  for (f in c("default_key_on.svg", "default_key_off.svg", "coloured_framed.svg",
+  # CT-R1 deliberately changes the FIGURE bytes of the default view (F6 visible centre line,
+  # F7 brackets above the data, F23 seeded jitter and base-size text, F16 white key block) and
+  # of the colour-by-sample key (F18 plates in greys). What must stay identical is checked layer
+  # by layer (violins, error bars, n labels) and byte for byte on the key files of the default
+  # view; the SVGs themselves are reported as BYTE_*=differ and are expected to.
+  for (f in c("layers.txt", "default_legend_key.svg", "default_legend_text.txt",
+              "default_key_on.svg", "default_key_off.svg", "coloured_framed.svg",
               "coloured_nopoints.svg", "violin_legend_key.svg", "violin_legend_text.txt")) {
     a <- file.path(old_dir, f); b <- file.path(new_dir, f)
     same <- file.exists(a) && file.exists(b) && file.size(a) == file.size(b) &&
