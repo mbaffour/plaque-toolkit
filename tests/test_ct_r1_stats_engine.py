@@ -193,16 +193,22 @@ def test_A3_extreme_pair_f_test_warns_at_8_plates():
     want = ("The spread differs between groups more than chance explains (SD ratio %.1f, adjusted "
             "%s): Welch ANOVA + Games-Howell is the safer analysis." % (math.sqrt(F), ps.p_text(p_adj)))
     assert want in omni["warnings"]
-    # in auto mode the advice never switches the test: forced parametric keeps Levene's choice
-    par = ps.run_stats(df, ["A", "B", "C"], "auto", "parametric")[0]
-    assert want in par["warnings"]
-    # brief A3: at >= 8 units with NORMAL data and a failed Levene, auto uses Welch + Games-Howell
-    # (not Kruskal-Wallis); this draw is normal by construction, so check that branch when Shapiro agrees
+    # as app.R: the check belongs to the classic path only; Welch (here: --equal-var no) needs no advice
+    assert not any("spread differs" in w for w in
+                   ps.run_stats(df, ["A", "B", "C"], "auto", "auto", equal_var="no")[0]["warnings"])
+
+
+
+def test_A3_eight_normal_units_with_unequal_variance_use_welch_not_kruskal():
+    # deterministic, exactly normal-shaped samples: scaled normal quantiles, 8 units per group
+    q = st.norm.ppf((np.arange(1, 9) - 0.375) / 8.25)
+    rows = [{"group": g, "replicate": "p%d" % i, "value": 2.0 + sd * x}
+            for g, sd in (("A", 0.5), ("B", 0.05), ("C", 0.05)) for i, x in enumerate(q)]
+    df = pd.DataFrame(rows)
+    gv = [df.loc[df["group"] == g, "value"].values for g in "ABC"]
+    assert st.levene(*gv).pvalue < 0.05 and all(st.shapiro(v).pvalue > 0.05 for v in gv)
     auto = ps.run_stats(df, ["A", "B", "C"], "auto", "auto")[0]
-    if all(p > 0.05 for p in auto["normality_p"].values()):
-        assert auto["test"] == "Welch ANOVA" and auto["posthoc"] == "Games-Howell"
-    else:
-        assert auto["test"] == "Kruskal–Wallis"
+    assert auto["test"] == "Welch ANOVA" and auto["posthoc"] == "Games-Howell"
 
 
 # =========================================================================== A4 .. A8
@@ -375,7 +381,7 @@ def test_A10_palette_drives_plate_colours_and_markers():
 
 
 def test_A10_custom_palette_validation():
-    assert ps.clean_palette("ff0000; 00aa00 0000ff".replace(" ", ";")) == ["#ff0000", "#00aa00", "#0000ff"]
+    assert ps.clean_palette("ff0000; 00aa00 0000ff") == ["#ff0000", "#00aa00", "#0000ff"]
     with pytest.raises(SystemExit, match="'zz12'"):
         ps.clean_palette("ff0000,zz12")
     with pytest.raises(SystemExit, match="needs 3"):
@@ -576,3 +582,69 @@ def test_gate_shipped_example_default_numbers_unchanged_from_1_3_0(tmp_path):
     assert sm.loc["T4", "mean"] == pytest.approx(2.6055142857142854, abs=1e-12)
     assert sm.loc["T7", "sd"] == pytest.approx(0.3737843416384026, abs=1e-12)
     assert res["omni"]["posthoc"] == "Tukey HSD" and not res["warnings"]
+
+
+
+def test_A5_unit_plaque_quotes_plaque_statistics(tmp_path):
+    df = _frame()
+    res = ps.run(_args(tmp_path, df, unit="plaque", order=["T4", "T7"]))
+    s = res["summary"].set_index("group")
+    sem = s.loc["T4", "unit_sem"]
+    assert s.loc["T4", "n_units"] == 60
+    assert "%.2f ± %.2f" % (s.loc["T4", "unit_mean"], sem) in res["paste_sentence"]
+    assert "mean ± SEM of the plaques" in res["paste_sentence"]
+    assert "--unit plaque" in res["figure_sentence"]
+
+
+def test_A5_whisker_is_drawn_above_the_plate_dots():
+    fig = ps.plot_violin(_tidy(_frame()), ["T4", "T7"], dict(ps.DEFAULTS), "d", {})
+    ax = fig.axes[0]
+    dots = max(c.get_zorder() for c in ax.collections if c.get_sizes().size and c.get_sizes()[0] > 50)
+    whisk = [ln.get_zorder() for ln in ax.lines if len(ln.get_xdata()) == 2 and ln.get_xdata()[0] == ln.get_xdata()[1]]
+    assert whisk and min(whisk) > dots
+    plt.close(fig)
+
+
+def test_A8_grouped_log_note_reaches_the_report(tmp_path):
+    df = _frame(groups=("T4",), mus=(2.0,))
+    df["host"] = np.where(df["replicate"] == "plate1", "a", "b")
+    df.loc[0, "diameter_mm"] = -0.1
+    res = ps.run(_args(tmp_path, df, subgroup="host", log_y=True, log_y_drop_nonpositive=True))
+    assert any("1 value ≤ 0 is not shown" in n for n in res["notes"])
+    assert "1 value ≤ 0 is not shown" in (tmp_path / "out" / "grouped_report_diameter_mm.md").read_text(encoding="utf-8")
+
+
+def test_A9_long_keys_wrap_into_columns():
+    entries = [lk.entry("p%d" % i, "#0072B2") for i in range(30)]
+    key = lk.make_key(entries)
+    assert lk.key_columns(key) == 3
+    fig = lk.key_figure(key)
+    assert fig.legends[0]._ncols == 3 if hasattr(fig.legends[0], "_ncols") else True
+
+
+def test_A7_dollar_in_sample_names_runs_with_tables(tmp_path):
+    df = _frame(groups=("a $\\x$ b", "T7"), mus=(2.0, 2.5))
+    res = ps.run(_args(tmp_path, df, stats_table=True, formats=["png", "svg"]))
+    assert res["order"][0] == "a $\\x$ b"
+    assert (tmp_path / "out" / "stats_table_diameter_mm.png").exists()
+
+
+def test_B3_plates_needed_is_the_smallest_n_with_80_percent_power():
+    df = _units({"A": 0.2, "B": 0.2, "C": 0.2}, 3, seed=9)
+    df.loc[df["group"] == "C", "value"] += 0.3
+    pw = ps.run_stats(df, ["A", "B", "C"], "auto", "auto")[0]["power"]
+
+    def power(d, n):
+        nc, tc = d * math.sqrt(n / 2), st.t.ppf(0.975, 2 * n - 2)
+        return st.nct.sf(tc, 2 * n - 2, nc) + st.nct.cdf(-tc, 2 * n - 2, nc)
+    for key, diff in (("n_for_largest", "largest_diff"), ("n_for_smallest", "smallest_diff")):
+        n, d = pw[key], pw[diff] / pw["pooled_sd"]
+        assert power(d, n) >= 0.80 and (n == 2 or power(d, n - 1) < 0.80)
+
+
+def test_C_caption_keeps_the_lowercase_n():
+    fig = ps.plot_violin(_tidy(_frame(groups=tuple("ABCDEFGHIJ"), mus=tuple(np.linspace(1, 3, 10)))),
+                         list("ABCDEFGHIJ"), dict(ps.DEFAULTS), "d", {})
+    cap = [t.get_text() for t in fig.texts]
+    assert "Bar values are in the summary table · n = plaques, N = plates." in cap
+    plt.close(fig)

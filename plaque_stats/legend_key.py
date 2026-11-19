@@ -287,7 +287,7 @@ def legend_handles(key):
     """(handles, labels, header_flags, title) for a key -- the ONE place both the embedded and
     the stand-alone key are drawn from."""
     rws, title = rows(key)
-    return ([_handle(r) for r in rws], [r["label"] for r in rws],
+    return ([_handle(r) for r in rws], [safe_text(r["label"]) for r in rws],
             [r["kind"] == "header" for r in rws], title)
 
 

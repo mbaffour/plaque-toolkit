@@ -1195,14 +1195,14 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
             n_min_all = min(ns.values())
             # wording identical to plaque_stats/app.R spread_check(); only the last clause names the
             # CLI option where the R app names its "Variances: unequal (Welch)" control
-            if n_min_all < 5 and not welch:
+            if n_min_all < 5 and not welch:      # app.R: only when the classic path ran
                 notes.append(
                     "%s assume the groups have similar spread. With %d %s per group this cannot be "
                     "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to "
                     "differ in spread, choose --equal-var no (Welch)."
                     % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
-                       n_min_all, _unit_word(unit, n_min_all), _ratio_txt(ev["sd_ratio"])))
-            if ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
+                       n_min_all, _unit_word(unit), _ratio_txt(ev["sd_ratio"])))
+            if not welch and ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
                 warns.append(
                     "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
                     "%s): Welch ANOVA + Games-Howell is the safer analysis."
@@ -1289,7 +1289,8 @@ def clean_palette(palette, needed=0, what="sample"):
     if isinstance(palette, str):
         if palette.strip().lower() in PALETTES:
             return list(PALETTES[palette.strip().lower()])
-        palette = [x for x in palette.replace(";", ",").split(",")]
+        import re
+        palette = [x for x in re.split(r"[,;\s]+", palette.strip())]
     out = []
     for c in palette:
         t = c.strip() if isinstance(c, str) else c
@@ -1369,7 +1370,8 @@ def center_table(df, order, opts, by=("group",)):
     o = opts if "_error" in (opts or {}) else _plot_opts(opts)
     center, error = o["center"], o["_error"]
     by = list(by)
-    has_rep = not df["replicate"].isna().all()
+    # --unit plaque: the bar describes the plaques the test used, not plate means (brief A5)
+    has_rep = not df["replicate"].isna().all() and str(o.get("unit") or "auto") != "plaque"
     out = {}
     for key, sub in df.groupby(by, sort=False):
         key = key if isinstance(key, tuple) else (key,)
@@ -1406,7 +1408,19 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
     else:
         ntxt = "%d to %d " % (ns[0], ns[-1])
     bits = []
-    if have_rep:
+    if have_rep and str(o.get("unit") or "auto") == "plaque":
+        bits.append("Violins: all plaques.")
+        if o.get("show_points", True):
+            bits.append("Small points: single plaques.")
+        bits.append("Large points: plate means.")
+        bar = "%s of all plaques (the statistical unit chosen: --unit plaque)" % center
+        wh = _ERR_WORDS.get(error)
+        if center == "median" and error == "ci95":
+            wh = "95 %% CI of the median (%s bootstrap resamples of the plaques, seed %d)" % (
+                format(BOOT_N, ","), BOOT_SEED)
+        elif wh:
+            wh += " of the plaques (plaques on one plate are not independent, so it is too narrow)"
+    elif have_rep:
         bits.append("Violins: all plaques.")
         if o.get("show_points", True):
             bits.append("Small points: single plaques.")
@@ -1550,8 +1564,7 @@ def _caption(fig, bits):
     bits = [b for b in bits if b]
     if not bits:
         return None
-    txt = " · ".join(bits) + "."
-    return fig.text(0.012, 0.008, txt[0].upper() + txt[1:], ha="left", va="bottom", fontsize=7.5,
+    return fig.text(0.012, 0.008, " · ".join(bits) + ".", ha="left", va="bottom", fontsize=7.5,
                     color="#5b6a65", style="italic")
 
 
@@ -1845,7 +1858,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
 
     caption_bits = [log_note]
     if opts.get("show_value", True) and not show_val:
-        caption_bits.append("bar values are in the summary table")
+        caption_bits.append("Bar values are in the summary table")
     if log_y and bottoms:                         # the violins were estimated in log10 units, which
         b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
@@ -1875,7 +1888,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         else:
             full = ["n = %s" % _plural(n_all[i], "plaque") for i in range(len(order))]
             short = ["n=%d" % n_all[i] for i in range(len(order))]
-        n_plan = _n_label_plan(fig, full, short, slot_in * 0.96)
+        n_plan = _n_label_plan(fig, full, short, slot_in * 0.85)
 
     if finite_tops and (plan["mode"] != "none" or n_plan):
         y0, _y1 = ax.get_ylim()
@@ -2356,8 +2369,8 @@ def save_stats_table(summ, base, metric, unit, formats=("png",)):
         ax.set_title(_lk.safe_text("Descriptive statistics — %s  (per plaque%s; tests use unit: %s)"
                                    % (metric, "; last two columns: plate means" if per_plate else "", unit)),
                      fontsize=11, fontweight="bold", loc="left", pad=12)
-        tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
-                       loc="center", cellLoc="center")
+        tbl = ax.table(cellText=[[_lk.safe_text(str(c)) for c in row] for row in disp.values.tolist()],
+                       colLabels=list(disp.columns), loc="center", cellLoc="center")
         tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.35)
         tbl.auto_set_column_width(range(len(disp.columns)))
         for (r, c), cell in tbl.get_celld().items():
@@ -2410,8 +2423,8 @@ def save_pairwise_table(unit_means, posthoc, base, metric, unit, formats=("png",
         fig.text(0.5, 0.008, "Each row compares two SAMPLES (A vs B) on the %s.  Δ = mean A − mean B."
                  % ("plate means" if unit == "replicate" else "plaques"),
                  ha="center", fontsize=8, color="#5b6a65")
-        tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
-                       loc="center", cellLoc="center")
+        tbl = ax.table(cellText=[[_lk.safe_text(str(c)) for c in row] for row in disp.values.tolist()],
+                       colLabels=list(disp.columns), loc="center", cellLoc="center")
         tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.3)
         tbl.auto_set_column_width(range(len(disp.columns)))
         sigc = list(disp.columns).index("signif")
@@ -2688,7 +2701,7 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
             nn, NN = len(sub), int(sub["replicate"].nunique(dropna=True))
             full.append("n=%d\nN=%d" % (nn, NN) if pm is not None else "n=%d" % nn)
             short.append(full[-1])
-        n_plan = _n_label_plan(fig, full, short, aw / (len(group_order) + 0.2) / K * 0.98)
+        n_plan = _n_label_plan(fig, full, short, aw / (len(group_order) + 0.2) / K * 0.85)
     hn = (n_plan[3] * (2.0 if n_plan[2] else 1.0) + 0.08) if n_plan else 0.0
     brackets = {}
     if opts.get("annotate", "auto") != "none":       # let the desktop's Brackets=None hide them
@@ -2860,7 +2873,9 @@ def run_grouped(args):
         sub_order = [control] + sub_order
     df = df[df["group"].isin(group_order) & df["subgroup"].isin(sub_order)].reset_index(drop=True)
     o = _plot_opts(args)                                   # option errors before any file is written
-    _log_guard(df["value"].values, o)
+    _, log_note = _log_guard(df["value"].values, o)
+    if log_note:                                           # CT-R1 SM-F13: say how many are hidden
+        notes.append(log_note[0].upper() + log_note[1:] + ".")
     out = args["out"]; os.makedirs(out, exist_ok=True)
     mt = _safe(metric)
 
