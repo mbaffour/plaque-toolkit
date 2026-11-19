@@ -413,6 +413,9 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
 fmt_p <- function(p) {                          # as _fmt_p(): "n/a", "< 0.001" or 3 decimals
   vapply(p, function(v) if (is.na(v)) "n/a" else if (v < 1e-3) "< 0.001" else formatC(v, format = "f", digits = 3), "")
 }
+p_eq <- function(p) {                           # "p < 0.001" / "p = 0.004" / "p = n/a" (never "p = < 0.001")
+  f <- fmt_p(p); if (startsWith(f, "<")) paste("p", f) else paste("p =", f)
+}
 fmt_p3 <- function(p) {                         # CT-R1 F19: tables, 3 significant digits
   vapply(p, function(v) if (is.na(v)) "n/a" else if (v < 1e-3) "< 0.001"
          else formatC(signif(v, 3), digits = 3, format = "g", flag = "#"), "")
@@ -692,8 +695,8 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
 # the omnibus box of the Statistics tab
 omnibus_text <- function(st) {
   unit_words <- if (st$unit == "replicate") "replicate = plate means" else "plaque = individual plaques"
-  msg <- sprintf("%s: p = %s  (unit: %s, parametric = %s, min n = %d/group, Levene p = %s)",
-                 st$test, fmt_p(st$p), unit_words, isTRUE(st$parametric_used), st$min_n, fmt_p(st$levene_p))
+  msg <- sprintf("%s: %s  (unit: %s, parametric = %s, min n = %d/group, Levene %s)",
+                 st$test, p_eq(st$p), unit_words, isTRUE(st$parametric_used), st$min_n, p_eq(st$levene_p))
   if (!is.na(st$posthoc)) msg <- paste0(msg, "\nPairwise: ", st$posthoc)
   if (!is.null(st$method_note)) msg <- paste0(msg, "\n", st$method_note)
   if (length(st$warnings)) msg <- paste0(msg, "\n\nWARNINGS:\n- ", paste(st$warnings, collapse = "\n- "))
@@ -718,20 +721,28 @@ stats_sentence <- function(metric, summ, st) {
                                        if (st$unit == "replicate") "plate" else "plaque"))
     }
     if (st$unit == "replicate")
-      return(sprintf("%s in %s was %s ± %s (mean ± SEM of %d plate means; %d plaques) vs %s %s ± %s (%d plates; %d plaques); %s on plate means, p = %s%s.",
+      return(sprintf("%s in %s was %s ± %s (mean ± SEM of %d plate means; %d plaques) vs %s %s ± %s (%d plates; %d plaques); %s on plate means, %s%s.",
                      metric, summ$group[1], f2(us$mean[1]), f2(us$sem[1]), us$n[1], summ$n[1],
                      summ$group[2], f2(us$mean[2]), f2(us$sem[2]), us$n[2], summ$n[2],
-                     st$test, fmt_p(st$p), d_txt))
+                     st$test, p_eq(st$p), d_txt))
     nfmt <- function(i) paste0(sprintf("n=%d", summ$n[i]),
                                if (st$have_rep) sprintf(", %d plates", summ$n_plates[i]) else " plaques")
-    return(sprintf("%s in %s was %s ± %s (%s) vs %s %s ± %s (%s); %s p = %s%s.",
+    return(sprintf("%s in %s was %s ± %s (%s) vs %s %s ± %s (%s); %s, %s%s.",
                    metric, summ$group[1], f2(summ$mean[1]), f2(summ$sd[1]), nfmt(1),
-                   summ$group[2], f2(summ$mean[2]), f2(summ$sd[2]), nfmt(2), st$test, fmt_p(st$p), d_txt))
+                   summ$group[2], f2(summ$mean[2]), f2(summ$sd[2]), nfmt(2), st$test, p_eq(st$p), d_txt))
   }
-  unit_note <- if (st$unit == "replicate") "the plate is the experimental unit"
-               else "NOTE: unit = plaque — pseudoreplication, add plate replicates"
-  sprintf("%s across %d groups: p = %s (statistical unit: %s; pairwise: %s). Values are mean ± SD per plaque; %s.",
-          st$test, k, fmt_p(st$p), st$unit, st$posthoc, unit_note)
+  # three or more samples: each sample's numbers for the unit that was tested, then the test
+  us <- st$unit_stats
+  post <- if (is.na(st$posthoc)) "" else paste0("; pairwise comparisons: ", st$posthoc)
+  if (st$unit == "replicate") {
+    items <- sprintf("%s %s ± %s (%d plates; %d plaques)", summ$group, vapply(us$mean, f2, ""), vapply(us$sem, f2, ""),
+                     us$n, summ$n)
+    return(sprintf("%s (mean ± SEM of plate means; n = plates, plaques in brackets): %s. %s on plate means across %d groups, %s%s.",
+                   metric, paste(items, collapse = "; "), st$test, k, p_eq(st$p), post))
+  }
+  items <- sprintf("%s %s ± %s (n=%d plaques)", summ$group, vapply(summ$mean, f2, ""), vapply(summ$sd, f2, ""), summ$n)
+  sprintf("%s (mean ± SD per plaque): %s. %s across %d groups, %s%s. NOTE: the unit tested was the plaque (pseudoreplication; plaques from one plate are not independent), so add plate replicates.",
+          metric, paste(items, collapse = "; "), st$test, k, p_eq(st$p), post)
 }
 
 # CT-R1 F7: which comparisons get a bracket. auto = the significant ones; with more than 5
@@ -967,9 +978,24 @@ pdf_base_family <- function(family) {
   else if (f %in% c("mono", "courier", "courier new")) "Courier"
   else NA_character_
 }
+# capabilities("cairo") can say TRUE where the Cairo library cannot be loaded (a Mac without
+# XQuartz: "failed to load cairo DLL"); a failed cairo_pdf() then leaves ggsave() to draw on R's
+# default device, a stray Rplots.pdf. So Cairo is tried ONCE on an empty file and remembered.
+cairo_pdf_usable <- local({
+  probed <- NULL
+  function() {
+    if (isTRUE(getOption("plaque_stats.no_cairo_pdf", FALSE))) return(FALSE)
+    if (is.null(probed)) probed <<- isTRUE(capabilities("cairo")) && tryCatch({
+      f <- tempfile(fileext = ".pdf"); before <- grDevices::dev.list()
+      withCallingHandlers(grDevices::cairo_pdf(f), warning = function(w) stop(conditionMessage(w)))
+      while (length(grDevices::dev.list()) > length(before)) grDevices::dev.off()
+      unlink(f); TRUE }, error = function(e) FALSE)
+    probed
+  }
+})
 save_pdf <- function(file, plot_for, family, width, height) {
   filled <- function() file.exists(file) && isTRUE(file.size(file) > 0)
-  if (isTRUE(capabilities("cairo")) && !isTRUE(getOption("plaque_stats.no_cairo_pdf", FALSE))) {
+  if (cairo_pdf_usable()) {
     ok <- tryCatch({ suppressWarnings(ggsave(file, plot_for(family), width = width, height = height,
                                              device = grDevices::cairo_pdf)); TRUE },
                    error = function(e) FALSE)
@@ -980,7 +1006,7 @@ save_pdf <- function(file, plot_for, family, width, height) {
   ggsave(file, plot_for(base), width = width, height = height, device = "pdf")
   shown <- if (nzchar(family)) family else "the default sans"
   if (exact && tolower(family) %in% c("", "sans", "serif", "mono", "helvetica", "times", "courier")) NULL
-  else sprintf("PDF: this R has no Cairo PDF support, so %s was drawn with the built-in %s font. The PNG and SVG use %s.",
+  else sprintf("PDF: font substituted. This R cannot embed %s in a PDF (no Cairo PDF support), so the PDF was drawn with the built-in %s font. The PNG and SVG use %s.",
                shown, base, shown)
 }
 # the stand-alone key in every format + the text starter. One format that fails does not lose

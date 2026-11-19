@@ -3,7 +3,6 @@
 # R Shiny app (plaque_stats/app.R), checked with shiny::testServer and plain function calls.
 # Prints one line per check:  PASS <id> <detail>   or   FAIL <id> <detail>
 # The Python engine (plaque_stats.py) is the REFERENCE: the numbers below were produced by it.
-pdf(NULL)                                  # no Rplots.pdf, whatever opens a device
 out_dir <- Sys.getenv("OUT_DIR", tempdir())
 fixtures <- normalizePath(file.path("..", "tests", "fixtures"))
 Sys.setenv(CFU_PAPER_STYLE = file.path(out_dir, "no_paper_style.json"))
@@ -317,3 +316,105 @@ testServer(app, {
   pts <- function(b) Filter(function(l) "x" %in% names(l) && nrow(l) == nrow(dat()), b)
   chk("F23_jitter_seeded", identical(pts(j1)[[1]]$x, pts(j3)[[1]]$x) && identical(pts(j1)[[1]]$x, pts(j2)[[1]]$x))
 })
+
+# ---- F5 F19: the sentence and the statistics CSV -----------------------------------------------
+testServer(app, {
+  raw(read_plaque_table(fx("ct_r1_D_two_12v14.csv"))$df); do.call(session$setInputs, ui_defaults)
+  s <- output$sentence
+  # python: "diameter_mm in WT was 2.00 ± 0.05 (mean ± SEM of 12 plate means; 178 plaques) vs mut 2.21 ± 0.04 (14 plates; 212 plaques); Welch t-test on plate means, p = 0.004, Cohen's d = -1.33."
+  chk("F5_sentence_plate_means_sem", grepl("2.00 ± 0.05 (mean ± SEM of 12 plate means; 178 plaques)", s, fixed = TRUE) &&
+        grepl("mut 2.21 ± 0.04 (14 plates; 212 plaques)", s, fixed = TRUE) && grepl("Welch t-test on plate means, p = 0.004", s, fixed = TRUE), s)
+  chk("F5_sentence_cohens_d", grepl("Cohen's d = -1.33", s, fixed = TRUE), s)
+  session$setInputs(unit = "plaque")
+  s2 <- output$sentence
+  chk("F5_plaque_unit_not_called_plate_unit", !grepl("the plate is the experimental unit", s2) && grepl("n=178", s2), s2)
+  session$setInputs(unit = "auto")
+  raw(example); session$setInputs(value = "diameter_mm")
+  s3 <- output$sentence
+  chk("F5_three_groups_names_posthoc_and_p", grepl("p < 0.001", s3) && grepl("Tukey HSD", s3) && !grepl("0\\.000", s3), s3)
+  chk("F5_omnibus_p_format", grepl("Tukey HSD: |one-way ANOVA: p < 0.001", output$omni) && !grepl("p = <|0\\.000", output$omni), output$omni)
+  chk("F5_three_group_sentence_plate_means", grepl("mean \u00b1 SEM of plate means", s3, fixed = FALSE) && grepl("T4 2.59 \u00b1 ", s3) &&
+        grepl("3 plates; 70 plaques", s3) && !grepl("p = <", s3), s3)
+  # one group: no "1 groups ... n/a"
+  session$setInputs(order = "T7")
+  chk("F5_one_group_sentence", grepl("only one sample", output$sentence) && !grepl("n/a p", output$sentence), output$sentence)
+  session$setInputs(order = "")
+  # statistics CSV
+  f <- output$dl_stats; txt <- paste(readLines(f, warn = FALSE), collapse = "\n")
+  chk("F19_stats_csv_has_pairwise_and_omnibus", file.exists(f) && grepl("Omnibus", txt) && grepl('"T4","T7"', txt, fixed = TRUE) && grepl("Pairwise", txt))
+  chk("F19_stats_csv_unrounded_p", grepl("e-06|6\\.5", txt))
+  dt <- pairwise_table(); chk("F19_pairwise_table_columns", all(c("group1", "group2", "p_adj", "signif") %in% names(dt)))
+})
+# ---- F14 F15 F18: paper style, colours ----------------------------------------------------------
+sty <- function(name, settings) { f <- file.path(out_dir, name)
+  writeLines(jsonlite::toJSON(list(kind = "paper_style", app = "CFU Plot Studio", created_at = "2026-11-09", settings = settings), auto_unbox = TRUE), f); f }
+Sys.setenv(CFU_PAPER_STYLE = sty("extreme.json", list(font_family = "Times New Roman", font_size = 200, axis_line_width = 50,
+  axis_color = "notacolour", plot_title = "x", legend_position = "right",
+  sample_palette = list(T4 = "red", T7 = "#12", lambda = "#00FF00AA", Other = "#123456"))))
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  ap <- paper_style_applied()
+  chk("F14_font_size_clamped", identical(as.numeric(ap$inputs$base_size), 40), as.character(ap$inputs$base_size))
+  chk("F14_axis_width_clamped", identical(as.numeric(ap$inputs$axis_line_width), 5), as.character(ap$inputs$axis_line_width))
+  do.call(session$setInputs, ap$inputs)
+  chk("F14_look_clamps_typed_values", { session$setInputs(base_size = 120, axis_line_width = 12); lk <- look()
+    lk$base_size == 40 && lk$axis_line_width == 5 && length(lk$notes) == 2 }, paste(look()$notes, collapse = " "))
+  session$setInputs(base_size = 14, axis_line_width = 0.6)
+  st <- output$paper_style_status
+  chk("F14_status_lists_applied", grepl("Applied: ", st) && grepl("font Times New Roman", st) && grepl("base font size 40", st), st)
+  chk("F14_status_lists_ignored", grepl("axis_color 'notacolour' is not a colour", st) && grepl("'T7' \\('#12'\\) is not a colour", st) &&
+        grepl("plot_title", st) && grepl("legend_position", st) && grepl("font_size 200 is outside", st), st)
+  chk("F14_status_names_samples_matched", grepl("Sample colours: 2 of the style's 3 names are in this data", st) , st)
+})
+Sys.setenv(CFU_PAPER_STYLE = sty("other.json", list(sample_palette = list(MG1655 = "#000000", "MG1655 + WT" = "#E69F00"))))
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  chk("F15_style_naming_no_sample_colours_nothing", !style()$neutral == FALSE && style()$neutral, "violins should stay grey")
+  chk("F15_status_says_none_match", grepl("None of the style's 2 sample names", output$paper_style_status), output$paper_style_status)
+})
+Sys.setenv(CFU_PAPER_STYLE = sty("t4black.json", list(sample_palette = list(T4 = "#000000", T7 = "#D55E00", lambda = "#0072B2"))))
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  chk("F15_style_colours_applied_by_name", identical(unname(style()$gcol["T4"]), "#000000") && !style()$neutral)
+  session$setInputs(palette_name = "set2"); session$flushReact()
+  chk("F15_theme_replaces_colours", !identical(unname(style()$gcol["T4"]), "#000000"))
+  chk("F15_status_says_theme_replaced", grepl("colour theme was changed", output$paper_style_status), output$paper_style_status)
+  session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("F15_paper_style_choice_brings_it_back", identical(unname(style()$gcol["T4"]), "#000000") && identical(unname(style()$gcol["T7"]), "#D55E00"))
+  session$setInputs(palette_name = "okabe"); session$flushReact(); session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("F15_round_trip_twice", identical(unname(style()$gcol["T4"]), "#000000"))
+})
+Sys.setenv(CFU_PAPER_STYLE = file.path(out_dir, "no_paper_style.json"))
+# F18: distinct colours
+reg <- extend_colour_registry(setNames(character(0), character(0)), paste0("s", 1:9))
+cols <- registry_colours(reg, c("s1", "s2")); chk("F18_two_samples_never_share", length(unique(cols)) == 2)
+reg <- c(a = "#0072B2", b = "#0072B2"); cc <- registry_colours(reg, c("a", "b"))
+chk("F18_same_style_colour_told_apart", to_hex(cc[1]) != to_hex(cc[2]) && identical(attr(cc, "changed"), "b"))
+reg <- extend_colour_registry(setNames(OKABE_ITO[1:9], paste0("o", 1:9)), c("o1", "extra1", "extra2"))
+chk("F18_new_name_after_full_pool_is_a_new_colour", length(unique(toupper(reg))) == length(reg), paste(tail(reg, 2), collapse = " "))
+many <- tidy(tmp("many.csv", mk(",", groups = c("WT", "mut"), plates = 24, n = 6)))
+many2 <- many; many2$replicate <- sub("plate", "plate ", many2$replicate)
+testServer(app, {
+  raw(data.frame(group = as.character(many$group), replicate = many$replicate, diameter_mm = many$value, stringsAsFactors = FALSE))
+  do.call(session$setInputs, ui_defaults); session$flushReact()
+  e <- key(); pl <- e[e$section == "plate", ]
+  pair <- paste(pl$colour, pl$shape)
+  chk("F18_24_plates_unique_colour_shape_pairs", nrow(pl) == 24 && !anyDuplicated(pair), sprintf("%d rows, %d distinct", nrow(pl), length(unique(pair))))
+  chk("F18_more_than_9_plates_cycle_shapes", length(unique(pl$shape)) >= 3)
+  chk("F18_plate_palette_distinct_from_samples_when_coloured", {
+    session$setInputs(vfill = "group"); session$flushReact(); sm <- style()
+    colour_distance(unname(sm$rcol)[1], unname(sm$gcol)) > 18 }, "")
+  tx <- text_starter(key()); chk("F18_text_starter_has_every_plate_once", sum(grepl("plate1 \\(|plate1[0-9]* \\(", tx)) >= 1 && nchar(tx) > 100)
+  session$setInputs(vfill = "auto")
+  chk("F18_default_grey_view_keeps_rep_palette", identical(unname(style()$rcol[1:2]), REP_PALETTE[1:2]))
+  g <- build_plot(); ok <- !inherits(try(ggplot2::ggplot_build(g), silent = TRUE), "try-error"); chk("F18_many_plates_draws", ok)
+})
+
+# ---- F4 (note) -----------------------------------------------------------------------------------
+tf <- tempfile(fileext = ".pdf")
+n1 <- save_pdf(tf, function(fam) ggplot2::ggplot(data.frame(x = 1, y = 1), ggplot2::aes(x, y)) + ggplot2::geom_point(), "Georgia", 4, 3)
+n0 <- save_pdf(tf, function(fam) ggplot2::ggplot(data.frame(x = 1, y = 1), ggplot2::aes(x, y)) + ggplot2::geom_point(), "", 4, 3)
+if (!cairo_pdf_usable()) {
+  chk("F4_substituted_font_note", is.character(n1) && grepl("font substituted", n1) && grepl("Georgia", n1), n1)
+  chk("F4_default_font_no_note", is.null(n0))
+} else chk("F4_cairo_embeds_any_font", is.null(n1) && is.null(n0))
