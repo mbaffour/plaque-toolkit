@@ -363,9 +363,12 @@ def test_closing_with_an_unsaved_study_asks(win, st, dialogs, qtbot):
 def test_plates_chip_counts_plates_with_plaques_and_effect_chip_reads(st, dialogs):
     _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
     st._add_plate(0, [], [])                               # an empty plate
+    st._samples.append({"group": "resistant", "subgroup": ""})
+    st._add_plate(2, [], [])                               # a sample whose only plate is empty
     st._refresh_tree()
     st.analyse_btn.click()
     assert st._chips["plates"].text() == "6"
+    assert "resistant has no diameter values" in st.warn_lbl.text()
     assert st._chips["effect"].text().startswith("Cohen's d = ")
     float(st._chips["effect"].text().split("= ")[1])
 

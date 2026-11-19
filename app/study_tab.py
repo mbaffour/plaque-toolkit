@@ -189,6 +189,13 @@ def _stats_message(e):
     return str(e) or e.__class__.__name__
 
 
+class _MsgLabel(QLabel):
+    """A message line that takes no room while it is empty."""
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class _SampleDialog(QDialog):
     """Create / edit a sample: a name (the group / x-axis category) + an optional 2nd factor."""
     def __init__(self, parent, name="", subgroup=""):
@@ -476,11 +483,11 @@ class StudyTab(QWidget):
         v.addLayout(row)
 
         # CT-R1 F19: errors of the last action (cleared by every action) ...
-        self.err = QLabel(""); self.err.setWordWrap(True)
+        self.err = _MsgLabel(""); self.err.setWordWrap(True); self.err.setVisible(False)
         self.err.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["danger"])
         v.addWidget(self.err)
         # ... and the statistics' own warnings (CT-R1 F9), which belong to the result on screen
-        self.warn_lbl = QLabel(""); self.warn_lbl.setWordWrap(True)
+        self.warn_lbl = _MsgLabel(""); self.warn_lbl.setWordWrap(True); self.warn_lbl.setVisible(False)
         self.warn_lbl.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["warn"])
         v.addWidget(self.warn_lbl)
 
@@ -1434,6 +1441,12 @@ class StudyTab(QWidget):
         self.cmp_cap.setText("Pairwise comparisons (%s; on the %s)" % (post, ps._unit_word(unit)))
         self._set_table(self.tbl_cmp, self._pairwise_display(pairwise))
 
+        empty = [s["group"] for s in self._samples if s["group"] not in present]
+        if empty:          # a sample without plaques (of this metric) cannot be drawn or tested
+            omni.setdefault("warnings", []).append(
+                "%s %s no %s values, so %s left out of the figure and the test."
+                % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
+                   "it is" if len(empty) == 1 else "they are"))
         warns = list(omni.get("warnings") or [])
         self.warn_lbl.setText("\n".join("⚠ " + w for w in warns))
         self._write_report_single(ps, metric_name, summ, omni, posthoc, unit, have_rep)
