@@ -439,3 +439,83 @@ def test_d4_cli_prints_dish_warnings_without_touching_the_csv(tmp_path, closeup_
     cols = pd.read_csv(tmp_path / "o" / "data-green-closeup.csv").columns.tolist()
     assert cols == ["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM",
                     "MEAN_GRAY", "TURBIDITY_REL"]
+
+
+# --------------------------------------------------------------------------- #
+#  D5: QC flags that match reality (F11, F12, F13, F19, NESTED)
+# --------------------------------------------------------------------------- #
+def _poly_disc(cx, cy, r, n=48, sx=1.0, sy=1.0):
+    t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    return np.stack([cx + sx * r * np.cos(t), cy + sy * r * np.sin(t)], 1).astype(np.int32)
+
+
+def _dict(cx, cy, r, **kw):
+    d = {"source": "auto", "kind": "contour", "contour": _poly_disc(cx, cy, r),
+         "area_pxl": math.pi * r * r, "center": (float(cx), float(cy))}
+    d.update(kw)
+    return d
+
+
+def test_d5_edge_is_measured_against_the_lawn_edge():
+    import plaque_qc
+    dish = (500.0, 500.0, 450.0)
+    # 400 px out + r 20 = 420 = 0.933 R: on the lawn edge, but inside the old 0.98 R line
+    f = plaque_qc.flag_plaques([{"x": 500, "y": 900, "area_px": math.pi * 400}], (1000, 1000), dish=dish)
+    assert f[0][0] == "EDGE" and "0.93 of the dish radius" in f[0][1]
+    f = plaque_qc.flag_plaques([{"x": 500, "y": 900, "area_px": math.pi * 400}], (1000, 1000), dish=dish,
+                               rim_frac=0.98)
+    assert f[0][0] == "OK"
+
+
+def test_d5_merged_nested_bright_tiny_in_the_app_dicts():
+    import cv2
+    import plaque_qc
+    gray = np.full((1000, 1000), 150, np.uint8)
+    cv2.circle(gray, (200, 200), 25, 70, -1)       # a normal dark plaque
+    cv2.circle(gray, (700, 700), 25, 230, -1)      # a bubble: brighter than the lawn
+    normal = _dict(200, 200, 25)
+    bubble = _dict(700, 700, 25)
+    lumpy = _dict(400, 200, 25, solidity=0.62)               # outline that is not one blob
+    long_ = _dict(400, 600, 25)
+    long_["contour"] = _poly_disc(400, 600, 25, sx=2.0, sy=0.8)  # axis ratio 2.5
+    halo = _dict(800, 300, 40)
+    core = _dict(806, 300, 12)                                # centre inside the halo
+    tiny = _dict(200, 800, 6)                                 # enclosing diameter ~12 px
+    small_src = _dict(600, 400, 20, source="small")
+    plaques = [normal, bubble, lumpy, long_, halo, core, tiny, small_src]
+    res = plaque_qc.flags_for_plaque_dicts(plaques, gray.shape, gray=gray, mm_per_px=0.05)
+    f = [r[0].split("|") for r in res]
+    assert "BRIGHT" not in f[0] and "MERGED?" not in f[0] and "TINY" not in f[0]
+    assert "BRIGHT" in f[1] and "bubble or glare" in res[1][1]
+    assert "MERGED?" in f[2] and "solidity 0.62" in res[2][1]
+    assert "MERGED?" in f[3] and "axis ratio 2.5" in res[3][1]
+    assert "NESTED" in f[5] and "NESTED" not in f[4]
+    assert "TINY" in f[6] and "mm is at/below the standard gate (1.50 mm)" in res[6][1]
+    assert "TINY" in f[7] and "small-scale pass" in res[7][1]
+    # Precise's model plaques are not judged on polarity
+    bubble_p = dict(bubble, p_plaque=0.95)
+    assert "BRIGHT" not in plaque_qc.flags_for_plaque_dicts([bubble_p], gray.shape, gray=gray)[0][0]
+
+
+def test_d5_app_table_flags_tiny_for_the_small_pass_plaques(mixed_plate):
+    from app import engine_api
+    det = engine_api.detect_single(mixed_plate, plate_mm=90, scale="auto")
+    df = engine_api.measure_table(det["plaques"], det["orig_bgr"], det["pxl_per_mm"], det["lawn_gray"],
+                                  plate=det["plate"], with_reason=True)
+    tiny = df["QC_FLAG"].str.contains("TINY")
+    assert (tiny == (df["SOURCE"] == "small")).all() and int(tiny.sum()) == 5
+    # the old -small path: TINY now fires from the enclosing diameter (it never did in the app)
+    sml = engine_api.detect_single(mixed_plate, plate_mm=90, small=True, legacy=True)
+    df2 = engine_api.measure_table(sml["plaques"], sml["orig_bgr"], sml["pxl_per_mm"], sml["lawn_gray"],
+                                   plate=sml["plate"], with_reason=True)
+    assert int(df2["QC_FLAG"].str.contains("TINY").sum()) == 5
+    assert df2.loc[df2["QC_FLAG"].str.contains("TINY"), "QC_REASON"].str.contains(" mm is at/below").all()
+
+
+def test_d5_cli_qc_flags_merged_from_the_raw_contour(tmp_path, mixed_plate):
+    import pandas as pd
+    r = _run_cli(["-i", mixed_plate, "-p", "90", "-o", "q", "--qc", "--multiscale"], tmp_path)
+    assert r.returncode == 0
+    df = pd.read_csv(tmp_path / "q" / "data-green-mixed_plate.csv")
+    # the 6 mm disc is 29x the median area here (LARGE?, not MERGED?: its outline is one blob)
+    assert df["QC_FLAG"].tolist() == ["LARGE?"] + ["TINY"] * 5

@@ -26,10 +26,13 @@ COLUMN_TOOLTIPS = {
               "(split from a touching pair).",
     # CT-R1 F24: the one column with no explanation
     "QC_FLAG": "Rows that deserve a second look (OK = none). Several can apply, joined with |.\n"
-               "EDGE — touches the image border or the dish rim, so part of it may be cut off.\n"
+               "EDGE — touches the image border or reaches the lawn edge (0.93 of the dish radius).\n"
                "LARGE? — area more than 2.5× the plate's median, with a normal round shape.\n"
-               "MERGED? — far from round (circularity below 0.6): likely two plaques counted as one.\n"
-               "TINY — at or below the standard size gate; found only by the small / sensitive gates.\n"
+               "MERGED? — not one convex blob (solidity below 0.9) or elongated (axis ratio over 1.5): "
+               "likely two plaques counted as one.\n"
+               "NESTED — its centre lies inside a larger plaque.\n"
+               "TINY — found only at the small scale / by the sensitive gates (below the standard size gate).\n"
+               "BRIGHT — brighter inside than around it: a bubble or glare, not a clearing.\n"
                "OVERLAP — its disk overlaps another plaque's, so both sizes are unreliable.\n"
                "LOW_CONF — the Precise classifier scored it below 0.6.\n"
                "Hover a flagged cell for the reason. A flag never changes a measurement.",

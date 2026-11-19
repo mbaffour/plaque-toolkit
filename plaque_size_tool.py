@@ -936,7 +936,10 @@ def _process_one(image_path, plate_size, run_images, args):
                     big = plate_df['ENCL_DIAMETER_PXL'].idxmax()
                     c = plate_df.loc[big, 'ENCL_CENTER']
                     dish = (float(c[0]), float(c[1]), float(plate_df.loc[big, 'ENCL_DIAMETER_PXL']) / 2.0)
-                fl, why = plaque_qc.flags_for_dataframe(green_df_copy, image_size, dish=dish)
+                fl, why = plaque_qc.flags_for_dataframe(
+                    green_df_copy, image_size, dish=dish,
+                    gray=cv2.cvtColor(orig_image, cv2.COLOR_BGR2GRAY),
+                    mm_per_px=last_calibration.get('mm_per_px'))
                 green_df_copy = green_df_copy.copy()
                 green_df_copy['QC_FLAG'] = fl
                 green_df_copy['QC_REASON'] = why

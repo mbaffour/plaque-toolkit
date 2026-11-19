@@ -161,7 +161,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     circs = [_circularity(p) for p in plaques]
     try:
         import plaque_qc
-        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs)
+        # CT-R1 detection D5: the grey image (BRIGHT) and the scale (TINY in mm) go in too
+        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs,
+                                              gray=gray, mm_per_px=ppm)
     except Exception:                        # never let QC break the table
         qc = [("", "")] * len(plaques)
     rows = []

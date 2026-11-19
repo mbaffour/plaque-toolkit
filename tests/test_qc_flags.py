@@ -26,21 +26,21 @@ def test_flags_on_synthetic_geometry():
         _p(500, 500, 20),                       # clean, central
         _p(520, 505, 20),                       # overlaps the first
         _p(10, 500, 20),                        # off the image border
-        _p(500, 940, 20),                       # at the dish rim (500 + 440 + 20 >= 0.98*450)
+        _p(500, 900, 20),                       # at the lawn edge (400 + 20 >= 0.93*450 = 418.5)
         _p(300, 300, 70),                       # area 12x the median, round -> LARGE?
         _p(700, 300, 20, encl_diam_px=28),      # below the standard gate -> TINY
-        _p(700, 700, 20, circularity=0.4),      # irregular -> MERGED?
+        _p(700, 700, 20, solidity=0.7),         # not one convex blob -> MERGED? (CT-R1 F12)
         _p(300, 700, 20, p_plaque=0.3),         # low classifier score
     ]
     flags = plaque_qc.flag_plaques(plaques, (H, W), dish=dish)
     f = [a for a, _ in flags]
     assert "OVERLAP" in f[0] and "OVERLAP" in f[1]
     assert f[2].startswith("EDGE") and "border" in flags[2][1]
-    assert f[3].startswith("EDGE") and "rim" in flags[3][1]
+    assert f[3].startswith("EDGE") and "lawn edge" in flags[3][1]
     # size alone is LARGE?, never MERGED? (click-through round 1, F24)
     assert "LARGE?" in f[4] and "MERGED?" not in f[4] and "median" in flags[4][1]
     assert "TINY" in f[5]
-    assert "MERGED?" in f[6] and "LARGE?" not in f[6] and "circularity" in flags[6][1]
+    assert "MERGED?" in f[6] and "LARGE?" not in f[6] and "solidity 0.70" in flags[6][1]
     assert "LOW_CONF" in f[7]
     # a clean plaque far from everything is OK
     assert plaque_qc.flag_plaques([_p(500, 500, 20)], (H, W), dish=dish)[0] == ("OK", "")
@@ -74,7 +74,9 @@ def test_cli_qc_is_opt_in_and_additive(neutral_plate_tif, tmp_path):
 
 def test_app_table_carries_a_qc_column(neutral_plate_tif):
     from app import engine_api
-    det = engine_api.detect_single(str(neutral_plate_tif), plate_mm=90, small=True)
+    # the app's default plaque size (CT-R1 detection D1). Under Small these 52 px plaques are
+    # outlined at their ~core only, below the standard gate, so all are TINY now (F1/F13)
+    det = engine_api.detect_single(str(neutral_plate_tif), plate_mm=90, scale="auto")
     df = engine_api.measure_table(det["plaques"], det["orig_bgr"], det["pxl_per_mm"], det["lawn_gray"],
                                   plate=det.get("plate"))
     assert "QC_FLAG" in df.columns and len(df) == len(det["plaques"])
