@@ -438,3 +438,144 @@ def test_grouped_mode_hides_the_one_factor_options(st, dialogs):
     _fill(st, [("T4", "LB", [1.0, 1.1]), ("T4", "IPTG", [1.5, 1.6])])
     assert st.var_sel.isHidden() and st.cmp_to_sel.isHidden() and not st.control_sel.isHidden()
     assert not st.fill_sel.isEnabled()                      # F13: grouped violins are always grey
+
+
+# --------------------------------------------------------------------------- F10/F13/F15/F16/F21
+def _fig_texts(fig):
+    from matplotlib.text import Text
+    return [t.get_text() for t in fig.findobj(Text) if t.get_visible() and t.get_text()]
+
+
+def test_median_offers_only_iqr_ci_or_none(st, dialogs):
+    """CT-R1 F16: SD / SEM describe a mean; around a median they are greyed out."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    st.error_sel.setCurrentIndex(st.error_sel.findData("sem"))
+    st.center_sel.setCurrentIndex(st.center_sel.findData("median"))
+    m = st.error_sel.model()
+    enabled = {st.error_sel.itemData(i): m.item(i).isEnabled() for i in range(st.error_sel.count())}
+    assert enabled == {"auto": True, "sem": False, "ci95": True, "sd": False, "iqr": True, "none": True}
+    assert st.error_sel.currentData() == "iqr" and st.err.text() == "" and st._last_fig is not None
+    st.error_sel.setCurrentIndex(st.error_sel.findData("ci95"))
+    assert "95 % CI of the median" in st.fig_caption.text()
+    st.center_sel.setCurrentIndex(st.center_sel.findData("mean"))
+    assert all(m.item(i).isEnabled() for i in range(st.error_sel.count()))
+
+
+def test_log_y_with_values_at_or_below_zero(st, dialogs):
+    """CT-R1 F15: the engine's message is shown (no stale figure) and 'hide ≤ 0' draws the rest."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st._add_plate(0, [0.0, 1.0, 1.1], [0.0, 1.0, 1.2])
+    st._refresh_tree()
+    st.analyse_btn.click()
+    assert not st.logy_drop_cb.isEnabled()
+    st.logy_cb.setChecked(True)
+    assert "zero or negative" in st.err.text()
+    assert st._last_fig is None and not st.savefig_btn.isEnabled() and not st.key_btn.isEnabled()
+    assert st.logy_drop_cb.isEnabled()
+    st.logy_drop_cb.setChecked(True)
+    assert st.err.text() == "" and st._last_fig is not None and st.savefig_btn.isEnabled()
+    assert st._last_fig.axes[0].get_yscale() == "log"
+    assert any("not shown on the log axis" in t for t in _fig_texts(st._last_fig))
+
+
+def test_brackets_offer_letters(st, dialogs):
+    """CT-R1 F10: a compact letter display instead of a bracket stack."""
+    _fill(st, [("A", "", [1.0, 1.02, 0.98]), ("B", "", [1.5, 1.52, 1.48]), ("C", "", [2.0, 2.02, 1.98])])
+    st.analyse_btn.click()
+    st.annot_sel.setCurrentIndex(st.annot_sel.findData("letters"))
+    texts = _fig_texts(st._last_fig)
+    assert {"a", "b", "c"} <= set(texts)
+    assert "compact letter display" in st.fig_caption.text()
+
+
+def test_palette_drives_the_plate_colours_and_dead_controls_are_greyed(st, dialogs):
+    """CT-R1 F13: with grey violins (the default) the palette colours the plates; 'Opacity'
+    (was 'Transparency'); Jitter is greyed without raw plaques."""
+    from PySide6.QtWidgets import QLabel
+    lk = ST._legend_key()
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    c0 = [e["colour"] for e in lk.from_figure(st._last_fig)["entries"]]
+    st.palette_sel.setCurrentIndex(st.palette_sel.findData("tab10"))
+    c1 = [e["colour"] for e in lk.from_figure(st._last_fig)["entries"]]
+    assert c0 != c1 and c1[0] == "#1F77B4"
+    labels = [w.text() for w in st.findChildren(QLabel)]
+    assert "Opacity" in labels and "Transparency" not in labels
+    st.show_points.setChecked(False)
+    assert not st.jitter.isEnabled()
+    st.palette_custom.setText("#0072B2, notacolour")
+    st.palette_custom.editingFinished.emit()               # what Return / focus-out sends
+    assert "notacolour" in st.err.text() and "not a colour" in st.err.text()
+    assert st._last_fig is None and not st.savefig_btn.isEnabled()
+    st.palette_custom.setText("#000000")                    # one colour for 2 coloured violins
+    st.fill_sel.setCurrentIndex(st.fill_sel.findData("group"))
+    st.palette_custom.editingFinished.emit()
+    assert "custom palette has 1 colour but this figure needs 2" in st.err.text()
+    st.palette_custom.setText("")                           # CT-R1 F19: fixing it clears the error
+    st.palette_custom.editingFinished.emit()
+    assert st.err.text() == "" and st._last_fig is not None
+
+
+def test_typed_y_label_belongs_to_its_metric(st, dialogs):
+    """CT-R1 F21: a Y label typed for the diameter does not label the area figure."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    st.ylabel_in.setText("Plaque Ø (mm)")
+    st.ylabel_in.editingFinished.emit()
+    assert st._last_fig.axes[0].get_ylabel() == "Plaque Ø (mm)"
+    st.metric_sel.setCurrentIndex(1)
+    assert st.ylabel_in.text() == "" and st._last_fig.axes[0].get_ylabel() == "Area (mm²)"
+    st.metric_sel.setCurrentIndex(0)
+    assert st._last_fig.axes[0].get_ylabel() == "Plaque Ø (mm)"
+
+
+# --------------------------------------------------------------------------- F19 / F20 / F24
+def test_clear_removes_results_and_an_error_is_cleared_by_the_next_action(st, dialogs):
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05])])
+    st.analyse_btn.click()                                  # 3 plates but one sample: fine
+    st._samples = []; st._plates = []; st._refresh_tree()
+    st.analyse_btn.click()
+    assert "at least two plates" in st.err.text()
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    assert st.err.text() == "" and st.zip_btn.isEnabled()
+    dialogs["question"].append(QMessageBox.Yes)
+    st.clear_btn.click()
+    assert st._last is None and st._last_fig is None and not st.zip_btn.isEnabled()
+    assert st.report.toPlainText() == "" and st.key_text.text() == "" and st.fig_caption.text() == ""
+
+
+def test_save_figure_names_size_and_dpi(st, dialogs, tmp_path):
+    """CT-R1 F20: dotted names keep their dots, a typed extension wins over the filter, the file
+    has the chosen size, and TIFF uses the Export DPI like every other export (and the ZIP)."""
+    from PIL import Image
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    st.dpi_in.setValue(100)
+    dialogs["save"].append((str(tmp_path / "fig_0.5MOI"), "PNG image (*.png)"))
+    st.savefig_btn.click()
+    p = tmp_path / "fig_0.5MOI.png"
+    assert p.exists()
+    assert Image.open(p).size == (840, 540)                 # 8.4 x 5.4 in at 100 dpi, no crop
+    dialogs["save"].append((str(tmp_path / "typed.pdf"), "PNG image (*.png)"))
+    st.savefig_btn.click()
+    assert (tmp_path / "typed.pdf").exists() and not (tmp_path / "typed.png").exists()
+    dialogs["save"].append((str(tmp_path / "fig.tiff"), "TIFF — journal raster (*.tiff)"))
+    st.savefig_btn.click()
+    assert Image.open(tmp_path / "fig.tiff").size == (840, 540)
+    z = _zip(st, dialogs, tmp_path)
+    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.png"))).size == (840, 540)
+    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.tiff"))).size == (840, 540)
+
+
+def test_figure_is_not_squeezed_into_a_second_scroll_area(win, st, dialogs, qtbot):
+    """CT-R1 F24: one scroll bar (the tab's); the figure area is as tall as the canvas."""
+    win.resize(1320, 880); win.show(); qtbot.waitExposed(win)
+    win.tabs.setCurrentIndex(3)
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st.analyse_btn.click()
+    qtbot.wait(50)
+    assert st.findChildren(QScrollArea) == []
+    assert st.fig_holder.minimumHeight() >= st.canvas.height()
+    assert st.fig_holder.height() >= st.canvas.height()
