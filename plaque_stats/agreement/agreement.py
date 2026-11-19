@@ -48,15 +48,15 @@ __version__ = "1.1.0"
 
 
 def _load_legend_key():
-    """plaque_stats/legend_key.py: flat import (web app / exe folder), the package, or the
-    file one folder up (running this script from the repo)."""
+    """plaque_stats/legend_key.py: already loaded, a flat import (web app / exe folder), or the
+    file one folder up (running from the repo) -- loaded by file so the ``plaque_stats`` name
+    stays free for the flat plaque_stats.py module. None = no key (the figure is unaffected)."""
+    import sys
+    for name in ("plaque_stats.legend_key", "legend_key"):
+        if name in sys.modules:
+            return sys.modules[name]
     try:
         import legend_key
-        return legend_key
-    except ImportError:
-        pass
-    try:
-        from plaque_stats import legend_key
         return legend_key
     except ImportError:
         pass
@@ -66,8 +66,9 @@ def _load_legend_key():
         spec = importlib.util.spec_from_file_location("legend_key", p)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        sys.modules.setdefault("legend_key", mod)
         return mod
-    return None             # no key files / embedded key, the figure itself is unaffected
+    return None
 
 
 _lk = _load_legend_key()

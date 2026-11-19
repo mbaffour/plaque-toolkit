@@ -7,10 +7,34 @@ import math
 import os
 import re
 
-try:                                    # the one legend-key helper (CT-R1 DA-F4)
-    from plaque_stats import legend_key as _lk
-except Exception:                       # pragma: no cover - figure still draws, without a key
-    _lk = None
+
+
+def _load_legend_key():
+    """The one legend-key helper (CT-R1 DA-F4), plaque_stats/legend_key.py. Loaded by file when
+    running from source so importing this module does not register the ``plaque_stats``
+    PACKAGE (the stand-alone tools and tests import the flat ``plaque_stats.py`` module by that
+    name); the frozen app falls back to the package import."""
+    import sys
+    for name in ("plaque_stats.legend_key", "legend_key"):
+        if name in sys.modules:
+            return sys.modules[name]
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "plaque_stats", "legend_key.py")
+    try:
+        if os.path.exists(path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("legend_key", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sys.modules.setdefault("legend_key", mod)
+            return mod
+        from plaque_stats import legend_key
+        return legend_key
+    except Exception:                   # pragma: no cover - the figure still draws, without a key
+        return None
+
+
+_lk = _load_legend_key()
 
 
 # --------------------------------------------------------------------------- paste parser

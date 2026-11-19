@@ -261,7 +261,7 @@ def test_small_n_wording_is_softened():
 
 
 # =========================================================================== 3. figure + legend key
-from plaque_stats import legend_key as LK   # noqa: E402
+LK = ap._lk                                  # the same helper the figure uses
 from matplotlib import colors as mcolors    # noqa: E402
 
 

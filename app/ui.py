@@ -1673,7 +1673,7 @@ class AgreementTab(QWidget):
         return agreement.make_figure(s, unit, show_key=self.key_cb.isChecked())
 
     def _draw(self, s, unit):
-        from plaque_stats import legend_key
+        from app.agreement import _lk as legend_key
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
         fig = self._make_fig()
         new = FigureCanvas(fig)
@@ -1811,7 +1811,7 @@ class AgreementTab(QWidget):
         """Save the legend key of the CURRENT figure, in the figure's format."""
         if not self._last:
             return None
-        from plaque_stats import legend_key
+        from app.agreement import _lk as legend_key
         path = path or self._ask_path("Save legend key", "PlaqueToolkit_vs_Fiji_legend_key")
         if not path:
             return None
