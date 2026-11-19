@@ -387,3 +387,74 @@ def test_agreement_tab_key_controls_follow_the_current_figure(agreement_tab, tmp
     tab.fiji_in.setPlainText("\n".join("%.6f" % v for v in s["fiji"]))
     tab._compute()
     assert "outside the 95% limits of agreement (" in tab.key_text.text()
+
+
+# =========================================================================== 4. DA-F8 Compare vs Fiji
+def _synthetic_plate(n=27, seed=4):
+    import pandas as pd
+    rng = np.random.default_rng(seed)
+    pts = []
+    while len(pts) < n:                                       # well-separated plaques in an 80 mm dish
+        p = rng.uniform(-38, 38, 2)
+        if np.hypot(*p) < 38 and all(np.hypot(*(p - q)) > 6 for q in pts):
+            pts.append(p)
+    pts = np.array(pts) + 42.5
+    d = rng.uniform(0.8, 2.4, n)
+    return pd.DataFrame({"INDEX": np.arange(1, n + 1), "X": pts[:, 0], "Y": pts[:, 1], "DIAMETER": d})
+
+
+def _fiji_pixels(app, scale_px_per_mm=12.5, deg=20.0, shift=(300.0, 150.0), drop=3, seed=5):
+    import pandas as pd
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(app))[: len(app) - drop]
+    th = math.radians(deg); R = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    xy = (app[["X", "Y"]].to_numpy()[perm] @ R.T) * scale_px_per_mm + np.array(shift)
+    xy += rng.normal(0, 0.3, xy.shape)                        # sub-pixel centroid noise
+    dpx = app["DIAMETER"].to_numpy()[perm] * scale_px_per_mm * 1.02
+    return pd.DataFrame({" ": np.arange(1, len(perm) + 1), "Area": np.pi * dpx ** 2 / 4,
+                         "Mean": 120.0, "X": xy[:, 0], "Y": xy[:, 1], "Feret": dpx * 1.05})
+
+
+def test_auto_align_recovers_pixel_scale_rotation_and_shift_from_a_tab_separated_file(tmp_path):
+    from app import fiji_match
+    app_df = _synthetic_plate()
+    fj = _fiji_pixels(app_df)
+    path = tmp_path / "Results.xls"                            # Fiji's own Save As: tab-separated
+    fj.to_csv(path, sep="\t", index=False)
+    fiji_df = fiji_match.load_fiji_results(str(path))
+    res = fiji_match.match(app_df, fiji_df, align="auto")
+    s = res["summary"]
+    assert s["n_matched"] == len(fj) and not s["low_match"]
+    assert s["scale"] == pytest.approx(1 / 12.5, rel=0.02)
+    assert s["bias_mean_mm"] == pytest.approx(-0.02 * app_df["DIAMETER"].mean(), abs=0.03)
+
+
+def test_semicolon_decimal_comma_and_center_of_mass_headers_load(tmp_path):
+    from app import fiji_match
+    app_df = _synthetic_plate()
+    fj = _fiji_pixels(app_df, scale_px_per_mm=1.0, deg=0, shift=(0, 0)).rename(columns={"X": "XM", "Y": "YM"})
+    path = tmp_path / "res.csv"
+    fj.to_csv(path, sep=";", decimal=",", index=False)
+    fiji_df = fiji_match.load_fiji_results(str(path))
+    assert len(fiji_df) == len(fj)
+    assert fiji_df["fx"].to_numpy() == pytest.approx(fj["XM"].to_numpy())
+    res = fiji_match.match(app_df, fiji_df, align="none")
+    assert res["summary"]["n_matched"] == len(fj)
+
+
+def test_a_poor_match_warns_and_cannot_be_saved(qt, tmp_path, monkeypatch):
+    import pandas as pd
+    from PySide6.QtWidgets import QFileDialog
+    from app import fiji_dialog
+    app_df = _synthetic_plate()
+    rng = np.random.default_rng(9)
+    junk = pd.DataFrame({"X": rng.uniform(0, 85, 27), "Y": rng.uniform(0, 85, 27), "Area": 1.0})
+    path = tmp_path / "junk.csv"; junk.to_csv(path, index=False)
+    dlg = fiji_dialog.FijiCompareDialog(app_df, calibrated=True)
+    qt.addWidget(dlg)
+    dlg.align.setCurrentIndex(1)                               # auto-align on unrelated points
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), "")))
+    dlg._choose()
+    assert dlg.result["summary"]["low_match"]
+    assert not dlg.save_btn.isEnabled()
+    assert "probably wrong and cannot be saved" in dlg.summary.text()
