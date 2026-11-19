@@ -20,15 +20,22 @@ EX_TOOL = [1.24, 0.98, 1.51, 0.62, 1.80, 1.11, 0.75, 1.35, 2.02, 0.90, 1.44, 1.1
 EX_FIJI = [1.27, 0.96, 1.55, 0.60, 1.84, 1.09, 0.79, 1.38, 2.05, 0.93, 1.41, 1.22, 0.71, 1.57, 1.02]
 
 
-@pytest.fixture
-def qt(qtbot):
-    pytest.importorskip("PySide6")
-    return qtbot
+import importlib.util as _ilu   # noqa: E402
 
 
 @pytest.fixture
-def no_dialogs(monkeypatch):
-    pytest.importorskip("PySide6")
+def qt(request):
+    """qtbot when PySide6 + pytest-qt are there; otherwise the GUI test is SKIPPED (not an error)."""
+    if _ilu.find_spec("PySide6") is None:
+        pytest.skip("needs PySide6")
+    try:
+        return request.getfixturevalue("qtbot")
+    except pytest.FixtureLookupError:
+        pytest.skip("needs pytest-qt")
+
+
+@pytest.fixture
+def no_dialogs(qt, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
     seen = []
     for name in ("warning", "information", "critical"):
@@ -229,6 +236,16 @@ def test_one_sentence_everywhere_with_three_decimals_and_no_double_plaque():
     assert a.startswith("Plaque diameters measured with Plaque Toolkit agreed closely with Fiji / ImageJ")
     assert "Plaque plaque" not in a and "r = 0.997" in a and "ICC(A,1) = 0.997" in a
     assert "The difference did not depend on plaque size" in a and "each limit ±" in a
+
+
+def test_a_constant_offset_is_not_called_significant_from_float_noise():
+    base = [0.8, 1.1, 1.5, 1.9, 2.4, 2.2, 1.3]
+    for mod in (ap, cli_ag):
+        s = mod.full_stats([v + 0.1 for v in base], base)
+        assert s["sd"] == 0.0 and math.isnan(s["t_p"]) and math.isnan(s["ba_slope_p"])
+        sent = mod.report_sentence(s)
+        assert "significantly different" not in sent and "difference from zero not testable" in sent
+        assert "depend on plaque size" not in sent and "spread is zero" in sent
 
 
 def test_nan_p_values_read_not_testable_never_significant():
@@ -542,9 +559,10 @@ def test_validate_scores_only_label_files_and_fails_bad_ones_with_reasons(neutra
     assert pm["n_plates"] == 1 and pm["tp"] == good["tp"] and pm["fn"] == good["fn"]   # failed rows excluded
     assert V.summary_status(res) == ("Scored 3 plates x 1 engine; 2 failed (see the last column). "
                                      "Skipped 1 JSON file that is not a plaque label file.")
-    sent = V.report_sentence(res, {"current": "Current (corrected)"}, "1.3.0")
+    from app import __version__
+    sent = V.report_sentence(res, {"current": "Current (corrected)"}, __version__)
     assert sent.startswith("Against 1 hand-corrected plate (5 plaques), the Current (corrected) "
-                           "engine of Plaque Toolkit 1.3.0 detected plaques with precision")
+                           "engine of Plaque Toolkit %s detected plaques with precision" % __version__)
 
 
 def test_validate_with_no_label_files_has_no_zero_row(tmp_path):
@@ -599,7 +617,8 @@ def test_validate_tab_run_status_sentence_and_csv(validate_tab, qt, neutral_plat
     validate_tab._run()
     qt.waitUntil(lambda: validate_tab._res is not None, timeout=120_000)
     assert validate_tab.status.text().startswith("Scored 3 plates x 1 engine; 2 failed (see the last column).")
-    assert "Plaque Toolkit 1.3.0" in validate_tab.sentence.text()
+    from app import __version__
+    assert "Plaque Toolkit %s" % __version__ in validate_tab.sentence.text()
     out = validate_tab._save(str(tmp_path / "res.csv"))
     assert out == (str(tmp_path / "res_per_engine.csv"), str(tmp_path / "res_per_plate.csv"))
     assert len(pd.read_csv(out[1])) == 3 and len(pd.read_csv(out[0])) == 1

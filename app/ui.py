@@ -2642,6 +2642,8 @@ class AgreementTab(QWidget):
             try:
                 parsed[key] = agreement.parse_values(box.toPlainText())
             except ValueError as e:
+                self.preview.setRowCount(0)          # never show the previous run's pairs
+                self.parse_notes.setText("Nothing was read: see the message below.")
                 self._fail("%s box: %s" % (name, e)); return
         (tool, tnotes), (fiji, fnotes) = parsed["tool"], parsed["fiji"]
         self._show_preview(tool, fiji, tnotes, fnotes)

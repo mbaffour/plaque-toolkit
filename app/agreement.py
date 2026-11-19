@@ -338,6 +338,14 @@ def check_pairs(tool, fiji):
                              "computed. Agreement needs plaques of different sizes." % (name, seq[0]))
 
 
+def _constant_difference(diff, tool, fiji):
+    """True when every tool - reference difference is the same up to float rounding (e.g. a
+    fixed +0.1 offset): its spread is then 0, not 1e-17 noise that a t-test would call
+    'significant' (CT-R1 SM-F17)."""
+    scale = max(1.0, max(abs(v) for v in list(tool) + list(fiji)))
+    return (max(diff) - min(diff)) <= 1e-9 * scale
+
+
 def compute(tool, fiji):
     """`tool` = the method under test, `fiji` = the reference. Bias is tool - fiji.
     Returns a dict of agreement statistics; raises ValueError (plain message) on input that
@@ -348,10 +356,13 @@ def compute(tool, fiji):
     diff = [tool[i] - fiji[i] for i in range(n)]
     avg = [(tool[i] + fiji[i]) / 2 for i in range(n)]
     bias, sd = _mean(diff), _sd(diff)
+    constant = _constant_difference(diff, tool, fiji)
+    if constant:
+        sd = 0.0
     grand = _mean(avg)
     slope, intercept = regress(fiji, tool)
     k = loa_multiplier(n)
-    ba_slope, ba_p = _ba_slope(avg, diff)
+    ba_slope, ba_p = (0.0, float("nan")) if constant else _ba_slope(avg, diff)
     return {
         "n": n, "mean_tool": _mean(tool), "mean_fiji": _mean(fiji),
         "bias": bias, "sd": sd, "loa_lo": bias - k * sd, "loa_hi": bias + k * sd,
@@ -361,7 +372,7 @@ def compute(tool, fiji):
         "mae": _mean([abs(d) for d in diff]),
         "r": pearson(tool, fiji), "icc": icc_a1(fiji, tool),
         "slope": slope, "intercept": intercept, "diff": diff, "avg": avg,
-        "tool": tool, "fiji": fiji,
+        "tool": tool, "fiji": fiji, "constant_difference": constant,
         # Bland-Altman proportional bias: regress the difference on the mean of the two
         # methods; a non-zero slope means the bias changes with plaque size (PT-46).
         "ba_slope": ba_slope, "ba_slope_p": ba_p,
@@ -389,6 +400,9 @@ def extra_stats(tool, fiji, seed=None):
         warnings.simplefilter("ignore")
         r, rp = _st.pearsonr(tool, fiji)
         t, tp = _st.ttest_rel(tool, fiji)
+    diff = [float(a) - float(b) for a, b in zip(tool, fiji)]
+    if _constant_difference(diff, tool, fiji):
+        t, tp = float("nan"), float("nan")     # no spread: the paired t-test is not testable
     lo, hi = icc_ci(tool, fiji)
     return {"r2": float(r * r), "pearson_p": float(rp),
             "t_stat": float(t), "t_p": float(tp),
@@ -516,6 +530,8 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                                                   _pstr(tp)))
         else:
             bits.append("difference from zero not testable")
+    if s.get("constant_difference"):
+        bits.append("every difference was the same, so their spread is zero")
     out += " Bland-Altman analysis showed a mean bias of %+.3f %s%s" \
            % (s["bias"], unit, (" (%s)" % "; ".join(bits)) if bits else "")
     loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
