@@ -748,3 +748,27 @@ def test_cli_unknown_column_is_one_line_listing_the_numeric_columns_exit_2(capsy
     assert err == ("agreement.py: error: --tool 'diam_toolkit_mm' is not a numeric column of "
                    "paired_toolkit_vs_fiji.csv. Numeric columns: plaque_id, area_tool_mm2, "
                    "area_fiji_mm2, diam_tool_mm, diam_fiji_mm.")
+
+
+def test_compare_vs_fiji_limits_equal_the_agreement_tab_limits():
+    """Both report bias +/- 1.96 SD (CT-R1 follow-up). The dialog works on 3-decimal pairs and
+    rounds bias/SD to 4 decimals, so agreement is checked to that precision and as displayed."""
+    from app import fiji_match
+    app_df = _synthetic_plate(n=15)
+    fj = _fiji_pixels(app_df, scale_px_per_mm=1.0, deg=0, shift=(0, 0), drop=0)
+    fiji_df = fiji_match.load_fiji_results(_write(fj))
+    res = fiji_match.match(app_df, fiji_df, align="none")
+    p, sm = res["paired"], res["summary"]
+    assert sm["n_matched"] == 15
+    s = ap.compute(p["APP_DIAM_MM"].tolist(), p["FIJI_DIAM_MM"].tolist())
+    assert sm["loa_low_mm"] == pytest.approx(s["loa_lo"], abs=3e-4)
+    assert sm["loa_high_mm"] == pytest.approx(s["loa_hi"], abs=3e-4)
+    assert "%+.3f" % sm["loa_low_mm"] == "%+.3f" % s["loa_lo"]
+    assert "%+.3f" % sm["loa_high_mm"] == "%+.3f" % s["loa_hi"]
+
+
+def _write(df):
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+    df.to_csv(path, index=False)
+    return path
