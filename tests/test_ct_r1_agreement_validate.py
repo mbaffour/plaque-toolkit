@@ -624,3 +624,56 @@ def test_table_shows_4_significant_digits_but_sorts_and_copies_raw_values(qt):
     lines = text.split("\r\n")
     assert n == 3 and lines[0] == "pair\tp_adj\tf1\ttp"
     assert lines[1] == "B-C\t\t15234.7\t3" and lines[3] == "A-B\t0.0004\t0.3751082334679884\t5"
+
+
+# =========================================================================== 8. DA-F23 About + Help viewer
+HELP_MD = ["USER_GUIDE.md", "VALIDATION_GUIDE.md", "HOW_IT_WAS_BUILT.md", "ENGINES.md",
+           "PUBLICATION.md", "CREDITS_AND_LINEAGE.md", "LICENSING.md"]
+
+
+def test_about_lists_the_seven_real_tabs_the_legend_key_and_only_real_menu_items(qt):
+    import re
+    from app import ui as appui
+    win = appui.MainWindow(); qt.addWidget(win)
+    from PySide6.QtWidgets import QLabel
+    body = next(l for l in win.about_tab.findChildren(QLabel) if l.objectName() == "AboutBody").text()
+    tabs = [win.tabs.tabText(i).strip() for i in range(win.tabs.count())]
+    listed = re.findall(r"<li><b>([^<]+)</b> —", body.split("<p><b>The tabs</b></p>")[1].split("</ul>")[0])
+    assert listed == tabs
+    assert "Legend key" in body and "legend text starter" in body and "Place key on figure" in body
+    assert "interactive guide" not in body
+    from PySide6.QtWidgets import QMenu
+    help_menu = next(m for m in win.menuBar().findChildren(QMenu) if m.title() == "&Help")
+    items = {a.text() for a in help_menu.actions()}
+    footer = body.split("Full guides live in the <b>Help</b> menu (")[1].split("; and more")[0]
+    for name in footer.replace("&amp;", "&").split("; "):
+        assert name in items, name
+
+
+@pytest.mark.parametrize("doc", HELP_MD)
+def test_every_table_of_contents_link_in_the_help_markdown_finds_its_heading(qt, doc):
+    import re
+    from app import ui as appui
+    v = appui.DocViewer(doc); qt.addWidget(v)
+    text = open(appui._resolve_doc(doc)[0], encoding="utf-8").read()
+    for frag in re.findall(r"\]\(#([^)\s]+)\)", text):
+        assert v._find_anchor(frag) is not None, frag
+
+
+def test_toc_link_scrolls_and_relative_doc_link_opens_in_the_viewer(qt):
+    from PySide6.QtCore import QUrl
+    from app import ui as appui
+    v = appui.DocViewer("USER_GUIDE.md"); qt.addWidget(v)
+    v.resize(900, 600); v.show()
+    sb = v.browser.verticalScrollBar()
+    assert sb.value() == 0
+    v._on_anchor(QUrl("#10-special-modes"))                  # a shortened slug in the shipped TOC
+    assert sb.value() > 0
+    block = v.browser.document().findBlock(v._find_anchor("10-special-modes"))
+    assert block.text().startswith("10. Special modes")
+    n0 = len(appui._DOC_VIEWERS)
+    v._on_anchor(QUrl("VALIDATION_GUIDE.md"))
+    assert len(appui._DOC_VIEWERS) == n0 + 1
+    opened = appui._DOC_VIEWERS[-1]
+    assert opened._path.endswith("VALIDATION_GUIDE.md") and opened.browser.toPlainText()
+    opened.close()

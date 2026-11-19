@@ -1823,14 +1823,27 @@ class AboutTab(QWidget):
             "detector, a PlaqSeg deep-learning model, a manual-correction editor, and mm calibration. "
             "Plaques are numbered <b>1→N from the top</b>.</p>"
 
+            # CT-R1 DA-F23: the real seven tabs, one accurate line each
             "<p><b>The tabs</b></p><ul>"
-            "<li><b>Measure</b> — open one image, auto-detect, correct by hand, read size + turbidity, export.</li>"
-            "<li><b>Batch</b> — a whole folder → one CSV per plate + an all-plaques CSV + annotated images. "
-            "(Drop a folder onto the tab.)</li>"
-            "<li><b>Compare turbidity</b> — a folder of phages → optical density, clarity class, titer/PFU, "
-            "per-phage stats + figures.</li>"
+            "<li><b>Measure</b> — open one plate photo, auto-detect, correct by hand, read size + "
+            "turbidity, export (CSV, annotated figure, Fiji bundle, ground-truth labels).</li>"
+            "<li><b>Batch</b> — a whole folder of plates → one CSV per plate + an all-plaques CSV + "
+            "annotated images. (Drop a folder onto the tab.)</li>"
+            "<li><b>Compare turbidity</b> — a folder of phages → optical density, clarity class, "
+            "titer/PFU, per-phage statistics + figures.</li>"
+            "<li><b>Analyze</b> — group plates into samples, then a violin SuperPlot with the right "
+            "statistics (the plate is the experimental unit), summary tables and a ZIP export.</li>"
             "<li><b>Validate</b> — score the engines against your own hand-corrected labels "
-            "(precision / recall / F1 + size agreement).</li></ul>"
+            "(precision / recall / F1 + size agreement), with a CSV and a sentence to paste.</li>"
+            "<li><b>Fiji agreement</b> — paste paired Toolkit and Fiji/ImageJ sizes → Bland–Altman, "
+            "ICC, r, a method-comparison figure and a sentence for your paper.</li>"
+            "<li><b>About</b> — this page.</li></ul>"
+
+            "<p><b>Legend key</b> — every figure (Analyze, Compare turbidity, Fiji agreement) "
+            "has a <b>Legend key…</b> button that saves a small image listing each sample, point "
+            "and line style with its exact colour, in the figure’s format; a <b>legend text starter</b> "
+            "sentence to paste into your figure legend (with Copy); and a <b>Place key on figure</b> "
+            "switch that draws the same key on the figure itself.</p>"
 
             "<p><b>Detection engines</b> (Measure dropdown)</p><ul>"
             "<li><b>Published (validated)</b> — the exact Trofimova &amp; Jaschke 2021 algorithm. "
@@ -1876,8 +1889,9 @@ class AboutTab(QWidget):
             "independent stamp: still verify by eye and report your own validation before publishing. "
             "For citable numbers use <b>Published (validated)</b>.</p>"
 
-            "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide, interactive guide, "
-            "validation, how it was built).</p>")
+            "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide; How-to, use "
+            "cases &amp; verification; Understanding the agreement statistics; How to validate this "
+            "program; How it was built; and more).</p>")
         body.setObjectName("AboutBody"); body.setWordWrap(True); body.setOpenExternalLinks(True)
         body.setTextInteractionFlags(Qt.TextBrowserInteraction)
         lay.addWidget(body)
@@ -1932,7 +1946,10 @@ class DocViewer(QDialog):
         super().__init__(parent)
         self._path, docs_dir = _resolve_doc(name)
         self._interactive = _is_interactive_html(self._path)
-        self.setWindowTitle("Plaque Toolkit — help — %s" % name)
+        self._is_md = False
+        self._anchors = {}
+        shown = os.path.basename(name) if os.path.isabs(name) else name
+        self.setWindowTitle("Plaque Toolkit — help — %s" % shown)
         _av = QApplication.primaryScreen().availableGeometry()   # never open bigger than the screen
         self.resize(min(960, _av.width() - 60), min(800, _av.height() - 100))
         self.setObjectName("AppRoot")
@@ -1959,10 +1976,12 @@ class DocViewer(QDialog):
                 self.browser.setHtml(text)
             else:
                 self.browser.setMarkdown(text)
+                self._is_md = True
+                self._index_headings()
         elif self._path is None:
             self.browser.setPlainText("Could not find %s. It ships in the docs/ folder." % name)
 
-        cap = QLabel(name); cap.setObjectName("SummaryHeading")
+        cap = QLabel(shown); cap.setObjectName("SummaryHeading")
         top = QHBoxLayout(); top.addWidget(cap); top.addStretch()
         self.ext_btn = QPushButton("Open in web browser")
         self.ext_btn.setToolTip("Open this page in your default web browser (full CSS layout, "
@@ -1994,9 +2013,85 @@ class DocViewer(QDialog):
         if self._path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
 
+    # CT-R1 DA-F23: setMarkdown() gives headings no anchors, so a table-of-contents link did
+    # nothing; and links to other documents were ignored. Headings are indexed by their
+    # GitHub-style slug (plus a punctuation-free form, and a prefix match for shortened links).
+    @staticmethod
+    def _slug(text):
+        import re
+        t = re.sub(r"[^\w\- ]", "", str(text).strip().lower(), flags=re.UNICODE)
+        return t.replace(" ", "-")
+
+    @staticmethod
+    def _loose(text):
+        import re
+        return re.sub(r"[^0-9a-z]", "", str(text).lower())
+
+    def _index_headings(self):
+        self._anchors = {}
+        block = self.browser.document().begin()
+        while block.isValid():
+            if block.blockFormat().headingLevel() > 0:
+                slug = self._slug(block.text())
+                key, k = slug, 1
+                while key in self._anchors:          # GitHub numbers duplicate headings
+                    key = "%s-%d" % (slug, k); k += 1
+                self._anchors[key] = block.position()
+            block = block.next()
+
+    def _find_anchor(self, fragment):
+        """Document position of the heading a #fragment points at, or None."""
+        from urllib.parse import unquote
+        frag = unquote(fragment).lower()
+        if frag in self._anchors:
+            return self._anchors[frag]
+        loose = self._loose(frag)
+        for slug, pos in self._anchors.items():
+            if self._loose(slug) == loose:
+                return pos
+        for slug, pos in self._anchors.items():
+            if loose and self._loose(slug).startswith(loose):
+                return pos
+        return None
+
+    def scroll_to(self, fragment):
+        """Scroll so the heading (Markdown) or named anchor (HTML) is at the top. True if found."""
+        if not fragment:
+            return False
+        if self._is_md:
+            pos = self._find_anchor(fragment)
+            if pos is None:
+                return False
+            from PySide6.QtGui import QTextCursor
+            block = self.browser.document().findBlock(pos)
+            cur = QTextCursor(block)
+            self.browser.setTextCursor(cur)
+            y = self.browser.document().documentLayout().blockBoundingRect(block).top()
+            self.browser.verticalScrollBar().setValue(int(y))
+            return True
+        self.browser.scrollToAnchor(fragment)
+        return True
+
+    def _open_linked_doc(self, url):
+        """A relative link to another .md/.html document opens it in a new viewer."""
+        base = os.path.dirname(self._path) if self._path else _resolve_doc("")[1]
+        target = os.path.normpath(os.path.join(base, url.path()))
+        if not os.path.exists(target):
+            QMessageBox.information(self, "Document not found",
+                                    "This link points to %s, which is not shipped with the app."
+                                    % url.path())
+            return None
+        v = DocViewer(target, self.parent() or self)
+        _DOC_VIEWERS.append(v)
+        v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
+        v.show(); v.raise_(); v.activateWindow()
+        if url.fragment():
+            v.scroll_to(url.fragment())
+        return v
+
     def _on_anchor(self, url):
-        """Internal #anchors scroll within the doc; an external http(s) link ASKS before opening
-        a web browser (per user request — nothing goes to the browser silently)."""
+        """Internal #anchors scroll within the doc; links to other .md/.html documents open in
+        the viewer; an external http(s) link ASKS before opening a web browser."""
         if url.scheme() in ("http", "https"):
             ret = QMessageBox.question(
                 self, "Open link in web browser?",
@@ -2004,8 +2099,10 @@ class DocViewer(QDialog):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ret == QMessageBox.Yes:
                 QDesktopServices.openUrl(url)
+        elif url.scheme() in ("", "file") and url.path().lower().endswith((".md", ".html", ".htm")):
+            self._open_linked_doc(url)
         elif url.fragment():
-            self.browser.scrollToAnchor(url.fragment())
+            self.scroll_to(url.fragment())
 
 
 def _is_interactive_html(path):
