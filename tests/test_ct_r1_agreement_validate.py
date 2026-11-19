@@ -146,7 +146,8 @@ def test_the_two_copies_share_one_core_text_for_text():
     a = _shared_block(os.path.join(ROOT, "app", "agreement.py"))
     b = _shared_block(os.path.join(ROOT, "plaque_stats", "agreement", "agreement.py"))
     assert a == b
-    for name in ("report_sentence", "icc_ci", "compute", "loa_multiplier", "full_stats"):
+    for name in ("report_sentence", "icc_ci", "compute", "prediction_interval", "full_stats",
+                 "icc_interval_note"):
         assert "def %s(" % name in a
 
 
@@ -197,22 +198,61 @@ def test_icc_interval_coverage_is_close_to_95_percent():
     assert 0.92 <= hits / sims <= 0.985
 
 
-def test_small_n_limits_of_agreement_are_prediction_limits_with_the_b_and_a_1999_ci():
+def test_limits_of_agreement_are_bias_196_sd_at_every_n_with_a_prediction_interval_below_20():
+    """Supervisor decision (CT-R1 follow-up): the headline limits are bias +/- 1.96 SD at every n
+    (no jump between 19 and 20 pairs); below 20 pairs a 95% prediction interval is ADDED."""
     rng = np.random.default_rng(5)
     inside, sims, n = 0, 3000, 5
     for _ in range(sims):
         d = rng.normal(0, 1, n)
-        k = ap.loa_multiplier(n)
-        inside += abs(rng.normal() - d.mean()) <= k * d.std(ddof=1)
-    assert 0.93 <= inside / sims <= 0.97                 # +/-1.96 SD gave ~0.85 here
-    assert ap.loa_multiplier(5) == pytest.approx(st.t.ppf(.975, 4) * math.sqrt(1.2))
-    assert ap.loa_multiplier(20) == 1.96 and ap.loa_multiplier(100) == 1.96
-    hw = ap._loa_ci_halfwidth(1.0, 100)
-    assert hw == pytest.approx(st.t.ppf(.975, 99) * math.sqrt(1 / 100 + 1.96 ** 2 / 198), rel=1e-12)
-    s = ap.full_stats(EX_TOOL, EX_FIJI)                  # n = 15 -> t-based limits, said so
-    k = st.t.ppf(.975, 14) * math.sqrt(1 + 1 / 15)
-    assert s["loa_hi"] == pytest.approx(s["bias"] + k * s["sd"], rel=1e-12)
-    assert "t-based prediction limits, as n < 20" in ap.report_sentence(s)
+        lo, hi = ap.prediction_interval(d.mean(), d.std(ddof=1), n)
+        inside += lo <= rng.normal() <= hi
+    assert 0.93 <= inside / sims <= 0.97                 # +/-1.96 SD gives ~0.85 here
+    for mod in (ap, cli_ag):
+        s = mod.full_stats(EX_TOOL, EX_FIJI)             # the tab's own n = 15 example
+        assert (s["loa_lo"], s["loa_hi"]) == pytest.approx((-0.0688, 0.0488), abs=1e-12)
+        h = st.t.ppf(.975, 14) * s["sd"] * math.sqrt(1 + 1 / 15)
+        assert (s["pred_lo"], s["pred_hi"]) == pytest.approx((s["bias"] - h, s["bias"] + h), rel=1e-12)
+        assert s["loa_ci_halfwidth"] == pytest.approx(
+            st.t.ppf(.975, 14) * s["sd"] * math.sqrt(1 / 15 + 1.96 ** 2 / 28), rel=1e-12)
+        sent = mod.report_sentence(s)
+        assert "95% limits of agreement of -0.069 to +0.049 mm" in sent
+        assert ("With only 15 pairs, a new difference is expected within %+.3f to %+.3f mm "
+                "(95%% prediction interval)." % (s["pred_lo"], s["pred_hi"])) in sent
+    rng = np.random.default_rng(3)
+    t = list(rng.normal(1.5, .4, 20)); f = [v + e for v, e in zip(t, rng.normal(0, .05, 20))]
+    s19, s20 = ap.full_stats(t[:19], f[:19]), ap.full_stats(t, f)
+    for s_ in (s19, s20):
+        assert s_["loa_hi"] == pytest.approx(s_["bias"] + 1.96 * s_["sd"], rel=1e-12)
+    assert math.isfinite(s19["pred_lo"]) and math.isnan(s20["pred_lo"])
+    assert "prediction interval" not in ap.report_sentence(s20)
+
+
+def test_icc_interval_note_for_a_systematic_offset():
+    rng = np.random.default_rng(11)
+    big = rng.normal(1.5, .5, 200)
+    s = ap.full_stats(list(big * 1.02 + rng.normal(0, .001, 200)), list(big))
+    assert s["t_p"] < 0.05 and s["icc"] - s["icc_lo"] > 0.10
+    note = ap.icc_interval_note(s)
+    assert note == ("The ICC interval is wide because the two methods differ by a systematic offset "
+                    "(bias %+.3f mm): with two methods that offset is estimated from a single "
+                    "contrast. Judge agreement from the bias and the limits of agreement." % s["bias"])
+    import pandas as pd
+    df = pd.read_csv(os.path.join(ROOT, "validation", "paired_toolkit_vs_fiji.csv"), comment="#")
+    assert ap.icc_interval_note(ap.full_stats(df["diam_tool_mm"].tolist(), df["diam_fiji_mm"].tolist())) == ""
+
+
+def test_icc_note_shows_under_the_chips_and_in_the_report(agreement_tab):
+    rng = np.random.default_rng(11)
+    big = rng.normal(1.5, .5, 200)
+    tab = agreement_tab
+    tab.tool_in.setPlainText("\n".join("%.6f" % v for v in big * 1.02 + rng.normal(0, .001, 200)))
+    tab.fiji_in.setPlainText("\n".join("%.6f" % v for v in big))
+    tab._compute()
+    assert tab.icc_note.text().startswith("The ICC interval is wide because") and not tab.icc_note.isHidden()
+    assert "Note: The ICC interval is wide" in tab.report.toPlainText()
+    tab._example()
+    assert tab.icc_note.isHidden() and "Note:" not in tab.report.toPlainText()
 
 
 def test_shipped_validation_point_estimates_do_not_move():
@@ -696,3 +736,39 @@ def test_toc_link_scrolls_and_relative_doc_link_opens_in_the_viewer(qt):
     opened = appui._DOC_VIEWERS[-1]
     assert opened._path.endswith("VALIDATION_GUIDE.md") and opened.browser.toPlainText()
     opened.close()
+
+
+def test_cli_unknown_column_is_one_line_listing_the_numeric_columns_exit_2(capsys):
+    data = os.path.join(ROOT, "validation", "paired_toolkit_vs_fiji.csv")
+    with pytest.raises(SystemExit) as ex:
+        cli_ag.main([data, "--tool", "diam_toolkit_mm", "--out", os.devnull])
+    assert ex.value.code == 2
+    err = capsys.readouterr().err.strip()
+    assert "\n" not in err and "Traceback" not in err
+    assert err == ("agreement.py: error: --tool 'diam_toolkit_mm' is not a numeric column of "
+                   "paired_toolkit_vs_fiji.csv. Numeric columns: plaque_id, area_tool_mm2, "
+                   "area_fiji_mm2, diam_tool_mm, diam_fiji_mm.")
+
+
+def test_compare_vs_fiji_limits_equal_the_agreement_tab_limits():
+    """Both report bias +/- 1.96 SD (CT-R1 follow-up). The dialog works on 3-decimal pairs and
+    rounds bias/SD to 4 decimals, so agreement is checked to that precision and as displayed."""
+    from app import fiji_match
+    app_df = _synthetic_plate(n=15)
+    fj = _fiji_pixels(app_df, scale_px_per_mm=1.0, deg=0, shift=(0, 0), drop=0)
+    fiji_df = fiji_match.load_fiji_results(_write(fj))
+    res = fiji_match.match(app_df, fiji_df, align="none")
+    p, sm = res["paired"], res["summary"]
+    assert sm["n_matched"] == 15
+    s = ap.compute(p["APP_DIAM_MM"].tolist(), p["FIJI_DIAM_MM"].tolist())
+    assert sm["loa_low_mm"] == pytest.approx(s["loa_lo"], abs=3e-4)
+    assert sm["loa_high_mm"] == pytest.approx(s["loa_hi"], abs=3e-4)
+    assert "%+.3f" % sm["loa_low_mm"] == "%+.3f" % s["loa_lo"]
+    assert "%+.3f" % sm["loa_high_mm"] == "%+.3f" % s["loa_hi"]
+
+
+def _write(df):
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+    df.to_csv(path, index=False)
+    return path

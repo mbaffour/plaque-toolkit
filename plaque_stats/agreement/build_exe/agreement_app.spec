@@ -42,6 +42,11 @@ for fn in ("app_py.py", "agreement.py", "GUIDE.html",
     src = _proj(fn)
     if os.path.exists(src):
         datas.append((src, "."))
+# agreement.py imports the figure's legend-key helper flat (`import legend_key`); it lives one
+# folder up, in plaque_stats/. Ship it beside agreement.py so packaged figures keep their key.
+_LEGEND_KEY = os.path.join(os.path.dirname(PROJECT), "legend_key.py")
+if os.path.exists(_LEGEND_KEY):
+    datas.append((_LEGEND_KEY, "."))
 # Shiny + htmltools + shinychat static assets (served to the browser) + matplotlib mpl-data.
 datas += collect_data_files("shiny")
 datas += collect_data_files("htmltools")
