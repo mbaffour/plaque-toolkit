@@ -31,6 +31,20 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **R Shiny app, statistical unit.** A file with no plate column, or UPPER-CASE headers, used to
   be tested per plaque while the report said "per plate". The unit is now detected
   case-insensitively and the report names the unit that was actually tested.
+* **Statistics engine (`plaque_stats.py`), test choice with 8 or more plates per sample.** When
+  the plate means look normal but Levene's test rejects equal variances, **auto** now runs Welch
+  ANOVA + Games-Howell; before, it switched to Kruskal-Wallis. Below 8 plates per sample (the
+  usual case) nothing changes, and the shipped example gives the same p-values and summary
+  numbers as before (`tests/test_ct_r1_stats_engine.py::test_gate_*`). (The R app still goes to
+  Kruskal-Wallis in that case; it will be aligned.)
+* **Statistics engine, files that were read wrongly.** Sample names such as `None`, `NA`, `nan`,
+  `007`, `1.0` or `phage #3` used to be dropped, renamed or cut at the `#`; they are now kept as
+  typed, so analyses of such files gain the samples they were missing. `--unit replicate` on a
+  file without a plate column used to test plaques while saying "plate"; it is now an error. A
+  sample with a single plate no longer switches the whole analysis to per-plaque statistics:
+  the plate stays the unit and that sample's comparisons are n/a.
+* **Statistics engine, effect-size label.** For Kruskal-Wallis, `epsilon_squared` now holds
+  H/(N−1); the value that used to be under that name is reported as `eta_squared_H`.
 * **QC flag names.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is kept
   for a shape far from round. No measurement column changes.
 
@@ -61,6 +75,37 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * Pixel mode works without a mm scale; Add/Draw are guarded at the image edge; the image fits
   the view after a resize; small windows scroll instead of overlapping.
 * The QC column has tooltips and a tint, and `LARGE?` (see above).
+
+### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
+
+* **Reading files.** Labels are kept exactly as typed; comma, semicolon and tab files and decimal
+  commas are read; every dropped row is counted and reported ("N rows dropped: reason"). A
+  mistyped `--order` or `--value` name is an error instead of a silently smaller analysis.
+* **New options.** `--equal-var auto|yes|no` (Welch ANOVA + Games-Howell on request),
+  `--posthoc dunnett --control NAME` (each sample against one control, with simultaneous 95 %
+  intervals), `--equivalence-margin` (TOST), `--annotate letters` (compact letter display),
+  `--log-y-drop-nonpositive`. `--no-box` is removed (it did nothing).
+* **Every report now says more.** The pairwise table adds the difference with its 95 % interval
+  and Hedges' g; a power sentence says what difference the design can detect and how many plates
+  a given difference needs; one line gives the share of variance that lies between plates; the
+  post-hoc test is named; the "Test choice" paragraph is written from what actually ran.
+* **Spread note** (same rule and wording as the R app): no warning from the raw SD ratio; a
+  neutral note under 5 plates per sample on the classic path; a warning only when a
+  Bonferroni-adjusted F test on the extreme pair is significant.
+* **With `--center median`** the error bar is IQR or a bootstrap 95 % interval of the median
+  (seeded, resampling plates); median with SD or SEM is refused with a plain message.
+* **Figures.** The n label reads "n = 70 plaques / N = 3 plates". With more than 5 samples the
+  automatic brackets show only the significant comparisons against the first sample (the report
+  says so, and how many pairs are in the table); tick labels tilt when they would collide; titles
+  wrap; keys longer than 12 rows wrap into columns; log axes get plain-number ticks and a sane
+  lower limit, and refuse values ≤ 0 unless told to drop them (the count is then stated).
+  **The default figure changed**: plate points take their colours from the chosen palette
+  (Okabe-Ito by default) instead of a fixed plate palette, and when colours run out the marker
+  shape changes so no two plates look alike.
+* **Legend key.** Fixed colour words for every shipped palette; the text starter ends with what
+  the violins, points, bar and whisker are; `make_figure.py` still runs without the key module.
+* Errors the engine raises for bad input are `StatsError` (a `ValueError`), so an app that
+  embeds the engine can show them instead of exiting.
 
 ### R Shiny app (`plaque_stats/app.R`)
 

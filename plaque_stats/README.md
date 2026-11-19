@@ -132,21 +132,24 @@ Common options (everything is also settable from a JSON `--config`):
 | `--subgroup col --control LEVEL` | second factor (e.g. host): each non‑control level is tested against `LEVEL` **within every group**; the p‑values are **Holm‑adjusted within each group** and the raw p is kept in the CSV as `p_raw` |
 | `--order T4,T7,lambda` | x‑axis order |
 | `--palette okabe\|set2\|tab10\|warm\|cool\|grays` or `"#hex,#hex,…"` | a named colour theme, or your own per‑sample colours |
-| `--annotate auto\|all\|adjacent\|none` | which pairs get significance brackets |
+| `--equal-var auto\|yes\|no` | 3+ samples, parametric: `auto` lets Levene decide, `no` forces Welch's ANOVA + Games–Howell, `yes` forces ANOVA + Tukey |
+| `--posthoc auto\|dunnett` with `--control NAME` | `dunnett`: compare every sample with one control (simultaneous 95 % intervals) instead of all pairs |
+| `--equivalence-margin 0.5` | adds a TOST equivalence test per pair for the margin you give (in the unit of the measurement) |
+| `--annotate auto\|all\|adjacent\|letters\|none` | which pairs get significance brackets; `letters` draws a compact letter display instead (samples sharing a letter do not differ); with more than 5 samples `auto` shows only the significant comparisons against the first sample |
 | `--violin-fill auto\|neutral\|group` | violin fill (default `auto`: neutral grey in SuperPlot mode; use `group` + `--palette` to colour each sample differently) |
 | `--center mean\|median` | group centre marker (default mean) |
-| `--error sd\|sem\|ci95\|iqr\|none` | error bar on the centre marker (auto: SEM for mean, IQR for median) |
+| `--error sd\|sem\|ci95\|iqr\|none` | error bar on the centre marker (auto: SEM for mean, IQR for median; with `--center median` only `iqr`, `ci95` (bootstrap) or `none`) |
 | `--frame` | draw a full box/frame around the plot (all four spines) |
 | `--no-n` | hide the `n = …` plaque‑count labels on top of each group |
 | `--no-stats-table` | skip the rendered descriptive‑stats table PNG |
 | `--formats png,svg,pdf,tiff` | which figure formats to write |
-| `--title / --ylabel / --xlabel / --width / --height / --dpi / --log-y / --no-points / --no-box / --theme` | figure customization |
+| `--title / --ylabel / --xlabel / --width / --height / --dpi / --log-y / --no-points / --theme` | figure customization (`--log-y` refuses values ≤ 0 unless `--log-y-drop-nonpositive` is given; the number dropped is then stated) |
 
 ### R‑Shiny (`app.R`)
 
 ```r
 # first time only:
-install.packages(c("shiny","ggplot2","dplyr","tidyr","readr","DT","rstatix","ggpubr","scales","svglite"))
+install.packages(c("shiny","ggplot2","dplyr","tidyr","readr","DT","ggpubr","scales","svglite","jsonlite","zip"))
 
 # then, from the folder that contains plaque_stats/:
 shiny::runApp("plaque_stats", launch.browser = TRUE)
@@ -259,9 +262,11 @@ with `--unit plaque` (the report will flag it).
 **How `auto` chooses.** With **fewer than 8 replicates (plates) in any group** — the usual case —
 `auto` is **always parametric on the plate means**: Shapiro–Wilk is unreliable at that *n* and the rank
 tests are underpowered (Mann–Whitney cannot reach p < 0.05 at 3 vs 3). Only when **every group has
-≥ 8 replicates** does it consult Shapiro–Wilk (per group) and Levene (equal variances) and switch to the
-non‑parametric family if either fails. In the parametric >2‑group case, a failed Levene test switches
-ANOVA + Tukey to **Welch's ANOVA + Games–Howell** instead of ignoring the unequal variances.
+≥ 8 replicates** does it consult Shapiro–Wilk (per group) and switch to the non‑parametric family
+if normality fails. Unequal variances alone do not send normal data to a rank test: in the parametric
+>2‑group case, a failed Levene test switches ANOVA + Tukey to **Welch's ANOVA + Games–Howell**
+(`--equal-var no` forces that choice, `--equal-var yes` forces ANOVA + Tukey; Levene cannot detect
+unequal spread at 3 plates per sample, so choose it yourself when you expect it).
 `--parametric parametric|nonparametric` overrides all of this; the report always states which test ran.
 For `--subgroup`/`--control` comparisons the two‑sample test above is used within each group and the
 p‑values are Holm‑adjusted within that group (raw p kept as `p_raw`). Significance stars:
