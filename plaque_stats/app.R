@@ -1583,6 +1583,10 @@ server <- function(input, output, session) {
             axis.line = if (isTRUE(input$frame)) element_blank()
                         else element_line(linewidth = lk$axis_line_width, color = lk$axis_color),
             axis.ticks = element_line(linewidth = lk$axis_line_width, color = lk$axis_color))
+    # CT-R1 F17: long or many sample names are tilted instead of printed on top of each other
+    if (sum(nchar(levels(d$group))) * lk$base_size / 14 > 55 || nlevels(d$group) > 8)
+      g <- g + theme(axis.text.x = element_text(face = "bold", angle = 45, hjust = 1, vjust = 1),
+                 plot.margin = margin(t = 16, r = 12, b = 6, l = 60))
     if (length(caption))                 # only when there is something the figure must say
       g <- g + labs(caption = paste(caption, collapse = "\n")) +
         theme(plot.caption = element_text(hjust = 0, size = rel(0.7), colour = "#33413c"),
@@ -1611,7 +1615,8 @@ server <- function(input, output, session) {
                      linewidth = 0.3, colour = "black") +
         # stars and p-values follow the base font size too (3.88 at 14 pt, as ggpubr drew them)
         geom_text(data = p, aes(x = xmid, y = ylab, label = label, vjust = vj), inherit.aes = FALSE,
-                  size = 3.88 * (lk$base_size / 14),
+                  # asterisks are small glyphs: drawn larger than a p-value (CT-R1 F7 look)
+                  size = ifelse(grepl("^\\*+$", p$label), 5.2, 3.88) * (lk$base_size / 14),
                   family = family, colour = "black")
     }
     g
