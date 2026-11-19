@@ -932,7 +932,7 @@ class PlaqueCanvas(QWidget):
         # labels, the results table INDEX, the CSV, the annotated figure and the
         # ground-truth export all read in the same human-obvious order with #1 at
         # the top of the image. Selection is by _uid, so it survives reordering.
-        self._plaques.sort(key=lambda p: (p["center"][1], p["center"][0]))
+        self._plaques.sort(key=engine_api.reading_order_key)   # shared with Batch (CT-R1 F17)
         self._mark_overlaps()
 
     def _mark_overlaps(self):

@@ -55,7 +55,53 @@ def find_images(folder):
             except Exception:                        # pragma: no cover
                 pass
             out.append(path)
-    return sorted(out)
+    # Natural order (Plate_2 before Plate_10), so the progress line, per_plate.csv and the
+    # Batch table all list the plates the way a person numbers them (CT-R1 F18).
+    return sorted(out, key=lambda p: natural_key(os.path.basename(p)))
+
+
+def natural_key(text):
+    """Sort key that orders embedded numbers by value: Plate_2 < Plate_10 < plate_11."""
+    import re
+    parts = re.split(r"(\d+)", str(text).lower())
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in parts if t != ""]
+
+
+def error_reason(exc, path):
+    """Why a plate could not be measured, in plain words and WITHOUT the path."""
+    name = os.path.basename(path)
+    raw = " ".join(str(exc).split()) or type(exc).__name__
+    low = raw.lower()
+    if "cannot identify image file" in low or "could not be read" in low:
+        return ("not a readable image (empty or damaged file?). Re-export it as TIFF, PNG or "
+                "JPEG and run the batch again")
+    # drop the path (quoted or not) from the engine's sentence; it is given once, at the end
+    reason = raw
+    for token in (repr(path), '"%s"' % path, path, repr(name)):
+        reason = reason.replace(token, "").strip()
+    return " ".join(reason.split()).strip(" :-") or type(exc).__name__
+
+
+def friendly_error(exc, path):
+    """One line for a plate that could not be measured: FILE NAME first, then the reason in
+    plain words, the full path last. The raw exception text started with a 150-character
+    path, so the reason was cut off in the table and the status line (CT-R1 F18)."""
+    return "%s: %s  [%s]" % (os.path.basename(path), error_reason(exc, path), path)
+
+
+def qc_flag_counts(df):
+    """How many of a plate's plaques carry each 'look at me' QC flag: EDGE (touches the dish
+    rim / image border), OVERLAP (touches another plaque) and MERGED? (probably two plaques
+    counted as one). Tells the user WHICH plates to open in Measure (CT-R1, idea 8)."""
+    out = {"n_edge": 0, "n_overlap": 0, "n_merged": 0}
+    if df is None or "QC_FLAG" not in getattr(df, "columns", ()):
+        return out
+    for flags in df["QC_FLAG"].fillna("").astype(str):
+        parts = set(flags.split("|"))
+        out["n_edge"] += "EDGE" in parts
+        out["n_overlap"] += "OVERLAP" in parts
+        out["n_merged"] += "MERGED?" in parts
+    return {k: int(v) for k, v in out.items()}
 
 
 def _safe_float(v):
@@ -118,7 +164,12 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # ``watershed`` flag, and let an explicit small=True still apply in published
     # mode (published forces sensitive off inside the engine regardless).
     mode_kwargs = dict(MODE_KWARGS.get(mode, {"small": True}))
-    if watershed:
+    # Watershed splitting exists only in the Current / Sensitive engines: Published forces it
+    # off inside the engine and Precise never reads it. Record (and pass) what is APPLIED,
+    # not what was ticked -- run_metadata.json said watershed:true for Published runs that
+    # never split anything (CT-R1 F18).
+    watershed_used = bool(watershed) and mode in ("current", "sensitive")
+    if watershed_used:
         mode_kwargs["watershed"] = True
     # Published gets -small ONLY when the caller asks for it. The old default (small=True)
     # made the Batch tab's "Published" run the engine with -small, so it disagreed with the
@@ -147,7 +198,11 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 det = engine_api.detect_single(
                     path, plate_mm=plate_mm, **mode_kwargs)
 
-            plaques = det["plaques"]
+            # Number the plaques exactly as the Measure tab does (#1 = topmost), so a row of
+            # data-green-<name>.csv / all_plaques.csv and a number on the annotated image
+            # mean the same plaque as in Measure. The engine's own order ran bottom-up
+            # (CT-R1 F17). Only the ORDER changes; every measured value is the same.
+            plaques = engine_api.reading_order(det["plaques"])
             orig_bgr = det["orig_bgr"]
             ppm = det["pxl_per_mm"]
             lawn_gray = det["lawn_gray"]
@@ -186,7 +241,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             tilt_flag = bool(axis_ratio is not None and axis_ratio > 1.03)
 
             n_plaques = len(plaques)                 # what the CSV actually holds
-            plate_rows.append({
+            row = {
                 "image": os.path.basename(path),
                 "n_plaques": n_plaques,
                 "mm_per_px": _safe_float(ppm),
@@ -194,7 +249,9 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 "mean_diam_mm": mean_diam,
                 "axis_ratio": axis_ratio,
                 "tilt_flag": tilt_flag,
-            })
+            }
+            row.update(qc_flag_counts(df))           # n_edge / n_overlap / n_merged
+            plate_rows.append(row)
 
             # add the IMAGE column and stash for the combined all_plaques.csv
             df = df.copy()
@@ -205,7 +262,9 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 progress("%d/%d %s: %d plaques" % (i, N, name, n_plaques))
 
         except Exception as exc:  # one bad image must not abort the whole batch
-            errors.append({"image": os.path.basename(path), "error": str(exc)})
+            message = friendly_error(exc, path)
+            errors.append({"image": os.path.basename(path), "error": message,
+                           "reason": error_reason(exc, path)})
             # record an error row in the per-plate table so it's visible in the CSV
             plate_rows.append({
                 "image": os.path.basename(path),
@@ -214,18 +273,27 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 "median_diam_mm": None,
                 "mean_diam_mm": None,
                 "axis_ratio": None,
-                "tilt_flag": False,
-                "error": str(exc),
+                "tilt_flag": None,           # unknown for a plate that was not measured
+                "n_edge": None,
+                "n_overlap": None,
+                "n_merged": None,
+                "error": message,
             })
             if progress:
-                progress("%d/%d %s: ERROR %s" % (i, N, name, exc))
+                progress("%d/%d %s" % (i, N, message))
 
     # ---- assemble + write the combined CSVs ------------------------------ #
     plate_cols = ["image", "n_plaques", "mm_per_px", "median_diam_mm",
-                  "mean_diam_mm", "axis_ratio", "tilt_flag"]
+                  "mean_diam_mm", "axis_ratio", "tilt_flag",
+                  "n_edge", "n_overlap", "n_merged"]
     if any("error" in r for r in plate_rows):
         plate_cols = plate_cols + ["error"]
     summary_df = pd.DataFrame(plate_rows, columns=plate_cols)
+    # Counts are whole numbers. One failed plate (None) used to turn the whole column into
+    # floats, so the CSV and the table read "44.0" and "nan" (CT-R1 F18). The nullable
+    # integer type writes 44 and an empty cell.
+    for col in ("n_plaques", "n_edge", "n_overlap", "n_merged"):
+        summary_df[col] = pd.array(summary_df[col].tolist(), dtype="Int64")
 
     if all_frames:
         all_df = pd.concat(all_frames, ignore_index=True)
@@ -248,7 +316,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                                    sensitive=(mode == "sensitive"),
                                    precise=(mode == "precise")),
             {"mode": mode, "plate_size_mm": plate_mm, "small": small_used,
-             "watershed": bool(watershed), "crops": bool(crops), "folder": folder},
+             "watershed": watershed_used, "crops": bool(crops), "folder": folder},
             [{"file": r.get("image"), "n_plaques": r.get("n_plaques"),
               "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),
               "tilt_flag": r.get("tilt_flag"), "error": r.get("error")}
@@ -294,6 +362,12 @@ def main(argv=None):
     ap.add_argument("--crops", action="store_true",
                     help="also write a Fiji-calibrated cropped-plate TIFF per image")
     args = ap.parse_args(argv)
+
+    if not find_images(args.folder):
+        # an empty folder used to "succeed" with 0 images and two header-only CSVs
+        print("No images found in %s (looked for %s). Nothing was written."
+              % (args.folder, ", ".join(IMAGE_EXTS)))
+        return 1
 
     res = batch_measure(args.folder, plate_mm=args.plate_mm, mode=args.mode,
                         out_dir=args.out, crops=args.crops, progress=lambda s: print(s))

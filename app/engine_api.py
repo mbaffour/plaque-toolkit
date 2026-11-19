@@ -446,11 +446,36 @@ def _adopt_precise_plaques(result, plaques, pdf):
     result["published"] = False
 
 
+def reading_order_key(p):
+    """Sort key that numbers plaques the way the Measure tab and the user guide do: #1 is the
+    topmost plaque, counting downward, left-to-right between plaques at the same height.
+    The ONE definition of that order: the canvas (PlaqueCanvas._reorder) and the Batch tab's
+    per-image outputs both sort with it, so plaque #7 in a batch CSV / annotated image is
+    plaque #7 when the same plate is opened in Measure (CT-R1 F17)."""
+    c = p["center"]
+    return (c[1], c[0])
+
+
+def reading_order(plaques):
+    """`plaques` as a new list in reading_order_key order (stable; the input is untouched)."""
+    return sorted(plaques, key=reading_order_key)
+
+
+def compare_images(directory):
+    """The images a Compare run would analyse in `directory` -- the turbidity engine's own
+    list (recursive, skipping the toolkit's output folders), so the tab's "no images" check
+    can never disagree with the engine (CT-R1 F2)."""
+    import plaque_turbidity as ptb
+    return ptb.list_images(directory)
+
+
 def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, dark=None,
                 core=1.0, group_by_prefix=False, dilution=None, volume_ul=None,
-                watershed=False, published=False, out_dir="out_turbidity"):
+                watershed=False, published=False, out_dir="out_turbidity", key_on_figure=True):
     """Batch cross-phage turbidity. Writes per_phage.csv/qc.csv/figures into out_dir and
-    returns the plaque-level DataFrame + out_dir."""
+    returns the plaque-level DataFrame, out_dir and `figures`: the records of the figures
+    THIS run wrote (plaque_turbidity.write_plots), which is exactly what the tab shows --
+    never a glob of the folder, which also matched an earlier run's files (CT-R1 F4)."""
     import plaque_turbidity as ptb
     with _LOCK:
         pst.use_published = bool(published)
@@ -462,8 +487,39 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
             blank or None, flat or None, out_dir,
             group_by_prefix=bool(group_by_prefix), dark_path=dark or None,
             core_frac=float(core), make_overlays=True,
-            dilution=dilution, volume_ul=volume_ul, make_plots=True)
-    return {"df": df, "out_dir": out_dir}
+            dilution=dilution, volume_ul=volume_ul, make_plots=False)
+    # Plotting runs here, on the caller's (worker) thread, AFTER the engine lock is released.
+    figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
+    return {"df": df, "out_dir": out_dir, "figures": figures}
+
+
+def render_compare_figures(df, out_dir, key_on_figure=True):
+    """Re-draw the Compare figures of the run whose plaque table is `df`, with or without
+    the legend key on the figure (the tab's "Place key on figure" switch). Same code as the
+    run itself, so the result has the same shape as run_compare's."""
+    import plaque_turbidity as ptb
+    figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
+    return {"df": df, "out_dir": out_dir, "figures": figures}
+
+
+def save_compare_keys(figures, dest_dir):
+    """Write the stand-alone legend key (+ legend text) of every figure record in `figures`
+    into `dest_dir`, in the figure's own formats. Each key is the one its figure was drawn
+    with (the record carries it), so this can never be a stale copy. Returns the paths."""
+    import plaque_turbidity as ptb
+    legend_key = ptb._legend_key_module()        # the helper the figures themselves used
+    if legend_key is None:
+        raise RuntimeError("the legend-key helper (plaque_stats/legend_key.py) is not installed")
+    os.makedirs(dest_dir, exist_ok=True)
+    out = []
+    for f in figures or []:
+        key = f.get("key")
+        if not key or not key.get("entries"):
+            continue
+        base = os.path.join(dest_dir, os.path.splitext(os.path.basename(f["png"]))[0])
+        formats = [os.path.splitext(p)[1].lstrip(".") for p in f.get("files", [])] or ["png"]
+        out.extend(legend_key.write_key_files(key, base, formats, dpi=300))
+    return out
 
 
 def smoke(extra=None):

@@ -274,7 +274,9 @@ def test_turbidity_histograms_write_their_key(tmp_path):
     pt.write_plots(df, str(tmp_path))
     assert (tmp_path / "hist_DIAMETER_MM.png").exists()
     assert (tmp_path / "hist_DIAMETER_MM_legend_key.png").exists()
-    assert not (tmp_path / "compare_DIAMETER_MM_legend_key.png").exists()   # box plot: no colours
+    # CT-R1 F13: the box plots now draw each phage in its histogram colour and explain their
+    # marks (mean / median), so they carry a key too (was: "box plot: no colours", no key).
+    assert (tmp_path / "compare_DIAMETER_MM_legend_key.png").exists()
     text = (tmp_path / "hist_DIAMETER_MM_legend_text.txt").read_text(encoding="utf-8")
     cols = pt.phage_colours(["T4", "T7", "lambda"])
     assert text.startswith("T4 (%s, filled bars)" % lk.colour_name(cols["T4"]))

@@ -169,7 +169,13 @@ def test_titer_carries_a_poisson_interval(neutral_plate_tif, tmp_path):
     n = q["N_PLAQUES"]
     per_ml = 1.0 / 0.1 * 1e6
     assert q["PFU_PER_ML"] == pytest.approx(n * per_ml, rel=1e-6)
-    assert q["PFU_PER_ML_CI95_HI"] == pytest.approx((n + 1.96 * math.sqrt(n)) * per_ml, rel=1e-6)
+    # CT-R1: exact (Garwood) Poisson limits replaced n +/- 1.96*sqrt(n), which is wrong at
+    # low counts. The limits themselves are checked against scipy in test_ct_r1_compare_batch.
+    lo_n, hi_n = ptb.poisson_ci95(int(n))
+    assert q["PFU_PER_ML_CI95_LO"] == pytest.approx(lo_n * per_ml, rel=1e-6)
+    assert q["PFU_PER_ML_CI95_HI"] == pytest.approx(hi_n * per_ml, rel=1e-6)
+    assert q["PFU_PER_ML_CI95_LO"] < q["PFU_PER_ML"] < q["PFU_PER_ML_CI95_HI"]
+    assert q["PFU_PER_ML_CI95_HI"] > (n + 1.96 * math.sqrt(n)) * per_ml   # wider above at low n
 
 
 def test_a_named_reference_that_cannot_be_read_stops_the_run(neutral_plate_tif, tmp_path):
