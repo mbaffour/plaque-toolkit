@@ -268,6 +268,10 @@ def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=N
     meta = data.get("meta", {}) or {}
     gt_plaques = data.get("plaques", []) or []
     gt_pts = _gt_points_from_labels(gt_plaques)
+    if len(gt_pts) < len(gt_plaques):
+        # CT-R1 DA-F22: plaques without coordinates were silently dropped (scored as 0 truth)
+        raise ValueError("%d of %d labelled plaques have no x_px/y_px coordinates; re-export the "
+                         "labels from the Measure tab" % (len(gt_plaques) - len(gt_pts), len(gt_plaques)))
 
     image_path = _resolve_image_path(label_json_path, meta)
     if not image_path or not os.path.exists(image_path):
@@ -304,24 +308,42 @@ def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=N
 # --------------------------------------------------------------------------- #
 #  Batch validation
 # --------------------------------------------------------------------------- #
-def _collect_label_paths(label_paths):
-    """Normalise the `label_paths` argument into a flat list of .json files.
+LABEL_SCHEMA_PREFIX = "plaque-groundtruth"
 
-    Accepts a single directory (glob labels_*.json within it; fall back to *.json), a single
-    file path, or a list of files/dirs."""
+
+def is_label_file(path):
+    """True only for a ground-truth label JSON (meta.schema starts with 'plaque-groundtruth').
+    CT-R1 DA-F22: run_metadata.json and other JSON used to be scored as labels."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        schema = ((data or {}).get("meta") or {}).get("schema") or ""
+        return str(schema).startswith(LABEL_SCHEMA_PREFIX)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
+def collect_label_files(label_paths):
+    """(label_files, skipped): every .json under the given folder(s)/file(s) whose meta.schema
+    marks it as a plaque ground-truth label file, and the other JSON files that were skipped."""
     if isinstance(label_paths, (str, os.PathLike)):
         label_paths = [label_paths]
-    files = []
+    cands = []
     for entry in label_paths:
         entry = os.fspath(entry)
         if os.path.isdir(entry):
-            found = sorted(glob.glob(os.path.join(entry, "labels_*.json")))
-            if not found:
-                found = sorted(glob.glob(os.path.join(entry, "*.json")))
-            files.extend(found)
+            cands.extend(sorted(glob.glob(os.path.join(entry, "*.json"))))
         else:
-            files.append(entry)
-    return files
+            cands.append(entry)
+    files, skipped = [], []
+    for f in cands:
+        (files if is_label_file(f) else skipped).append(f)
+    return files, skipped
+
+
+def _collect_label_paths(label_paths):
+    """The label files only (see collect_label_files)."""
+    return collect_label_files(label_paths)[0]
 
 
 def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress=None):
@@ -338,7 +360,7 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
         "errors":       [ {label_file, mode, error}, ... ],
       }
     """
-    files = _collect_label_paths(label_paths)
+    files, skipped = collect_label_files(label_paths)
     if isinstance(modes, str):
         modes = [m.strip() for m in modes.split(",") if m.strip()]
 
@@ -379,6 +401,8 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
         f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
         mae_series = pd.to_numeric(sub["size_mae_mm"], errors="coerce").dropna()
         mean_mae = float(mae_series.mean()) if len(mae_series) else None
+        if len(sub) == 0:                     # nothing scored: no row of zeros (CT-R1 DA-F22)
+            precision = recall = f1 = None
         mode_rows.append({
             "mode": mode,
             "n_plates": int(len(sub)),
@@ -391,7 +415,41 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
         columns=["mode", "n_plates", "tp", "fp", "fn", "precision", "recall", "f1",
                  "mean_size_mae_mm"])
 
-    return {"per_plate_df": per_plate_df, "per_mode_df": per_mode_df, "errors": errors}
+    if not files:
+        per_mode_df = per_mode_df.iloc[0:0]
+    return {"per_plate_df": per_plate_df, "per_mode_df": per_mode_df, "errors": errors,
+            "n_label_files": len(files), "skipped": [os.path.basename(f) for f in skipped],
+            "n_failed": len(errors), "modes": list(modes)}
+
+
+def summary_status(res):
+    """'Scored N plates x M engines; K failed (see the last column)' (+ skipped JSON)."""
+    msg = "Scored %d plate%s x %d engine%s; %d failed (see the last column)." % (
+        res["n_label_files"], "" if res["n_label_files"] == 1 else "s",
+        len(res["modes"]), "" if len(res["modes"]) == 1 else "s", res["n_failed"])
+    if res.get("skipped"):
+        k = len(res["skipped"])
+        msg += (" Skipped 1 JSON file that is not a plaque label file." if k == 1 else
+                " Skipped %d JSON files that are not plaque label files." % k)
+    return msg
+
+
+def report_sentence(res, engine_names=None, version=None):
+    """Paste-ready sentence per engine: engine, toolkit version, plates, plaques, P/R/F1."""
+    engine_names = engine_names or {}
+    per_plate = res["per_plate_df"]
+    out = []
+    for _, row in res["per_mode_df"].iterrows():
+        if row["precision"] is None or row["precision"] != row["precision"]:
+            continue
+        ok = per_plate[(per_plate["mode"] == row["mode"]) & (per_plate["error"] == "")]
+        n_plaques = int(pd.to_numeric(ok["n_gt"], errors="coerce").fillna(0).sum())
+        out.append("Against %d hand-corrected plate%s (%d plaques), the %s engine of Plaque Toolkit%s "
+                   "detected plaques with precision %.3f, recall %.3f and F1 %.3f."
+                   % (int(row["n_plates"]), "" if int(row["n_plates"]) == 1 else "s", n_plaques,
+                      engine_names.get(row["mode"], row["mode"]),
+                      (" " + str(version)) if version else "", row["precision"], row["recall"], row["f1"]))
+    return " ".join(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -413,6 +471,11 @@ def _main(argv=None):
         print("  ..", msg)
 
     result = validate(args.labels, modes=modes, match_frac=args.match_frac, progress=_progress)
+    if not result["n_label_files"]:
+        print("No plaque label files found in %s (skipped %d other JSON files)."
+              % (args.labels, len(result["skipped"])))
+        return 1
+    print(summary_status(result))
 
     pd.set_option("display.width", 160)
     pd.set_option("display.max_columns", 20)

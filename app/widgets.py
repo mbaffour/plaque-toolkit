@@ -40,6 +40,42 @@ NO_VALUE = "—"
 _FLAG_TINT = QColor(255, 176, 32, 70)
 
 
+def _is_p_column(col):
+    c = str(col).lower()
+    return c in ("p", "p_adj", "p_raw") or c.startswith("p_")
+
+
+def _display(val, col):
+    """CT-R1 DA-F11: what a cell SHOWS (the model keeps the raw value for sorting and copy):
+    floats to 4 significant digits without scientific notation or lost integer digits,
+    integers as integers, NaN/None blank, p-value columns '< 0.001' below 0.001."""
+    import math
+    import numbers
+    if val is None:
+        return ""
+    if isinstance(val, bool) or not isinstance(val, numbers.Real):
+        return str(val)
+    if isinstance(val, numbers.Integral):
+        return str(int(val))
+    v = float(val)
+    if v != v:
+        return ""
+    if math.isinf(v):
+        return "∞" if v > 0 else "-∞"
+    if _is_p_column(col) and 0 <= v < 0.001:
+        return "< 0.001"
+    if v == 0:
+        return "0"
+    if v.is_integer() and abs(v) < 1e15:
+        return str(int(v))
+    mag = int(math.floor(math.log10(abs(v))))
+    decimals = min(12, max(0, 3 - mag))
+    text = "%.*f" % (decimals, v)
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
 class PandasTableModel(QAbstractTableModel):
     """Read-only Qt table model backed by a pandas DataFrame.
 
@@ -87,7 +123,12 @@ class PandasTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             if col in self._dash_cols:
                 return NO_VALUE
-            return "" if val is None else str(val)
+            return _display(val, col)
+        if role == Qt.EditRole:
+            # CT-R1 DA-F11: the RAW value as text, for copy-to-clipboard (CopyableTableView)
+            if col in self._dash_cols:
+                return NO_VALUE
+            return "" if val is None or (isinstance(val, float) and val != val) else str(val)
         if role == Qt.UserRole:
             # raw value for numeric-aware sorting
             return val
@@ -142,6 +183,14 @@ class NumericSortProxy(QSortFilterProxyModel):
             return str(lv) < str(rv)
 
 
+def _copy_text(model, idx):
+    """Raw value for the clipboard (EditRole, CT-R1 DA-F11), else what is shown."""
+    v = model.data(idx, Qt.EditRole)
+    if v is None:
+        v = model.data(idx, Qt.DisplayRole)
+    return "" if v is None else v
+
+
 class CopyableTableView(QTableView):
     """QTableView with Excel-friendly clipboard support.
 
@@ -149,8 +198,8 @@ class CopyableTableView(QTableView):
       pastes straight into Excel/Sheets with columns split. If nothing is selected it
       copies the whole table.
     • Right-click offers Copy selected / Copy whole table / Select all.
-    Rows are emitted in the currently-visible (sorted) order, using the same rounded
-    display strings shown on screen and in the CSV export."""
+    Rows are emitted in the currently-visible (sorted) order, with the table's RAW values
+    (the model's EditRole), not the 4-significant-digit display (CT-R1 DA-F11)."""
 
     copied = Signal(int)   # number of data rows placed on the clipboard
 
@@ -183,7 +232,7 @@ class CopyableTableView(QTableView):
                 for c in range(ncols)))
         for r in rows:
             lines.append("\t".join(
-                str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                str(_copy_text(model, model.index(r, c)))
                 for c in range(ncols)))
         return "\r\n".join(lines), len(rows)
 

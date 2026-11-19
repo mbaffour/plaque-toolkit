@@ -73,7 +73,9 @@ class FijiCompareDialog(QDialog):
         lay.addLayout(btns)
 
     def _choose(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose Fiji Results CSV", "", "CSV (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose Fiji Results table", "",
+            "Fiji Results (*.csv *.xls *.txt *.tsv);;All files (*)")
         if not path:
             return
         try:
@@ -89,7 +91,8 @@ class FijiCompareDialog(QDialog):
         self.result = res
         self.file_lbl.setText(os.path.basename(path))
         self.model.set_dataframe(res["paired"])
-        self.save_btn.setEnabled(not res["paired"].empty)
+        # CT-R1 DA-F8: never offer to save a pairing that is probably wrong
+        self.save_btn.setEnabled(not res["paired"].empty and not res["summary"].get("low_match"))
         self._show_summary(res["summary"], res["unmatched_app"], res["unmatched_fiji"])
 
     def _show_summary(self, s, ua, uf):
@@ -114,6 +117,12 @@ class FijiCompareDialog(QDialog):
             parts.append(f"<br><span style='color:#b45309'>App plaques with no Fiji match: {ua}.</span>")
         if uf:
             parts.append(f"<span style='color:#b45309'>Fiji rows with no app match: {uf}.</span>")
+        if s.get("low_match") and s["n_matched"] > 0:
+            parts.insert(0, "<span style='color:#b91c1c'><b>Only %d of %d plaques matched, so this "
+                            "pairing is probably wrong and cannot be saved.</b> If Fiji measured your "
+                            "own image, choose 'auto-align'; check that the Fiji table is from this "
+                            "plate and has Centroid X/Y.</span><br>"
+                            % (s["n_matched"], min(s["n_app"], s["n_fiji"])))
         if s["n_matched"] == 0:
             parts.append("<br><b>No matches</b> — if you used your own image, switch to "
                          "'auto-align'; otherwise check you exported Centroid X/Y from Fiji.")

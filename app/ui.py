@@ -1823,14 +1823,27 @@ class AboutTab(QWidget):
             "detector, a PlaqSeg deep-learning model, a manual-correction editor, and mm calibration. "
             "Plaques are numbered <b>1→N from the top</b>.</p>"
 
+            # CT-R1 DA-F23: the real seven tabs, one accurate line each
             "<p><b>The tabs</b></p><ul>"
-            "<li><b>Measure</b> — open one image, auto-detect, correct by hand, read size + turbidity, export.</li>"
-            "<li><b>Batch</b> — a whole folder → one CSV per plate + an all-plaques CSV + annotated images. "
-            "(Drop a folder onto the tab.)</li>"
-            "<li><b>Compare turbidity</b> — a folder of phages → optical density, clarity class, titer/PFU, "
-            "per-phage stats + figures.</li>"
+            "<li><b>Measure</b> — open one plate photo, auto-detect, correct by hand, read size + "
+            "turbidity, export (CSV, annotated figure, Fiji bundle, ground-truth labels).</li>"
+            "<li><b>Batch</b> — a whole folder of plates → one CSV per plate + an all-plaques CSV + "
+            "annotated images. (Drop a folder onto the tab.)</li>"
+            "<li><b>Compare turbidity</b> — a folder of phages → optical density, clarity class, "
+            "titer/PFU, per-phage statistics + figures.</li>"
+            "<li><b>Analyze</b> — group plates into samples, then a violin SuperPlot with the right "
+            "statistics (the plate is the experimental unit), summary tables and a ZIP export.</li>"
             "<li><b>Validate</b> — score the engines against your own hand-corrected labels "
-            "(precision / recall / F1 + size agreement).</li></ul>"
+            "(precision / recall / F1 + size agreement), with a CSV and a sentence to paste.</li>"
+            "<li><b>Fiji agreement</b> — paste paired Toolkit and Fiji/ImageJ sizes → Bland–Altman, "
+            "ICC, r, a method-comparison figure and a sentence for your paper.</li>"
+            "<li><b>About</b> — this page.</li></ul>"
+
+            "<p><b>Legend key</b> — every figure (Analyze, Compare turbidity, Fiji agreement) "
+            "has a <b>Legend key…</b> button that saves a small image listing each sample, point "
+            "and line style with its exact colour, in the figure’s format; a <b>legend text starter</b> "
+            "sentence to paste into your figure legend (with Copy); and a <b>Place key on figure</b> "
+            "switch that draws the same key on the figure itself.</p>"
 
             "<p><b>Detection engines</b> (Measure dropdown)</p><ul>"
             "<li><b>Published (validated)</b> — the exact Trofimova &amp; Jaschke 2021 algorithm. "
@@ -1876,8 +1889,9 @@ class AboutTab(QWidget):
             "independent stamp: still verify by eye and report your own validation before publishing. "
             "For citable numbers use <b>Published (validated)</b>.</p>"
 
-            "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide, interactive guide, "
-            "validation, how it was built).</p>")
+            "<p style='color:#6b7484'>Full guides live in the <b>Help</b> menu (User guide; How-to, use "
+            "cases &amp; verification; Understanding the agreement statistics; How to validate this "
+            "program; How it was built; and more).</p>")
         body.setObjectName("AboutBody"); body.setWordWrap(True); body.setOpenExternalLinks(True)
         body.setTextInteractionFlags(Qt.TextBrowserInteraction)
         lay.addWidget(body)
@@ -1932,7 +1946,10 @@ class DocViewer(QDialog):
         super().__init__(parent)
         self._path, docs_dir = _resolve_doc(name)
         self._interactive = _is_interactive_html(self._path)
-        self.setWindowTitle("Plaque Toolkit — help — %s" % name)
+        self._is_md = False
+        self._anchors = {}
+        shown = os.path.basename(name) if os.path.isabs(name) else name
+        self.setWindowTitle("Plaque Toolkit — help — %s" % shown)
         _av = QApplication.primaryScreen().availableGeometry()   # never open bigger than the screen
         self.resize(min(960, _av.width() - 60), min(800, _av.height() - 100))
         self.setObjectName("AppRoot")
@@ -1959,10 +1976,12 @@ class DocViewer(QDialog):
                 self.browser.setHtml(text)
             else:
                 self.browser.setMarkdown(text)
+                self._is_md = True
+                self._index_headings()
         elif self._path is None:
             self.browser.setPlainText("Could not find %s. It ships in the docs/ folder." % name)
 
-        cap = QLabel(name); cap.setObjectName("SummaryHeading")
+        cap = QLabel(shown); cap.setObjectName("SummaryHeading")
         top = QHBoxLayout(); top.addWidget(cap); top.addStretch()
         self.ext_btn = QPushButton("Open in web browser")
         self.ext_btn.setToolTip("Open this page in your default web browser (full CSS layout, "
@@ -1994,9 +2013,85 @@ class DocViewer(QDialog):
         if self._path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
 
+    # CT-R1 DA-F23: setMarkdown() gives headings no anchors, so a table-of-contents link did
+    # nothing; and links to other documents were ignored. Headings are indexed by their
+    # GitHub-style slug (plus a punctuation-free form, and a prefix match for shortened links).
+    @staticmethod
+    def _slug(text):
+        import re
+        t = re.sub(r"[^\w\- ]", "", str(text).strip().lower(), flags=re.UNICODE)
+        return t.replace(" ", "-")
+
+    @staticmethod
+    def _loose(text):
+        import re
+        return re.sub(r"[^0-9a-z]", "", str(text).lower())
+
+    def _index_headings(self):
+        self._anchors = {}
+        block = self.browser.document().begin()
+        while block.isValid():
+            if block.blockFormat().headingLevel() > 0:
+                slug = self._slug(block.text())
+                key, k = slug, 1
+                while key in self._anchors:          # GitHub numbers duplicate headings
+                    key = "%s-%d" % (slug, k); k += 1
+                self._anchors[key] = block.position()
+            block = block.next()
+
+    def _find_anchor(self, fragment):
+        """Document position of the heading a #fragment points at, or None."""
+        from urllib.parse import unquote
+        frag = unquote(fragment).lower()
+        if frag in self._anchors:
+            return self._anchors[frag]
+        loose = self._loose(frag)
+        for slug, pos in self._anchors.items():
+            if self._loose(slug) == loose:
+                return pos
+        for slug, pos in self._anchors.items():
+            if loose and self._loose(slug).startswith(loose):
+                return pos
+        return None
+
+    def scroll_to(self, fragment):
+        """Scroll so the heading (Markdown) or named anchor (HTML) is at the top. True if found."""
+        if not fragment:
+            return False
+        if self._is_md:
+            pos = self._find_anchor(fragment)
+            if pos is None:
+                return False
+            from PySide6.QtGui import QTextCursor
+            block = self.browser.document().findBlock(pos)
+            cur = QTextCursor(block)
+            self.browser.setTextCursor(cur)
+            y = self.browser.document().documentLayout().blockBoundingRect(block).top()
+            self.browser.verticalScrollBar().setValue(int(y))
+            return True
+        self.browser.scrollToAnchor(fragment)
+        return True
+
+    def _open_linked_doc(self, url):
+        """A relative link to another .md/.html document opens it in a new viewer."""
+        base = os.path.dirname(self._path) if self._path else _resolve_doc("")[1]
+        target = os.path.normpath(os.path.join(base, url.path()))
+        if not os.path.exists(target):
+            QMessageBox.information(self, "Document not found",
+                                    "This link points to %s, which is not shipped with the app."
+                                    % url.path())
+            return None
+        v = DocViewer(target, self.parent() or self)
+        _DOC_VIEWERS.append(v)
+        v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
+        v.show(); v.raise_(); v.activateWindow()
+        if url.fragment():
+            v.scroll_to(url.fragment())
+        return v
+
     def _on_anchor(self, url):
-        """Internal #anchors scroll within the doc; an external http(s) link ASKS before opening
-        a web browser (per user request — nothing goes to the browser silently)."""
+        """Internal #anchors scroll within the doc; links to other .md/.html documents open in
+        the viewer; an external http(s) link ASKS before opening a web browser."""
         if url.scheme() in ("http", "https"):
             ret = QMessageBox.question(
                 self, "Open link in web browser?",
@@ -2004,8 +2099,10 @@ class DocViewer(QDialog):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ret == QMessageBox.Yes:
                 QDesktopServices.openUrl(url)
+        elif url.scheme() in ("", "file") and url.path().lower().endswith((".md", ".html", ".htm")):
+            self._open_linked_doc(url)
         elif url.fragment():
-            self.browser.scrollToAnchor(url.fragment())
+            self.scroll_to(url.fragment())
 
 
 def _is_interactive_html(path):
@@ -2268,6 +2365,14 @@ class ValidateTab(QWidget):
             label = next(l for l, k, _ in MODES if k == key)
             cb = QCheckBox(label); cb.setChecked(default); self.mode_checks[key] = cb; modes_box.addWidget(cb)
         modes_box.addStretch()
+        # CT-R1 DA-F22: an engine that cannot run here is unticked and disabled, with the reason
+        self._unavailable = set()
+        ok, why = engine_api.precise_available()
+        if not ok:
+            cb = self.mode_checks["precise"]
+            cb.setChecked(False); cb.setEnabled(False)
+            cb.setToolTip("Precise is not available on this computer: %s" % why)
+            self._unavailable.add("precise")
 
         self.run_btn = QPushButton(" Run validation"); self.run_btn.setObjectName("Primary")
         self.run_btn.setIcon(_icon(QStyle.SP_DialogApplyButton)); self.run_btn.clicked.connect(self._run)
@@ -2278,6 +2383,14 @@ class ValidateTab(QWidget):
         self.status = QLabel("First build ground truth: in Measure, correct a few plates by hand, then "
                              "Export → Ground-truth labels. Point here at that folder and score the engines.")
         self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
+        self._res = None
+        self.save_btn = QPushButton("Save results (CSV)…"); self.save_btn.clicked.connect(self._save)
+        self.save_btn.setToolTip("Write the per-engine and per-plate tables as two CSV files.")
+        self.sentence = QLineEdit(); self.sentence.setReadOnly(True)
+        self.sentence.setPlaceholderText("Run validation to get a sentence for your Methods/Results.")
+        self.sent_copy = QPushButton("Copy"); self.sent_copy.clicked.connect(self._copy_sentence)
+        for b in (self.save_btn, self.sent_copy):
+            b.setEnabled(False)
 
         self.mode_table = CopyableTableView(); self.mode_model = PandasTableModel()
         self.mode_table.setModel(self.mode_model); self.mode_table.setAlternatingRowColors(True)
@@ -2306,7 +2419,12 @@ class ValidateTab(QWidget):
         split.setChildrenCollapsible(False)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
-        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(split, 1)
+        srow = QHBoxLayout()
+        scap = QLabel("Paste-ready sentence"); scap.setObjectName("FieldLabel")
+        srow.addWidget(scap); srow.addWidget(self.sentence, 1); srow.addWidget(self.sent_copy)
+        srow.addWidget(self.save_btn)
+        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addLayout(srow)
+        lay.addWidget(split, 1)
 
     def _pick(self):
         p = QFileDialog.getExistingDirectory(self, "Folder of ground-truth labels")
@@ -2320,6 +2438,14 @@ class ValidateTab(QWidget):
         modes = tuple(k for k, cb in self.mode_checks.items() if cb.isChecked())
         if not modes:
             QMessageBox.warning(self, "Pick engines", "Tick at least one engine to score."); return
+        files, skipped = validate.collect_label_files(d)
+        if not files:
+            QMessageBox.warning(self, "No label files",
+                                "No plaque label files were found in this folder%s. Make them in "
+                                "Measure: correct a plate by hand, then Export → Ground-truth labels."
+                                % (" (%d other JSON file%s skipped)" % (len(skipped), "" if len(skipped) == 1 else "s")
+                                   if skipped else ""))
+            return
         if "precise" in modes and not engine_api.precise_available()[0]:
             QMessageBox.information(self, "Precise unavailable", "Precise isn't available here; untick it."); return
         self._set_busy(True); self.window().statusBar().showMessage("Validating…")
@@ -2331,17 +2457,46 @@ class ValidateTab(QWidget):
 
     def _set_busy(self, on):
         self.progress.setVisible(on)
-        for x in (self.run_btn,) + tuple(self.mode_checks.values()):
+        for x in (self.run_btn,) + tuple(cb for k, cb in self.mode_checks.items()
+                                         if k not in self._unavailable):
             x.setEnabled(not on)
 
     def _done(self, res):
         self._set_busy(False)
+        self._res = res
         self.mode_model.set_dataframe(res["per_mode_df"])
         self.plate_model.set_dataframe(res["per_plate_df"])
-        n = len(res["per_plate_df"])
-        self.status.setText(f"Scored {n} (plate × engine) results. Higher F1 = closer to your gold "
-                            "standard. See the Validation guide (Help menu) for how to report this.")
+        self.status.setText(validate.summary_status(res) + " Higher F1 = closer to your gold "
+                            "standard; see the Validation guide (Help menu) for how to report it.")
+        names = {k: l for l, k, _h in MODES}
+        self.sentence.setText(validate.report_sentence(res, names, __version__))
+        self.save_btn.setEnabled(res["n_label_files"] > 0)
+        self.sent_copy.setEnabled(bool(self.sentence.text()))
         self.window().statusBar().showMessage("Validation done.")
+
+    def _copy_sentence(self):
+        QApplication.clipboard().setText(self.sentence.text())
+        self.window().statusBar().showMessage("Sentence copied to the clipboard.", 3000)
+
+    def _save(self, path=None):
+        """Per-engine + per-plate tables, as <name>_per_engine.csv and <name>_per_plate.csv."""
+        if not self._res:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Save validation results",
+                                                  "validation_results.csv", "CSV (*.csv)")
+        if not path:
+            return None
+        base = path[:-4] if path.lower().endswith(".csv") else path
+        out = (base + "_per_engine.csv", base + "_per_plate.csv")
+        try:
+            self._res["per_mode_df"].to_csv(out[0], index=False, float_format="%.6g")
+            self._res["per_plate_df"].to_csv(out[1], index=False, float_format="%.6g")
+        except OSError as e:
+            QMessageBox.warning(self, "Could not save", "Saving the results failed:\n%s" % e)
+            return None
+        self.window().statusBar().showMessage("Saved %s and %s" % out, 6000)
+        return out
 
     def _err(self, m):
         self._set_busy(False)
@@ -2389,7 +2544,21 @@ class AgreementTab(QWidget):
             c.setObjectName("SummaryHeading")
         tb = QVBoxLayout(); tb.addWidget(tcap); tb.addWidget(self.tool_in)
         fb = QVBoxLayout(); fb.addWidget(fcap); fb.addWidget(self.fiji_in)
-        inrow = QHBoxLayout(); inrow.addLayout(tb); inrow.addLayout(fb)
+        # CT-R1 DA-F7: show what was actually read (the pairs + what was skipped / chosen), so a
+        # header digit or a row-number column can never shift the pairs unseen.
+        from PySide6.QtWidgets import QTableWidget
+        pcap = QLabel("Parsed pairs (preview)"); pcap.setObjectName("SummaryHeading")
+        self.parse_notes = QLabel("Compute to see the pairs as read."); self.parse_notes.setWordWrap(True)
+        self.parse_notes.setObjectName("ModeHelp")
+        self.preview = QTableWidget(0, 2)
+        self.preview.setHorizontalHeaderLabels(["Toolkit", "Fiji"])
+        self.preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview.setMaximumHeight(150); self.preview.setMinimumWidth(220)
+        self.preview.horizontalHeader().setStretchLastSection(True)
+        self.preview.verticalHeader().setDefaultSectionSize(20)
+        self.preview.setAccessibleName("Parsed pairs preview")
+        pb = QVBoxLayout(); pb.addWidget(pcap); pb.addWidget(self.parse_notes); pb.addWidget(self.preview)
+        inrow = QHBoxLayout(); inrow.addLayout(tb, 2); inrow.addLayout(fb, 2); inrow.addLayout(pb, 2)
 
         self.unit = QComboBox()
         self.unit.addItem("Diameter (mm)", "mm")
@@ -2425,15 +2594,32 @@ class AgreementTab(QWidget):
         self.savefig_btn.setToolTip("Save the figure as PNG/TIFF (high-res raster) or SVG/PDF/EPS "
                                     "(vector — open and edit in Illustrator, Inkscape or PowerPoint).")
         self.savecsv_btn = QPushButton("Save paired CSV…"); self.savecsv_btn.clicked.connect(self._save_csv)
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+        # CT-R1 DA-F4: the figure rule -- legend key (same formats as the figure), a legend text
+        # starter with Copy, and one "place on figure" switch; all read from the CURRENT figure.
+        self.key_btn = QPushButton("Legend key…"); self.key_btn.clicked.connect(self._save_key)
+        self.key_btn.setToolTip("Save the figure's legend key: every point and line style with its "
+                                "exact colour, in the figure's font and format.")
+        self.key_cb = QCheckBox("Place key on figure"); self.key_cb.setChecked(True)
+        self.key_cb.setToolTip("Draw the legend key below the two panels (the same entries as the "
+                               "stand-alone key from “Legend key…”).")
+        self.key_cb.toggled.connect(self._redraw)
+        self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
+        self.key_text.setPlaceholderText("Compute to get a sentence listing every point and line style.")
+        self.key_copy_btn = QPushButton("Copy"); self.key_copy_btn.clicked.connect(self._copy_key_text)
+        self._fig_ext = ".png"        # the format last chosen in "Save figure…" (the key follows it)
+        for b in self._result_buttons():
             b.setEnabled(False)
         rrow = QHBoxLayout(); rrow.addWidget(self.copy_btn); rrow.addWidget(self.savefig_btn)
+        rrow.addWidget(self.key_btn); rrow.addWidget(self.key_cb)
         rrow.addWidget(self.savecsv_btn); rrow.addStretch()
+        krow = QHBoxLayout()
+        kcap = QLabel("Legend text starter"); kcap.setObjectName("FieldLabel")
+        krow.addWidget(kcap); krow.addWidget(self.key_text, 1); krow.addWidget(self.key_copy_btn)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(intro); lay.addWidget(learn); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
         lay.addWidget(self.stats_card); lay.addWidget(self.fig_holder, 1)
-        lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow)
+        lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow); lay.addLayout(krow)
 
     def _build_stats_card(self):
         card = QFrame(); card.setObjectName("SummaryCard"); _shadow(card)
@@ -2451,40 +2637,63 @@ class AgreementTab(QWidget):
     def _compute(self):
         from app import agreement
         self.err.setText("")
-        tool = agreement.parse_column(self.tool_in.toPlainText())
-        fiji = agreement.parse_column(self.fiji_in.toPlainText())
+        parsed = {}
+        for key, box, name in (("tool", self.tool_in, "Plaque Toolkit"), ("fiji", self.fiji_in, "Fiji / ImageJ")):
+            try:
+                parsed[key] = agreement.parse_values(box.toPlainText())
+            except ValueError as e:
+                self.preview.setRowCount(0)          # never show the previous run's pairs
+                self.parse_notes.setText("Nothing was read: see the message below.")
+                self._fail("%s box: %s" % (name, e)); return
+        (tool, tnotes), (fiji, fnotes) = parsed["tool"], parsed["fiji"]
+        self._show_preview(tool, fiji, tnotes, fnotes)
         if len(tool) < 3 or len(fiji) < 3:
-            self.err.setText("Enter at least 3 paired values in each box."); return
+            self._fail("Enter at least 3 paired values in each box (read %d Toolkit, %d Fiji)."
+                       % (len(tool), len(fiji))); return
         if len(tool) != len(fiji):
-            self.err.setText("Unequal counts: %d Toolkit vs %d Fiji — using the first %d pairs; "
-                             "check the rows line up (same plaque per line)."
-                             % (len(tool), len(fiji), min(len(tool), len(fiji))))
-        unit, what = "mm", "diameters"
+            # CT-R1 DA-F7: refuse instead of silently pairing the first min(n) lines
+            self._fail("The two boxes hold different numbers of values: %d Plaque Toolkit vs %d "
+                       "Fiji / ImageJ. Each line must be the same plaque in both boxes; fix the "
+                       "lists (see the preview) and compute again." % (len(tool), len(fiji)))
+            return
+        unit, what = "mm", "plaque diameters"
         if self.unit.currentData() == "area":
             tool, fiji = agreement.area_to_diam(tool), agreement.area_to_diam(fiji)
-            what = "diameters (area-equivalent)"
+            what = "plaque diameters (area-equivalent)"
         try:
-            s = agreement.compute(tool, fiji)
+            # CT-R1 SM-F16/F17: the same statistics + sentence as the CLI and the web app
+            s = agreement.full_stats(tool, fiji)
         except Exception as e:
-            self.err.setText(str(e)); return
+            self._fail("Cannot compute agreement: %s" % e); return
         self._last = (s, unit, what)
         m = self._metrics
         m["n"].setText(str(s["n"]))
         m["bias"].setText("%+.3f" % s["bias"])
-        m["loa"].setText("%+.2f…%+.2f" % (s["loa_lo"], s["loa_hi"]))
+        m["loa"].setText("%+.3f…%+.3f" % (s["loa_lo"], s["loa_hi"]))
+        m["loa"].setToolTip("bias ± 1.96 SD" if s["loa_method"] == "1.96 SD" else
+                            "n < 20: 95%% prediction limits, bias ± t·SD·√(1+1/n) = ± %.2f SD"
+                            % s["loa_mult"])
         m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] else "—")
         m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] else "—")
         m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] else "—")
         self._draw(s, unit)
         self.report.setPlainText(agreement.report_sentence(s, unit, what))
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+        self.report.setToolTip("ICC(A,1) 95% CI: McGraw & Wong (1996) exact F interval; "
+                               "limits-of-agreement CI: Bland & Altman (1999).")
+        for b in self._result_buttons():
             b.setEnabled(True)
         self.window().statusBar().showMessage("Agreement computed on %d plaque pairs." % s["n"], 4000)
 
-    def _draw(self, s, unit):
+    def _make_fig(self):
+        """The CURRENT figure (current pairs + the 'Place key on figure' switch)."""
         from app import agreement
+        s, unit, _what = self._last
+        return agreement.make_figure(s, unit, show_key=self.key_cb.isChecked())
+
+    def _draw(self, s, unit):
+        from app.agreement import _lk as legend_key
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-        fig = agreement.make_figure(s, unit)
+        fig = self._make_fig()
         new = FigureCanvas(fig)
         # pin to the figure's native pixel size so the scroll area can't stretch/distort it
         w_in, h_in = fig.get_size_inches()
@@ -2497,7 +2706,64 @@ class AgreementTab(QWidget):
             self.fig_placeholder = None
         self.canvas = new
         self.fig_layout.addWidget(self.canvas, 0, Qt.AlignHCenter | Qt.AlignTop)
+        # the card must hold the whole canvas: the scroll wrapper pinned this tab's minimum size
+        # to its first size hint (300 px placeholder), which clipped the figure's lower half
+        self.fig_holder.setMinimumHeight(self.canvas.height() + 14)
+        self.setMinimumHeight(max(self.minimumHeight(), self.sizeHint().height()))
         self.canvas.draw()
+        key = legend_key.from_figure(fig)
+        self.key_text.setText(legend_key.text_starter(key) if key else "")
+
+    def _redraw(self, *_):
+        if self._last is not None:
+            self._draw(self._last[0], self._last[1])
+
+    _PREVIEW_ROWS = 200
+
+    def _show_preview(self, tool, fiji, tnotes, fnotes):
+        """Fill the read-only preview with the pairs as parsed (first 200) + the parse notes."""
+        from PySide6.QtWidgets import QTableWidgetItem
+        n = max(len(tool), len(fiji))
+        shown = min(n, self._PREVIEW_ROWS)
+        self.preview.setRowCount(shown)
+        for i in range(shown):
+            for j, seq in enumerate((tool, fiji)):
+                it = QTableWidgetItem("%g" % seq[i] if i < len(seq) else "")
+                it.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
+                self.preview.setItem(i, j, it)
+        notes = ["Toolkit: " + " ".join(tnotes)] if tnotes else []
+        notes += ["Fiji: " + " ".join(fnotes)] if fnotes else []
+        head = "Read %d Toolkit and %d Fiji values." % (len(tool), len(fiji))
+        if n > shown:
+            head += " Showing the first %d rows." % shown
+        self.parse_notes.setText(" ".join([head] + notes))
+
+    def _reset_results(self):
+        """CT-R1 DA-F19: no stale result may survive a failed compute or Clear -- remove the
+        figure, chips, report and key text, and disable every save/copy button."""
+        self._last = None
+        if self.canvas is not None:
+            self.fig_layout.removeWidget(self.canvas); self.canvas.setParent(None)
+            self.canvas = None
+        if self.fig_placeholder is None:
+            self.fig_placeholder = QLabel("The method-comparison + Bland–Altman plot appears here.")
+            self.fig_placeholder.setObjectName("Placeholder"); self.fig_placeholder.setAlignment(Qt.AlignCenter)
+            self.fig_placeholder.setMinimumHeight(300); self.fig_layout.addWidget(self.fig_placeholder)
+        for v in self._metrics.values():
+            v.setText("—")
+        self.report.clear()
+        if hasattr(self, "key_text"):
+            self.key_text.clear()
+        for b in self._result_buttons():
+            b.setEnabled(False)
+
+    def _result_buttons(self):
+        return [b for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn,
+                            getattr(self, "key_btn", None), getattr(self, "key_copy_btn", None)) if b]
+
+    def _fail(self, msg):
+        self._reset_results()
+        self.err.setText(msg)
 
     def _example(self):
         self.tool_in.setPlainText(self._EX_TOOL); self.fiji_in.setPlaceholderText("")
@@ -2505,63 +2771,100 @@ class AgreementTab(QWidget):
         self.unit.setCurrentIndex(0); self._compute()
 
     def _clear(self):
-        self.tool_in.clear(); self.fiji_in.clear(); self.report.clear(); self.err.setText("")
-        for v in self._metrics.values():
-            v.setText("—")
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
-            b.setEnabled(False)
+        self.tool_in.clear(); self.fiji_in.clear(); self.err.setText("")
+        self._reset_results()
+        self.preview.setRowCount(0); self.parse_notes.setText("Compute to see the pairs as read.")
 
     def _copy(self):
         QApplication.clipboard().setText(self.report.toPlainText())
         self.window().statusBar().showMessage("Report copied to the clipboard.", 3000)
 
-    def _save_fig(self):
-        if not self._last:
-            return
-        path, sel = QFileDialog.getSaveFileName(
-            self, "Save figure", "PlaqueToolkit_vs_Fiji.png",
-            "PNG image — 300 dpi (*.png);;"
-            "SVG — vector, editable in Illustrator/Inkscape (*.svg);;"
-            "PDF — vector, editable (*.pdf);;"
-            "TIFF — 600 dpi for journals (*.tiff);;"
-            "EPS — vector (*.eps)")
-        if not path:
-            return
-        # the format filter the user chose is the source of truth — set the extension to match
-        ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
-        want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
-        if want:
-            path = os.path.splitext(path)[0] + want
-        ext = os.path.splitext(path)[1].lower()
+    _FIG_FILTERS = ("PNG image — 300 dpi (*.png);;"
+                    "SVG — vector, editable in Illustrator/Inkscape (*.svg);;"
+                    "PDF — vector, editable (*.pdf);;"
+                    "TIFF — 600 dpi for journals (*.tiff);;"
+                    "EPS — vector (*.eps)")
+    _EXT_FOR = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
+
+    def _ask_path(self, title, default_stem):
+        """Save dialog in the figure formats; the typed extension wins over the filter and
+        dotted names keep their dots (CT-R1 DA-F20)."""
         from app import agreement
-        import matplotlib as mpl
-        mpl.rcParams["svg.fonttype"] = "none"   # keep SVG text as real text (editable), not outlines
-        mpl.rcParams["pdf.fonttype"] = 42        # embed TrueType so PDF/EPS text stays editable
-        mpl.rcParams["ps.fonttype"] = 42
-        dpi = 600 if ext in (".tif", ".tiff") else 300
-        save_kw = {"dpi": dpi, "bbox_inches": "tight", "facecolor": "white"}
-        if ext in (".tif", ".tiff"):
-            save_kw["pil_kwargs"] = {"compression": "tiff_lzw"}   # lossless, ~10x smaller file
-        fig = agreement.make_figure(self._last[0], self._last[1])
+        first = next((k for k, e in self._EXT_FOR.items() if e == self._fig_ext), "PNG")
+        filters = self._FIG_FILTERS.split(";;")
+        sel0 = next((f for f in filters if f.startswith(first)), filters[0])
+        path, sel = QFileDialog.getSaveFileName(self, title, default_stem + self._fig_ext,
+                                                self._FIG_FILTERS, sel0)
+        if not path:
+            return None
+        want = next((e for k, e in self._EXT_FOR.items() if (sel or "").startswith(k)), ".png")
+        return agreement.resolve_save_path(path, want)
+
+    @staticmethod
+    def _dpi_for(ext):
+        return 600 if ext in (".tif", ".tiff") else 300
+
+    def _save_fig(self, path=None):
+        if not self._last:
+            return None
+        from app import agreement
+        path = path or self._ask_path("Save figure", "PlaqueToolkit_vs_Fiji")
+        if not path:
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        dpi = self._dpi_for(ext)
         try:
-            fig.savefig(path, **save_kw)
+            agreement.save_figure(self._make_fig(), path, dpi=dpi)
         except Exception as e:
             QMessageBox.warning(self, "Could not save figure", "Saving %s failed:\n%s" % (ext, e))
-            return
+            return None
+        self._fig_ext = ".tiff" if ext == ".tif" else ext
         vec = ext in (".svg", ".pdf", ".eps")
         self.window().statusBar().showMessage(
             "Figure saved (%s%s): %s" % (ext.lstrip("."),
                                          ", vector/editable" if vec else ", %d dpi" % dpi, path), 6000)
+        return path
 
-    def _save_csv(self):
+    def _save_key(self, path=None):
+        """Save the legend key of the CURRENT figure, in the figure's format."""
         if not self._last:
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Save paired data", "app_vs_fiji_pairs.csv", "CSV (*.csv)")
-        if path:
-            s = self._last[0]
-            df = pd.DataFrame({"toolkit": s["tool"], "fiji": s["fiji"], "difference": s["diff"]})
-            df.to_csv(path, index=False)
-            self.window().statusBar().showMessage("Saved %d pairs: %s" % (s["n"], path), 4000)
+            return None
+        from app.agreement import _lk as legend_key
+        path = path or self._ask_path("Save legend key", "PlaqueToolkit_vs_Fiji_legend_key")
+        if not path:
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            key = legend_key.from_figure(self._make_fig())
+            legend_key.save_key(key, path, dpi=self._dpi_for(ext))
+        except Exception as e:
+            QMessageBox.warning(self, "Could not save the legend key", "Saving %s failed:\n%s" % (ext, e))
+            return None
+        self.window().statusBar().showMessage("Legend key saved: %s" % path, 6000)
+        return path
+
+    def _copy_key_text(self):
+        QApplication.clipboard().setText(self.key_text.text())
+        self.window().statusBar().showMessage("Legend text copied to the clipboard.", 3000)
+
+    def _save_csv(self, path=None):
+        if not self._last:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Save paired data", "app_vs_fiji_pairs.csv",
+                                                  "CSV (*.csv)")
+        if not path:
+            return None
+        from app import agreement
+        # CT-R1 DA-F20: add .csv only when the name has no data extension (pairs_0.5x ->
+        # pairs_0.5x.csv), and write 6 significant digits (not -0.030000000000000027)
+        path = agreement.resolve_save_path(path, ".csv", known=(".csv", ".tsv", ".txt"))
+        s = self._last[0]
+        df = pd.DataFrame({"toolkit": s["tool"], "fiji": s["fiji"], "difference": s["diff"]})
+        df.to_csv(path, index=False, float_format="%.6g",
+                  sep="\t" if path.lower().endswith(".tsv") else ",")
+        self.window().statusBar().showMessage("Saved %d pairs: %s" % (s["n"], path), 4000)
+        return path
 
 
 WORKER_STACK_BYTES = 16 * 1024 * 1024      # stack of the app's worker threads (CT-R1 F1)

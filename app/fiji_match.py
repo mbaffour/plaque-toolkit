@@ -30,25 +30,51 @@ def _fiji_diam(df, cols):
     return pd.Series(np.full(len(df), np.nan))
 
 
-def load_fiji_results(path):
-    """Parse a Fiji Results CSV into columns: frow, fx, fy, fdiam.
+def _sniff(path):
+    """(sep, decimal) of a Results file. CT-R1 DA-F8: Fiji's own 'Save As' writes TAB-separated
+    text, European locales use ';' with decimal commas; the old reader assumed ','."""
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        head = [fh.readline() for _ in range(6)]
+    first = head[0] if head else ""
+    counts = {sep: first.count(sep) for sep in ("\t", ";", ",")}
+    sep = max(counts, key=lambda k: counts[k]) if any(counts.values()) else ","
+    body = "".join(head[1:])
+    import re
+    decimal = "," if (sep != "," and re.search(r"\d,\d", body) and not re.search(r"\d\.\d", body)) else "."
+    return sep, decimal
 
-    Requires X and Y centroids (enable 'Centroid' in Analyze > Set Measurements) plus Area
-    (or Feret/Major) for the diameter."""
-    df = pd.read_csv(path)
-    cols = {str(c).strip(): c for c in df.columns}
-    if "X" not in cols or "Y" not in cols:
+
+# Fiji's Results headers: X/Y (Centroid) or XM/YM (Center of mass); Area; Feret/Major/... .
+_XY_NAMES = (("X", "Y"), ("XM", "YM"))
+
+
+def load_fiji_results(path):
+    """Parse a Fiji Results table (comma, tab or semicolon separated; decimal point or comma)
+    into columns: frow, fx, fy, fdiam.
+
+    Needs X and Y centroids (Analyze > Set Measurements > Centroid) -- or XM/YM (Center of
+    mass) -- plus Area (or Feret/Major) for the diameter."""
+    sep, decimal = _sniff(path)
+    df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python")
+    cols = {}
+    for c in df.columns:
+        name = str(c).strip()
+        cols.setdefault(name, c)
+        cols.setdefault(name.upper() if name.upper() in ("X", "Y", "XM", "YM") else name.title(), c)
+    xy = next(((x, y) for x, y in _XY_NAMES if x in cols and y in cols), None)
+    if xy is None:
         raise ValueError(
-            "This Fiji CSV has no X/Y centroid columns. In Fiji: Analyze > Set Measurements, "
-            "tick 'Centroid' (and 'Area'), then Measure again and re-export.")
+            "This Fiji table has no X/Y centroid columns (found: %s). In Fiji: Analyze > Set "
+            "Measurements, tick 'Centroid' (and 'Area'), then Measure again and save the Results."
+            % ", ".join(str(c).strip() for c in df.columns[:12]))
     out = pd.DataFrame({
         "frow": np.arange(1, len(df) + 1),
-        "fx": pd.to_numeric(df[cols["X"]], errors="coerce"),
-        "fy": pd.to_numeric(df[cols["Y"]], errors="coerce"),
+        "fx": pd.to_numeric(df[cols[xy[0]]], errors="coerce"),
+        "fy": pd.to_numeric(df[cols[xy[1]]], errors="coerce"),
         "fdiam": _fiji_diam(df, cols),
     }).dropna(subset=["fx", "fy"]).reset_index(drop=True)
     if out.empty:
-        raise ValueError("No usable rows (X/Y) found in the Fiji CSV.")
+        raise ValueError("No usable rows (X/Y) found in the Fiji table.")
     return out
 
 
@@ -100,8 +126,27 @@ def _reflect(F):
     return G
 
 
-def _ransac_similarity(F, A, tol, iters=4000, seed=12345):
+SCALE_RANGE = (0.005, 200.0)        # Fiji units per app unit, e.g. px vs mm (CT-R1 DA-F8)
+
+
+def _spread(P):
+    """Rotation-invariant robust size of a point cloud: median distance to the median point."""
+    P = np.asarray(P, float)
+    return float(np.median(np.linalg.norm(P - np.median(P, axis=0), axis=1)))
+
+
+def scale_seed(F, A):
+    """Expected Fiji->app scale from the ratio of the two clouds' robust spreads (None if
+    undefined). Fiji in pixels at 12.5 px/mm vs the app in mm -> ~0.08."""
+    sf, sa = _spread(F), _spread(A)
+    if sf > 0 and sa > 0:
+        return sa / sf
+    return None
+
+
+def _ransac_similarity(F, A, tol, iters=4000, seed=12345, scale_window=SCALE_RANGE):
     """Best proper-rotation similarity mapping F into A's frame (no reflection).
+    Candidate scales outside ``scale_window`` are rejected.
     Returns (scale, R, t, n_inliers) or None."""
     n, m = len(F), len(A)
     if n < 2 or m < 2:
@@ -117,7 +162,7 @@ def _ransac_similarity(F, A, tol, iters=4000, seed=12345):
         if cand is None:
             continue
         scale, R, t = cand
-        if not (0.2 < scale < 5.0):        # reject absurd scales
+        if not (scale_window[0] < scale < scale_window[1]):   # reject implausible scales
             continue
         Ft = _apply(scale, R, t, F)
         d = np.linalg.norm(Ft[:, None, :] - A[None, :, :], axis=2)
@@ -135,14 +180,14 @@ def _ransac_similarity(F, A, tol, iters=4000, seed=12345):
     return scale, R, t, best_in
 
 
-def _ransac_align(F, A, tol, iters=4000, seed=12345):
+def _ransac_align(F, A, tol, iters=4000, seed=12345, scale_window=SCALE_RANGE):
     """Align Fiji points F into the app frame A, trying BOTH orientations (direct and
     mirror-flipped) so a flipped plate still matches. Returns a dict with a transform
     callable ``tf``, ``scale`` and ``reflected`` — or None."""
     best = None
     for reflected in (False, True):
         G = _reflect(F) if reflected else np.asarray(F, float)
-        res = _ransac_similarity(G, A, tol, iters, seed)
+        res = _ransac_similarity(G, A, tol, iters, seed, scale_window)
         if res is None:
             continue
         scale, R, t, inl = res
@@ -206,7 +251,19 @@ def match(app_df, fiji_df, align="auto", tol=None):
         # tolerance for RANSAC in the app frame; if we don't know app scale yet, use a
         # generous span-based fallback
         rtol = tol if tol else 0.15 * float(np.linalg.norm(A.max(0) - A.min(0)) or 1.0)
-        al = _ransac_align(F, A, rtol)
+        # CT-R1 DA-F8: the old fixed 0.2-5x window rejected pixel-unit Fiji results (x0.08) and
+        # 'matched' 5 of 27 at a wrong scale. Seed the scale from the clouds' robust spreads and
+        # search within a factor 2 of it (inside 0.005-200); fall back to the full range.
+        seed_s = scale_seed(F, A)
+        al = None
+        if seed_s is not None:
+            win = (max(SCALE_RANGE[0], seed_s / 2.0), min(SCALE_RANGE[1], seed_s * 2.0))
+            if win[0] < win[1]:
+                al = _ransac_align(F, A, rtol, scale_window=win)
+        if al is None or al["inliers"] < 0.5 * min(len(A), len(F)):
+            alt = _ransac_align(F, A, rtol)
+            if alt is not None and (al is None or alt["inliers"] > al["inliers"]):
+                al = alt
         if al is not None:
             scale = al["scale"]
             reflected = al["reflected"]
@@ -251,6 +308,8 @@ def match(app_df, fiji_df, align="auto", tol=None):
         "loa_low_mm": None, "loa_high_mm": None,
         "rmse_mm": round(float(np.sqrt(np.mean(deltas ** 2))), 4) if deltas.size else None,
         "pearson_r": None,
+        # CT-R1 DA-F8: fewer than half of the smaller set matched = the pairing is not trustworthy
+        "low_match": bool(len(pairs) < 0.5 * min(len(A), len(F))),
     }
     if deltas.size > 1:
         b, sd = summary["bias_mean_mm"], summary["bias_sd_mm"]
