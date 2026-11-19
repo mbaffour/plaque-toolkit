@@ -130,6 +130,10 @@ def test_d1_containment_dedup_drops_concentric_core():
     assert n == 1 and kept == [other, halo]
     merged, n_add = pgui.merge_scales([halo], [core, other])
     assert n_add == 1 and merged[1] is other and other["source"] == "small"
+    # a cluster outlined as one blob holding TWO plaques: they are real, nothing is dropped
+    blob, a, b = disc(500, 100, 40), disc(485, 100, 10), disc(515, 100, 10)
+    kept, n = pgui.dedupe_by_containment([blob, a, b])
+    assert n == 0 and kept == [blob, a, b]
 
 
 def test_d1_small_source_is_a_detector_result_not_an_edit():
@@ -243,7 +247,7 @@ def test_d1_measure_tab_plaque_size_choice(qtbot, mixed_plate, monkeypatch):
     qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
     assert calls[-1]["scale"] == "auto" and "small" not in calls[-1]
     assert tab.det["scale"] == "auto" and tab.det["n_plaques"] == 6
-    assert not tab.stale_label.isVisible() if tab.isVisible() else True
+    assert tab.stale_label.isHidden()
     # changing the plaque size marks the result on screen as stale
     box.set_scale("small")
     assert not tab.stale_label.isHidden()
@@ -407,8 +411,10 @@ def test_d4_dish_plausibility_rules():
     assert len(w) == 1 and "20%" in w[0]
     w = q.dish_plausibility((1550, 1000, 400), (2000, 2000))
     assert len(w) == 1 and "far from the image centre (550 px off)" in w[0]
-    w = q.dish_plausibility((1000, 1000, 1000), (2000, 2000))
-    assert len(w) == 1 and "touches or runs past the edge" in w[0]
+    # grazing the frame (as 9 of the bundled plates do, by <= 1.1 % of D) is not a warning
+    assert q.dish_plausibility((1000, 1000, 1010), (2000, 2000)) == []
+    w = q.dish_plausibility((1000, 1000, 1060), (2000, 2000))
+    assert len(w) == 1 and "runs past the edge of the photo (3% of its diameter" in w[0]
 
 
 def test_d4_app_flag_line_shows_dish_warnings_and_outside_count(qtbot, closeup_plate, outside_plate):
@@ -586,3 +592,42 @@ def test_d6_two_env_runner_honours_weights_and_imgsz_overrides(tmp_path, monkeyp
     assert summ["n_final"] == 3
     assert summ["yolo"]["weights"] == "alt.pt" and summ["yolo"]["imgsz"] == 640
     assert summ["yolo"]["max_det"] == 1000 and summ["yolo"]["conf"] == 0.1
+
+
+def test_d5_tiny_size_rule_is_for_detector_outlines_only():
+    import plaque_qc
+    hand = {"source": "manual", "kind": "circle", "radius": 8.0, "area_pxl": math.pi * 64,
+            "center": (300.0, 300.0)}
+    precise = {"source": "auto", "kind": "circle", "radius": 8.0, "area_pxl": math.pi * 64,
+               "center": (600.0, 300.0), "p_plaque": 0.9}
+    drawn = dict(_dict(300, 600, 8), source="freehand")
+    detector = _dict(600, 600, 8)
+    res = plaque_qc.flags_for_plaque_dicts([hand, precise, drawn, detector], (1000, 1000))
+    assert [r[0] for r in res] == ["OK", "OK", "OK", "TINY"]
+
+
+def test_d5_published_app_plaques_carry_solidity_for_merged():
+    from app import engine_api
+    det = engine_api.detect_single(_plate_path("large/Plate_8"), plate_mm=90, published=True)
+    assert all(0 < p["solidity"] <= 1.0001 and p["encl_diam_px"] > 30 for p in det["plaques"])
+
+
+def test_d1_d2_sensitive_runs_auto_with_the_standard_dish():
+    """Sensitive: Auto keeps every standard-pass (sensitive gates) plaque exactly and takes the
+    standard dish; before, it was the -small pass with the halo dish (Plate_8: 1177.3 px)."""
+    from app import engine_api
+    path = _plate_path("large/Plate_8")
+    old = engine_api.detect_single(path, plate_mm=90, small=True, sensitive=True, legacy=True)
+    std = engine_api.detect_single(path, plate_mm=90, scale="standard", sensitive=True)
+    auto = engine_api.detect_single(path, plate_mm=90, scale="auto", sensitive=True)
+    assert round(old["plate"]["diam_px"], 1) == 1177.3 and old["n_plaques"] == 28
+    assert round(auto["plate"]["diam_px"], 2) == 1121.97 and auto["n_plaques"] == 29
+    key = lambda p: (p["area_pxl"], round(p["center"][0], 6), round(p["center"][1], 6))
+    assert {key(p) for p in std["plaques"]} == {key(p) for p in auto["plaques"] if p["source"] == "auto"}
+    assert auto["sensitive"] is True and auto["scale"] == "auto"
+
+
+def test_d4_bundled_sample_opens_without_dish_warnings():
+    from app import engine_api
+    d = engine_api.detect_single(SAMPLE_TIF, plate_mm=100, scale="auto")
+    assert d["dish_warnings"] == [] and d["n_outside_dish"] == 0

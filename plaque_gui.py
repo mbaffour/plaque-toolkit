@@ -154,13 +154,22 @@ def run_detection(image_path, plate_size, small, sensitive=False, scale=None, in
             cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
         else:
             cx, cy = row["ENCL_CENTER"]
-        plaques.append({
+        _p = {
             "source": row.get("SOURCE", "auto"),
             "kind": "contour",
             "contour": np.asarray(row["HULL"], dtype=np.int32),
             "area_pxl": float(row["AREA_PXL"]),
             "center": (float(cx), float(cy)),
-        })
+            # QC inputs only (CT-R1 detection D5); no measured value depends on them
+            "encl_diam_px": float(row["ENCL_DIAMETER_PXL"]),
+        }
+        try:
+            _ha = float(row["AREA_PXL"])
+            _p["solidity"] = (round(float(cv2.contourArea(np.asarray(row["CONTOURS"], dtype=np.int32))) / _ha, 4)
+                              if _ha > 0 else None)
+        except Exception:
+            pass
+        plaques.append(_p)
 
     # candidate contours for auto-trace: every non-plate shape the detector found
     # (including the ones it filtered out of the green set), so a click can snap to
@@ -306,18 +315,18 @@ def _inside(contour, pt):
 
 
 def dedupe_by_containment(plaques):
-    """Drop a plaque whose centre lies inside a LARGER plaque's outline (a plaque's core and
-    its halo found as two concentric detections; CT-R1 F14). The larger outline is kept, as
-    the standard pass would. Returns (kept, n_dropped); input order is preserved."""
-    order = sorted(range(len(plaques)), key=lambda i: -plaques[i]["area_pxl"])
-    kept_idx = []
-    for i in order:
-        c = plaques[i]["center"]
-        if any(_inside(plaques[k]["contour"], c) for k in kept_idx):
-            continue
-        kept_idx.append(i)
-    keep = set(kept_idx)
-    return [p for i, p in enumerate(plaques) if i in keep], len(plaques) - len(keep)
+    """Drop a plaque's CORE when it was also found as its halo: a plaque whose centre lies
+    inside a LARGER plaque's outline that contains no other plaque (CT-R1 F14). The larger
+    outline is kept, as the standard pass would. When a larger outline contains two or more
+    plaques it is a cluster outlined as one blob, and the plaques inside are real: nothing is
+    dropped (the QC flag NESTED marks them). Returns (kept, n_dropped); order is preserved."""
+    n = len(plaques)
+    inner = {k: [i for i in range(n) if i != k
+                 and plaques[i]["area_pxl"] < plaques[k]["area_pxl"]
+                 and _inside(plaques[k]["contour"], plaques[i]["center"])]
+             for k in range(n)}
+    drop = {lst[0] for lst in inner.values() if len(lst) == 1}
+    return [p for i, p in enumerate(plaques) if i not in drop], len(drop)
 
 
 def merge_scales(standard, small):

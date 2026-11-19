@@ -194,6 +194,7 @@ def inside_and_ring_mean(gray, mask_fn, x, y, r):
 
 DISH_MIN_FRAC = 0.30        # dish diameter below this fraction of the short side: implausible
 DISH_OFFCENTRE_FRAC = 0.25  # dish centre further than this fraction of the short side from the centre
+DISH_CLIPPED_FRAC = 0.02    # dish circle past the frame by more than this fraction of its diameter
 MIN_SHORT_SIDE_PX = 600     # below this the pixel size gates swallow most plaques (CT-R1 F23)
 
 
@@ -242,9 +243,13 @@ def dish_plausibility(dish, image_shape):
     if off > DISH_OFFCENTRE_FRAC * short:
         out.append("The dish found is far from the image centre (%.0f px off); check that its "
                    "circle sits on the real rim." % off)
-    if cx - r < 2 or cy - r < 2 or cx + r > W - 3 or cy + r > H - 3:
-        out.append("The dish touches or runs past the edge of the photo, so its rim may be cut "
-                   "off and the mm scale biased. Leave a margin around the dish.")
+    # a rim that grazes the frame is normal on the bundled plates (up to ~1 % of the diameter
+    # past the edge, the circle fit is unaffected); warn when clearly more is cut off
+    over = max(r - cx, r - cy, cx + r - W, cy + r - H)
+    if r > 0 and over > DISH_CLIPPED_FRAC * 2.0 * r:
+        out.append("The dish runs past the edge of the photo (%.0f%% of its diameter is cut off), "
+                   "so the circle may not sit on the real rim and the mm scale may be biased. "
+                   "Leave a margin around the dish." % (100.0 * over / (2.0 * r)))
     return out
 
 
@@ -295,12 +300,14 @@ def flags_for_plaque_dicts(plaques, image_shape, plate=None, circularities=None,
                "circularity": (circularities[i] if circularities is not None else None),
                "p_plaque": p.get("p_plaque"), "source": p.get("source"),
                "solidity": p.get("solidity"), "encl_diam_px": p.get("encl_diam_px")}
+        # the size-gate TINY rule is about the classic detector's gate: only its own outlines
+        # are judged by it, not circles drawn by hand or Precise's model plaques
+        classic = p.get("kind") != "circle" and p.get("source") not in ("manual", "freehand")
         try:
             import cv2
             if p.get("kind") == "circle" and p.get("radius"):
                 rad = float(p["radius"])
-                if rec["encl_diam_px"] is None:
-                    rec["encl_diam_px"] = 2.0 * rad
+                rec["encl_diam_px"] = None
 
                 def _mask(shape, off, _c=(cx, cy), _r=rad):
                     m = np.zeros(shape[:2], np.uint8)
@@ -309,7 +316,9 @@ def flags_for_plaque_dicts(plaques, image_shape, plate=None, circularities=None,
                     return m
             else:
                 c = np.asarray(p["contour"], dtype=np.int32).reshape(-1, 2)
-                if rec["encl_diam_px"] is None and len(c):
+                if not classic:
+                    rec["encl_diam_px"] = None
+                elif rec["encl_diam_px"] is None and len(c):
                     rec["encl_diam_px"] = 2.0 * float(cv2.minEnclosingCircle(c.reshape(-1, 1, 2))[1])
                 rec["axis_ratio"], rec["hull"] = outline_geometry(c)
 
