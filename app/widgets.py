@@ -1,7 +1,7 @@
 """Small shared Qt widgets."""
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QBrush, QColor
 from PySide6.QtWidgets import QTableView, QMenu, QApplication
 
 # Hover help for the per-plaque result columns (shown on the table headers).
@@ -12,15 +12,32 @@ COLUMN_TOOLTIPS = {
     "AREA_MM2": "Plaque area in mm² (requires calibration).",
     "DIAMETER_MM": "Area-equivalent diameter in mm — halo-inclusive (requires calibration).",
     "MEAN_GRAY": "Mean brightness inside the plaque (0–255). Lower = clearer / darker.",
-    "TURBIDITY_REL": "Relative turbidity: plaque brightness ÷ surrounding lawn. "
-                     "~1 = as opaque as the lawn (turbid); lower = clearer.",
+    # CT-R1 F16: the tooltip gave a formula (plaque ÷ lawn) the engine does not use
+    "TURBIDITY_REL": "Relative turbidity within THIS plate: 1 − |plaque − lawn| ÷ the largest "
+                     "such difference on the plate (mean gray values). 0 = the clearest plaque "
+                     "on this plate, 1 = the same as the lawn. Not comparable between plates.",
     "CIRCULARITY": "Shape roundness 4·π·area / perimeter² (0–1). 1 = perfect circle; "
                    "lower = irregular / comet / elongated. Circles you draw score 1.",
     "OVERLAP": "yes = this plaque touches/overlaps another, so its size is unreliable. "
                "Tick 'Exclude overlapping plaques' to drop these from the stats.",
     "SOURCE": "How the plaque was found: auto (detector), manual (you added it), "
-              "freehand (you drew the outline), or watershed (split from a touching pair).",
+              "freehand (you drew the outline), region (the Detect-area tool), or watershed "
+              "(split from a touching pair).",
+    # CT-R1 F24: the one column with no explanation
+    "QC_FLAG": "Rows that deserve a second look (OK = none). Several can apply, joined with |.\n"
+               "EDGE — touches the image border or the dish rim, so part of it may be cut off.\n"
+               "LARGE? — area more than 2.5× the plate's median, with a normal round shape.\n"
+               "MERGED? — far from round (circularity below 0.6): likely two plaques counted as one.\n"
+               "TINY — at or below the standard size gate; found only by the small / sensitive gates.\n"
+               "OVERLAP — its disk overlaps another plaque's, so both sizes are unreliable.\n"
+               "LOW_CONF — the Precise classifier scored it below 0.6.\n"
+               "Hover a flagged cell for the reason. A flag never changes a measurement.",
 }
+# what an uncalibrated mm value is shown as (the number itself stays in the data)
+NO_VALUE = "—"
+# translucent amber: a row whose QC_FLAG is not OK. Translucent so it reads on the light AND
+# the dark theme (an opaque pale fill under the dark theme's light text was unreadable).
+_FLAG_TINT = QColor(255, 176, 32, 70)
 
 
 class PandasTableModel(QAbstractTableModel):
@@ -32,10 +49,24 @@ class PandasTableModel(QAbstractTableModel):
     def __init__(self, df=None):
         super().__init__()
         self._df = df if df is not None else pd.DataFrame()
+        self._dash_cols = frozenset()
+        self._cell_tips = {}
+        self._flag_col = None
 
-    def set_dataframe(self, df):
+    def set_dataframe(self, df, dash_columns=(), cell_tooltips=None, flag_column=None):
+        """Show `df`. Display-only extras (the DataFrame itself is never altered, so
+        dataframe(), sorting and every consumer keep the real values):
+
+        dash_columns   columns whose cells are SHOWN as "—" (mm values with no mm scale;
+                       CT-R1 F14 -- they used to read 0.0, like real zeros)
+        cell_tooltips  {column: [tooltip per row]} overriding the column's tooltip where set
+        flag_column    a column whose non-empty, non-"OK" value tints the whole row (F24)
+        """
         self.beginResetModel()
         self._df = df.reset_index(drop=True) if df is not None else pd.DataFrame()
+        self._dash_cols = frozenset(dash_columns or ())
+        self._cell_tips = dict(cell_tooltips or {})
+        self._flag_col = flag_column if (flag_column in self._df.columns) else None
         self.endResetModel()
 
     def dataframe(self):
@@ -52,7 +83,10 @@ class PandasTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
         val = self._df.iloc[index.row(), index.column()]
+        col = str(self._df.columns[index.column()])
         if role == Qt.DisplayRole:
+            if col in self._dash_cols:
+                return NO_VALUE
             return "" if val is None else str(val)
         if role == Qt.UserRole:
             # raw value for numeric-aware sorting
@@ -60,9 +94,15 @@ class PandasTableModel(QAbstractTableModel):
         if role == Qt.ToolTipRole:
             # hovering any cell explains its column (a11y: values gain context, not just headers)
             try:
-                return COLUMN_TOOLTIPS.get(str(self._df.columns[index.column()]))
+                tips = self._cell_tips.get(col)
+                if tips is not None and tips[index.row()]:
+                    return str(tips[index.row()])
+                return COLUMN_TOOLTIPS.get(col)
             except (IndexError, TypeError):
                 return None
+        if role == Qt.BackgroundRole and self._flag_col is not None:
+            flag = str(self._df.iloc[index.row()][self._flag_col])
+            return None if flag in ("", "OK", "nan", "None") else QBrush(_FLAG_TINT)
         if role == Qt.TextAlignmentRole:
             try:
                 float(val)

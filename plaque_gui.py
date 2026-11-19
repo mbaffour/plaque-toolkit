@@ -337,110 +337,610 @@ def _plaque_mask(shape, p):
     return mask
 
 
-def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=True, plate=None,
-                     scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
-    """Draw plaque outlines (auto = green, manual/region = blue) + per-plaque #/diameter
-    labels + a physical scale bar onto a copy of the image, and return it (BGR). Shared by
-    save_results and save_figure so the saved CSV image and a downloaded figure match.
-    ``scalebar_mm`` forces the bar length (mm); ``scalebar_anchor`` (x,y in image px) forces
-    its position. When neither is given and ``plate`` is known, the bar is auto-sized and
-    placed INSIDE the dish/lawn (an image corner would fall in the dark surround)."""
-    annotated = orig_bgr.copy()
-    for i, p in enumerate(plaques, start=1):
-        dia_pxl, _area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm)
-        color = (0, 255, 0) if p.get("source") == "auto" else (255, 0, 0)   # BGR
-        if p["kind"] == "circle":
-            cv2.circle(annotated, (int(round(p["center"][0])), int(round(p["center"][1]))),
-                       max(int(round(p["radius"])), 1), color, 2)
+# --------------------------------------------------------------------------- #
+#  The plate figure: ONE style for the on-screen canvas and every exported image
+# --------------------------------------------------------------------------- #
+# CT-R1 F9/F12: the canvas drew five colours, the export two (and a different blue), so the
+# file did not look like the screen and nothing explained the colours. This map is the only
+# place a plaque class gets its name, colour and line style: app/plaque_canvas.py draws the
+# canvas from it, annotate_plaques() draws every exported image from it (Save results,
+# Export all, side-by-side, Batch overlays) and plate_key() builds the legend key from it.
+#   class key -> (plain name, RGB exactly as drawn, "solid" | "dashed")
+PLAQUE_CLASSES = {
+    "auto":      ("auto-detected",   (40, 220, 70),   "solid"),
+    # (30, 144, 255), not the canvas's old (30, 170, 255): the legend text names that "cyan"
+    "manual":    ("added by hand",   (30, 144, 255),  "solid"),
+    "region":    ("detect-area",     (255, 170, 0),   "solid"),
+    "watershed": ("watershed split", (180, 120, 255), "solid"),
+    "overlap":   ("overlapping",     (255, 40, 150),  "dashed"),
+}
+CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap")
+# a plaque's SOURCE -> its class (a freehand outline is "added by hand" like a circle or trace)
+_SOURCE_CLASS = {"auto": "auto", "manual": "manual", "freehand": "manual",
+                 "region": "region", "watershed": "watershed"}
+LABEL_MODES = ("numbers", "numbers + mm", "none")
+# where a label is tried, in this order: right, left, above, below, then the four diagonals
+LABEL_SIDES = ("E", "W", "N", "S", "NE", "SE", "NW", "SW")
+_SIDE_DIR = {"E": (1, 0), "W": (-1, 0), "N": (0, -1), "S": (0, 1),
+             "NE": (1, -1), "SE": (1, 1), "NW": (-1, -1), "SW": (-1, 1)}
+
+
+def class_name(key, precise=False):
+    """Plain name of a plaque class. Under Precise the orange class is not the Detect-area
+    tool: it marks plaques only the classic detector found (PlaqSeg did not confirm them)."""
+    if precise and key == "region":
+        return "classic detector only"
+    return PLAQUE_CLASSES[key][0]
+
+
+def overlap_flags(plaques, margin=1.0):
+    """True where a plaque's area-equivalent disk overlaps/touches another's (centre distance
+    < (r_i + r_j) * margin). Uniform for circles and contours, O(n^2) over the (few) plaques."""
+    import math
+    g = []
+    for p in plaques:
+        if p.get("kind") == "circle" and p.get("radius"):
+            r = float(p["radius"])
         else:
-            cv2.drawContours(annotated, [np.asarray(p["contour"], dtype=np.int32)], -1, color, 2)
-        if draw_numbers:
-            cx, cy = int(round(p["center"][0])), int(round(p["center"][1]))
-            label = f"#{i}:{dia_mm:.2f}" if pxl_per_mm else f"#{i}:{dia_pxl:.0f}px"
-            cv2.putText(annotated, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (25, 51, 0), 1)
+            r = math.sqrt(max(float(p.get("area_pxl", 0.0)), 1.0) / math.pi)
+        g.append((float(p["center"][0]), float(p["center"][1]), r))
+    n = len(g)
+    flags = [False] * n
+    for i in range(n):
+        xi, yi, ri = g[i]
+        for j in range(i + 1, n):
+            xj, yj, rj = g[j]
+            if math.hypot(xi - xj, yi - yj) < (ri + rj) * margin:
+                flags[i] = True
+                flags[j] = True
+    return flags
+
+
+def plaque_class(p, overlap=False):
+    """Class key of one plaque: 'overlap' wins over its source, as on the canvas."""
+    if overlap:
+        return "overlap"
+    return _SOURCE_CLASS.get(p.get("source") or "auto", "auto")
+
+
+def plaque_classes(plaques):
+    """Class key per plaque. The overlap test is recomputed here rather than read from a tag,
+    so Batch and CLI callers (whose plaques carry no tag) get the same picture as the app."""
+    return [plaque_class(p, ov) for p, ov in zip(plaques, overlap_flags(plaques))]
+
+
+def figure_metrics(image_shape):
+    """Label and line sizes that scale with the image width, so a figure reads the same on a
+    1,200 px and a 4,000 px photo (the old labels were a fixed 0.5-scale, 1 px Hershey font:
+    specks on a 2,811 px plate)."""
+    w = float(max(int(image_shape[1]), 1))
+    font_px = max(12, int(round(w / 80.0)))
+    return {"font_px": font_px,
+            "stroke": max(2, int(round(font_px / 8.0))),      # dark outline round each glyph
+            "line": max(2, int(round(w / 650.0))),            # plaque outline width
+            "gap": max(2, int(round(font_px / 5.0)))}         # label <-> outline distance
+
+
+def label_text(index, area_pxl, pxl_per_mm, mode="numbers", published=None):
+    """The text beside plaque #index for a label mode ('numbers', 'numbers + mm', 'none').
+    `published` must be the flag of the engine that made the result, so the diameter printed
+    on the figure is the diameter in the table."""
+    if mode == "none":
+        return ""
+    if mode != "numbers + mm":
+        return str(index)
+    dia_pxl, _area_mm2, dia_mm = measure(area_pxl, pxl_per_mm, published)
+    if pxl_per_mm:
+        return "%d: %.2f mm" % (index, dia_mm)
+    return "%d: %.0f px" % (index, dia_pxl)
+
+
+def plaque_bbox(p):
+    """(x0, y0, x1, y1) of a plaque's outline in image pixels."""
+    if p["kind"] == "circle":
+        r = float(p.get("radius") or np.sqrt(max(p["area_pxl"], 1) / np.pi))
+        cx, cy = float(p["center"][0]), float(p["center"][1])
+        return (cx - r, cy - r, cx + r, cy + r)
+    pts = np.asarray(p["contour"], dtype=float).reshape(-1, 2)
+    return (float(pts[:, 0].min()), float(pts[:, 1].min()),
+            float(pts[:, 0].max()), float(pts[:, 1].max()))
+
+
+def label_anchor(bbox, side):
+    """(x, y, dx, dy): the point on a plaque's outline a label hangs from, and the direction
+    the label extends from it (dx: -1 left, 0 centred, 1 right; dy: -1 above, 0, 1 below)."""
+    dx, dy = _SIDE_DIR[side]
+    x0, y0, x1, y1 = bbox
+    k = 0.7071 if (dx and dy) else 1.0          # a diagonal hangs off the outline at 45 degrees
+    return ((x0 + x1) / 2.0 + dx * k * (x1 - x0) / 2.0,
+            (y0 + y1) / 2.0 + dy * k * (y1 - y0) / 2.0, dx, dy)
+
+
+def label_rect(bbox, size, side, gap):
+    """Rectangle (x0, y0, x1, y1) of a label of `size` (w, h) placed just outside `bbox` on
+    `side` (see LABEL_SIDES), `gap` pixels off the outline."""
+    ax, ay, dx, dy = label_anchor(bbox, side)
+    w, h = size
+    x = ax + dx * gap - (w if dx < 0 else (w / 2.0 if dx == 0 else 0.0))
+    y = ay + dy * gap - (h if dy < 0 else (h / 2.0 if dy == 0 else 0.0))
+    return (x, y, x + w, y + h)
+
+
+def layout_labels(plaques, sizes, image_shape, gap, avoid=()):
+    """Choose a side for every label: the first of right / left / above / below (then the four
+    diagonals) that covers no other plaque, no label already placed, nothing in `avoid` (the
+    scale bar, the legend key) and stays inside the image; when none is clean, the one that
+    covers least -- a label on top of another label counts far worse than one grazing a
+    plaque. Returns [(side, rect)] in plaque order. Shared by the canvas (which uses the
+    side) and the export, so a label sits on the same side of its plaque in both."""
+    n = len(plaques)
+    if n == 0:
+        return []
+    H, W = float(image_shape[0]), float(image_shape[1])
+    boxes = np.array([plaque_bbox(p) for p in plaques], dtype=float).reshape(n, 4)
+    fixed = np.array([tuple(r) for r in avoid if r is not None], dtype=float).reshape(-1, 4)
+    # obstacles: the plaques themselves, shrunk a little (a bounding box overstates a round
+    # outline at its corners, and a label may graze those)
+    bw = (boxes[:, 2] - boxes[:, 0]) * 0.12
+    bh = (boxes[:, 3] - boxes[:, 1]) * 0.12
+    obst = np.column_stack([boxes[:, 0] + bw, boxes[:, 1] + bh, boxes[:, 2] - bw, boxes[:, 3] - bh])
+
+    def covered(rect, others):
+        if len(others) == 0:
+            return 0.0
+        ix = np.minimum(rect[2], others[:, 2]) - np.maximum(rect[0], others[:, 0])
+        iy = np.minimum(rect[3], others[:, 3]) - np.maximum(rect[1], others[:, 1])
+        return float((np.clip(ix, 0, None) * np.clip(iy, 0, None)).sum())
+
+    placed = np.zeros((0, 4), dtype=float)
+    out = []
+    keep = np.ones(n, dtype=bool)
+    for i in range(n):
+        keep[:] = True
+        keep[i] = False
+        best = None
+        for side in LABEL_SIDES:
+            r = label_rect(tuple(boxes[i]), sizes[i], side, gap)
+            area = max((r[2] - r[0]) * (r[3] - r[1]), 1e-9)
+            inside = (max(0.0, min(r[2], W) - max(r[0], 0.0))
+                      * max(0.0, min(r[3], H) - max(r[1], 0.0)))
+            cost = (covered(r, obst[keep]) + 8.0 * covered(r, placed) + 8.0 * covered(r, fixed)
+                    + 8.0 * (area - inside))
+            if cost <= 1e-6:
+                best = (0.0, side, r)
+                break
+            if best is None or cost < best[0]:
+                best = (cost, side, r)
+        out.append((best[1], best[2]))
+        # a placed label keeps a small margin, so the next one does not butt against it
+        b = best[2]
+        placed = np.vstack([placed, np.array([b[0] - gap, b[1] - gap / 2.0, b[2] + gap, b[3] + gap / 2.0])])
+    return out
+
+
+# ---- text: DejaVu Sans (the font matplotlib draws the legend key in), white with a dark outline
+_FONTS = {}
+
+
+def figure_font_path(bold=True):
+    """Path of DejaVu Sans as bundled with matplotlib, or None. The plaque numbers, the
+    scale-bar label and the legend key are then all in one font. Found without importing
+    matplotlib, so drawing an overlay never loads it (Batch draws on a worker thread)."""
+    name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    cands = []
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("matplotlib")
+        if spec is not None and spec.origin:
+            cands.append(os.path.join(os.path.dirname(spec.origin), "mpl-data", "fonts", "ttf", name))
+    except Exception:                               # noqa: BLE001
+        pass
+    import sys
+    base = getattr(sys, "_MEIPASS", None)           # frozen app
+    if base:
+        cands.append(os.path.join(base, "matplotlib", "mpl-data", "fonts", "ttf", name))
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def _font(px, bold=True):
+    k = (int(px), bool(bold))
+    if k not in _FONTS:
+        f = None
+        try:
+            from PIL import ImageFont
+            path = figure_font_path(bold)
+            if path:
+                f = ImageFont.truetype(path, int(px))
+        except Exception:                           # noqa: BLE001 -- fall back to OpenCV text
+            f = None
+        _FONTS[k] = f
+    return _FONTS[k]
+
+
+def text_size(text, font_px, stroke=0):
+    """(w, h) in pixels of `text` as _draw_texts will draw it (ink box, outline included)."""
+    f = _font(font_px)
+    if f is not None:
+        l, t, r, b = f.getbbox(text, stroke_width=int(stroke))
+        return (r - l, b - t)
+    scale = font_px / 30.0
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, int(round(scale * 2))))
+    return (tw + 2 * int(stroke), th + base + 2 * int(stroke))
+
+
+def _draw_texts(img_bgr, items):
+    """Draw outlined text items in place. item = (text, x, y, font_px, fill_rgb, stroke) with
+    (x, y) the top-left of the ink box. One PIL round-trip for all of them."""
+    items = [it for it in items if it[0]]
+    if not items:
+        return img_bgr
+    if all(_font(it[3]) is not None for it in items):
+        from PIL import ImageDraw
+        im = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        d = ImageDraw.Draw(im)
+        for text, x, y, font_px, fill, stroke in items:
+            f = _font(font_px)
+            l, t, _r, _b = f.getbbox(text, stroke_width=int(stroke))
+            d.text((int(round(x - l)), int(round(y - t))), text, font=f,
+                   fill=tuple(int(v) for v in fill), stroke_width=int(stroke), stroke_fill=(0, 0, 0))
+        img_bgr[:] = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+        return img_bgr
+    for text, x, y, font_px, fill, stroke in items:            # no TrueType font: OpenCV text
+        scale = font_px / 30.0
+        thick = max(1, int(round(scale * 2)))
+        (_tw, th), _base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
+        org = (int(round(x + stroke)), int(round(y + stroke + th)))
+        cv2.putText(img_bgr, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0),
+                    thick + 2 * int(stroke), cv2.LINE_AA)
+        cv2.putText(img_bgr, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale,
+                    tuple(int(v) for v in fill[::-1]), thick, cv2.LINE_AA)
+    return img_bgr
+
+
+def _outline_points(p):
+    """Closed outline of a plaque as an (N, 2) float array."""
+    if p["kind"] == "circle":
+        r = max(float(p.get("radius") or np.sqrt(max(p["area_pxl"], 1) / np.pi)), 1.0)
+        n = int(max(48, min(720, 2 * np.pi * r / 3.0)))
+        a = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+        return np.column_stack([p["center"][0] + r * np.cos(a), p["center"][1] + r * np.sin(a)])
+    return np.asarray(p["contour"], dtype=float).reshape(-1, 2)
+
+
+def _draw_dashed(img, pts, bgr, thick):
+    """Closed dashed polyline: evenly spaced dashes (an integer number round the outline)."""
+    closed = np.vstack([pts, pts[:1]])
+    seg = np.hypot(np.diff(closed[:, 0]), np.diff(closed[:, 1]))
+    per = float(seg.sum())
+    if per <= 0:
+        return
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    period = 8.0 * thick
+    n_dash = max(4, int(round(per / period)))
+    period = per / n_dash
+    dash = 0.58 * period
+    lines = []
+    for k in range(n_dash):
+        t = np.linspace(k * period, k * period + dash, max(2, int(dash) + 1))
+        x = np.interp(t, s, closed[:, 0])
+        y = np.interp(t, s, closed[:, 1])
+        lines.append(np.round(np.column_stack([x, y])).astype(np.int32).reshape(-1, 1, 2))
+    cv2.polylines(img, lines, False, bgr, int(thick), cv2.LINE_AA)
+
+
+def _draw_outline(img, p, cls, thick):
+    _name, rgb, style = PLAQUE_CLASSES[cls]
+    bgr = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+    if style == "dashed":
+        _draw_dashed(img, _outline_points(p), bgr, thick)
+    elif p["kind"] == "circle":
+        cv2.circle(img, (int(round(p["center"][0])), int(round(p["center"][1]))),
+                   max(int(round(p["radius"])), 1), bgr, int(thick), cv2.LINE_AA)
+    else:
+        cv2.drawContours(img, [np.asarray(p["contour"], dtype=np.int32)], -1, bgr, int(thick), cv2.LINE_AA)
+
+
+# ---- legend key (the standing figure rule): built by plaque_stats/legend_key.py ------------
+def plate_key(plaques, precise=False):
+    """The legend key of a plate figure: one entry per plaque class PRESENT on this plate,
+    with the colour and line style it is drawn in and a plain name. Returns a legend_key key
+    dict (None when there are no plaques). Read from the current plaques every time."""
+    if not plaques:
+        return None
+    from plaque_stats import legend_key
+    present = set(plaque_classes(plaques))
+    entries = []
+    for k in CLASS_ORDER:
+        if k in present:
+            _n, rgb, style = PLAQUE_CLASSES[k]
+            entries.append(legend_key.entry(class_name(k, precise), "#%02X%02X%02X" % tuple(rgb),
+                                            kind="line", linestyle=("--" if style == "dashed" else "-"),
+                                            linewidth=2.0))
+    return legend_key.make_key(entries, title="Plaque outlines", fontsize=9.0, frameon=True)
+
+
+def key_text(plaques, precise=False):
+    """Legend text starter for a plate figure, e.g. 'auto-detected (green, solid line); ...'."""
+    key = plate_key(plaques, precise)
+    if not key:
+        return ""
+    from plaque_stats import legend_key
+    return legend_key.text_starter(key)
+
+
+def key_image(key, font_px):
+    """The stand-alone key (legend_key.key_figure -- the same drawing `save_key` writes)
+    rendered to a BGR array, at a resolution where its text is `font_px` pixels high. The
+    key placed on a figure is this picture, so it cannot differ from the stand-alone file."""
+    import io
+    import matplotlib
+    from plaque_stats import legend_key
+    with matplotlib.rc_context(legend_key.VECTOR_RC):
+        fig = legend_key.key_figure(key)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=72.0 * float(font_px) / float(key["fontsize"]),
+                    bbox_inches="tight", pad_inches=0.05, facecolor="white")
+    return cv2.imdecode(np.frombuffer(buf.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+
+
+def key_origin(image_shape, key_shape):
+    """Top-left pixel of the embedded key: the image's top-right corner (outside a round dish)."""
+    H, W = int(image_shape[0]), int(image_shape[1])
+    pad = max(6, int(round(0.015 * W)))
+    return (max(0, W - pad - int(key_shape[1])), min(pad, max(0, H - int(key_shape[0]))))
+
+
+def key_image_for(image_shape, key):
+    """The key picture at the size it has ON a figure of `image_shape` (text as high as the
+    plaque labels), or None when there is nothing to key. The canvas shows this same array."""
+    if not key or not key.get("entries"):
+        return None
+    patch = key_image(key, figure_metrics(image_shape)["font_px"])
+    if patch is None:
+        return None
+    H, W = int(image_shape[0]), int(image_shape[1])
+    if patch.shape[1] > 0.6 * W or patch.shape[0] > 0.6 * H:      # tiny image: shrink to fit
+        f = min(0.6 * W / patch.shape[1], 0.6 * H / patch.shape[0])
+        patch = cv2.resize(patch, (max(1, int(patch.shape[1] * f)), max(1, int(patch.shape[0] * f))),
+                           interpolation=cv2.INTER_AREA)
+    cv2.rectangle(patch, (0, 0), (patch.shape[1] - 1, patch.shape[0] - 1), (60, 60, 60), 1)
+    return patch
+
+
+def _paste_key(img_bgr, patch):
+    x, y = key_origin(img_bgr.shape, patch.shape)
+    img_bgr[y:y + patch.shape[0], x:x + patch.shape[1]] = patch
+    return (x, y, patch.shape[1], patch.shape[0])
+
+
+def place_key(img_bgr, key):
+    """Paste the key onto the figure (in place). Returns the rectangle used, or None."""
+    patch = key_image_for(img_bgr.shape, key)
+    if patch is None:
+        return None
+    return _paste_key(img_bgr, patch)
+
+
+def scalebar_rect(g):
+    """The rectangle a scale bar and its label occupy (from scalebar.bar_geometry), so plaque
+    labels can keep clear of it."""
+    top = (g["y0"] - g["gap"] - 1.5 * g["label_h"]) if g["label_above"] else g["y0"]
+    bot = (g["y0"] + g["thickness"]) if g["label_above"] else (g["y0"] + g["thickness"] + g["gap"] + 1.5 * g["label_h"])
+    half = max(g["length_px"], 1.3 * g["label_w"]) / 2.0
+    return (g["label_cx"] - half - g["outline"], top, g["label_cx"] + half + g["outline"], bot + g["outline"])
+
+
+def scalebar_label_font(g, metrics):
+    """(font px, outline px) of the scale-bar label when drawn in the figure's own font."""
+    px = max(metrics["font_px"], int(round(g["label_h"] / 0.73)))
+    return px, max(2, int(round(px / 8.0)))
+
+
+def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=True, plate=None,
+                     scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255),
+                     labels="numbers", key=False, published=None, precise=False):
+    """Draw the plate figure onto a copy of the image and return it (BGR): plaque outlines in
+    their class colours (PLAQUE_CLASSES: the canvas's own), a label beside each plaque (white
+    with a dark outline, sized to the image, just outside the outline, on the first free of
+    four sides) and a physical scale bar. The ONE drawing function behind Save results,
+    Export all, the side-by-side figure and the Batch overlays (CT-R1 F9).
+
+    ``labels``  'numbers' (default), 'numbers + mm' or 'none'; ``draw_numbers=False`` = 'none'.
+    ``key``     True also places the legend key (plate_key) in the top-right corner.
+    ``scalebar_mm`` forces the bar length (mm); ``scalebar_anchor`` (x, y in image px) its
+    left end. With neither, and ``plate`` known, the bar is auto-sized and placed INSIDE the
+    dish (an image corner would fall in the dark surround)."""
+    annotated = orig_bgr.copy()
+    if annotated.ndim == 2:
+        annotated = cv2.cvtColor(annotated, cv2.COLOR_GRAY2BGR)
+    m = figure_metrics(annotated.shape)
+    for p, cls in zip(plaques, plaque_classes(plaques)):
+        _draw_outline(annotated, p, cls, m["line"])
+
+    texts = []
+    avoid = []                    # what a plaque label must not cover: the scale bar, the key
     # Physical scale bar (e.g. "5 mm"). pxl_per_mm is actually mm/px, so pass it straight.
     if scalebar and draw_scalebar and draw_scale_bar is not None:
         try:
-            anchor = scalebar_anchor
-            if anchor is None and plate and plate.get("center") is not None and plate.get("radius"):
-                cx, cy = plate["center"]; r = float(plate["radius"])
-                anchor = (cx - 0.5 * r, cy + 0.80 * r)   # on the lawn, lower-centre of the dish
-            draw_scale_bar(annotated, pxl_per_mm, anchor=anchor, length_mm=scalebar_mm,
-                           color=scalebar_color)
+            import scalebar as _sb
+            g = _sb.bar_geometry(annotated.shape, pxl_per_mm, anchor=scalebar_anchor,
+                                 length_mm=scalebar_mm, plate=plate)
+            own_font = g is not None and _font(m["font_px"]) is not None
+            draw_scale_bar(annotated, pxl_per_mm, anchor=scalebar_anchor, length_mm=scalebar_mm,
+                           color=scalebar_color, plate=plate, draw_label=not own_font)
+            if g is not None:
+                avoid.append(scalebar_rect(g))
+            if own_font:                                # the label in the figure's own font
+                px, stroke = scalebar_label_font(g, m)
+                tw, th = text_size(g["label"], px, stroke)
+                tx = max(2.0, min(g["label_cx"] - tw / 2.0, annotated.shape[1] - tw - 2.0))
+                ty = (g["y0"] - g["gap"] - th) if g["label_above"] else (g["y0"] + g["thickness"] + g["gap"])
+                texts.append((g["label"], tx, max(1.0, ty), px,
+                              tuple(int(v) for v in scalebar_color[::-1]), stroke))
         except Exception:
             pass          # never let the overlay break a save
+    key_patch = None
+    if key:
+        try:
+            key_patch = key_image_for(annotated.shape, plate_key(plaques, precise))
+            if key_patch is not None:
+                kx, ky = key_origin(annotated.shape, key_patch.shape)
+                avoid.append((kx, ky, kx + key_patch.shape[1], ky + key_patch.shape[0]))
+        except Exception:
+            key_patch = None
+
+    mode = labels if (draw_numbers and labels in LABEL_MODES) else ("numbers" if draw_numbers else "none")
+    if mode != "none" and plaques:
+        strs = [label_text(i, p["area_pxl"], pxl_per_mm, mode, published)
+                for i, p in enumerate(plaques, start=1)]
+        sizes = [text_size(s, m["font_px"], m["stroke"]) for s in strs]
+        placed = layout_labels(plaques, sizes, annotated.shape, m["gap"], avoid=avoid)
+        for s, (_side, rect) in zip(strs, placed):
+            texts.append((s, rect[0], rect[1], m["font_px"], (255, 255, 255), m["stroke"]))
+    try:
+        _draw_texts(annotated, texts)
+    except Exception:
+        pass
+    if key_patch is not None:
+        _paste_key(annotated, key_patch)
     return annotated
 
 
-def save_figure(plaques, orig_bgr, out_path, pxl_per_mm, draw_numbers=True, scalebar=True,
-                plate=None, scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255)):
-    """Render the annotated overlay (outlines + numbers + scale bar) and write it to out_path
-    as a stand-alone publication figure. Returns the path actually written (HEIC -> PNG)."""
-    annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm,
-                                 draw_numbers=draw_numbers, scalebar=scalebar, plate=plate,
-                                 scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
-                                 scalebar_color=scalebar_color)
-    ext = os.path.splitext(out_path)[1].lower()
-    if ext in ("", ".heic", ".heif"):     # OpenCV cannot write HEIC / needs an extension
-        out_path = os.path.splitext(out_path)[0] + ".png"
+RASTER_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
+VECTOR_EXTS = (".pdf", ".svg")
+
+
+def write_figure(img_bgr, out_path):
+    """Write a figure image and return the path ACTUALLY written. .png/.jpg/.tif go through
+    OpenCV; .pdf/.svg through matplotlib (the picture embedded at full resolution); any other
+    extension (HEIC, none, a typo) is saved as .png -- compare the result with what you asked
+    for to tell the user. A failed write raises (CT-R1 F22: a .pdf name used to raise an
+    uncaught cv2.error after the dialog closed, with nothing saved and nothing said)."""
+    root, ext = os.path.splitext(out_path)
+    ext = ext.lower()
+    if ext not in RASTER_EXTS + VECTOR_EXTS:
+        out_path = (root if ext in (".heic", ".heif", "") else out_path) + ".png"
+        ext = ".png"
     d = os.path.dirname(os.path.abspath(out_path))
     if d:
         os.makedirs(d, exist_ok=True)
-    cv2.imwrite(out_path, annotated)
+    if ext in VECTOR_EXTS:
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        h, w = img_bgr.shape[:2]
+        dpi = 300.0
+        fig = Figure(figsize=(w / dpi, h / dpi), dpi=dpi)
+        FigureCanvasAgg(fig)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis("off")
+        ax.imshow(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), interpolation="none")
+        fig.savefig(out_path, dpi=dpi)
+    else:
+        pst.imwrite_checked(out_path, img_bgr)
+    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+        raise IOError("could not write %s" % out_path)
     return out_path
 
 
+def save_figure(plaques, orig_bgr, out_path, pxl_per_mm, draw_numbers=True, scalebar=True,
+                plate=None, scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255),
+                labels="numbers", key=False, published=None, precise=False):
+    """Render the annotated overlay (outlines + labels + scale bar, optionally the legend key)
+    and write it to out_path as a stand-alone figure. Returns the path actually written
+    (see write_figure: unknown extension / HEIC -> PNG)."""
+    annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm,
+                                 draw_numbers=draw_numbers, scalebar=scalebar, plate=plate,
+                                 scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
+                                 scalebar_color=scalebar_color, labels=labels, key=key,
+                                 published=published, precise=precise)
+    return write_figure(annotated, out_path)
+
+
 def save_comparison(plaques, orig_bgr, out_path, pxl_per_mm, plate=None, scalebar_mm=None,
-                    scalebar_anchor=None, labels=("Input", "Detected"), scalebar_color=(255, 255, 255)):
+                    scalebar_anchor=None, labels=("Input", "Detected"), scalebar_color=(255, 255, 255),
+                    plaque_labels="numbers", key=False, published=None, precise=False):
     """Write a side-by-side 'input vs annotated output' figure: the original plate on the left,
-    the annotated detection (outlines + numbers + scale bar) on the right, under a labelled
-    banner. Returns the path actually written (HEIC -> PNG)."""
+    the annotated detection (the same drawing as save_figure) on the right, under a labelled
+    banner. Returns the path actually written."""
     left = orig_bgr.copy()
     right = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,
                              scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
-                             scalebar_color=scalebar_color)
+                             scalebar_color=scalebar_color, labels=plaque_labels, key=key,
+                             published=published, precise=precise)
     h, w = left.shape[:2]
     gap = max(8, int(round(0.01 * w)))
     sep = np.full((h, gap, 3), 255, np.uint8)               # white divider
     combo = np.hstack([left, sep, right])
     cw = combo.shape[1]
-    banner_h = max(34, int(round(0.05 * h)))
+    px = max(16, int(round(w / 45.0)))                      # banner titles, in the figure's font
+    banner_h = max(34, int(round(px * 1.9)))
     banner = np.full((banner_h, cw, 3), 28, np.uint8)       # dark title strip
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    fs = max(0.7, w / 1500.0); ft = max(1, int(round(fs * 2)))
+    items = []
     for text, cx in ((labels[0], w // 2), (labels[1], w + gap + w // 2)):
-        (tw, th), _ = cv2.getTextSize(text, font, fs, ft)
-        cv2.putText(banner, text, (int(cx - tw / 2), int((banner_h + th) / 2)),
-                    font, fs, (255, 255, 255), ft, cv2.LINE_AA)
+        tw, th = text_size(text, px, 0)
+        items.append((text, cx - tw / 2.0, (banner_h - th) / 2.0, px, (255, 255, 255), 0))
+    _draw_texts(banner, items)
     final = np.vstack([banner, combo])
-    ext = os.path.splitext(out_path)[1].lower()
-    if ext in ("", ".heic", ".heif"):
-        out_path = os.path.splitext(out_path)[0] + ".png"
-    d = os.path.dirname(os.path.abspath(out_path))
-    if d:
-        os.makedirs(d, exist_ok=True)
-    cv2.imwrite(out_path, final)
-    return out_path
+    return write_figure(final, out_path)
 
 
 def save_image(img_bgr, out_path):
-    """Write a BGR image to out_path, converting an unwritable/HEIC extension to PNG."""
-    ext = os.path.splitext(out_path)[1].lower()
-    if ext in ("", ".heic", ".heif"):
-        out_path = os.path.splitext(out_path)[0] + ".png"
-    d = os.path.dirname(os.path.abspath(out_path))
-    if d:
-        os.makedirs(d, exist_ok=True)
-    cv2.imwrite(out_path, img_bgr)
-    return out_path
+    """Write a BGR image to out_path (see write_figure for the formats)."""
+    return write_figure(img_bgr, out_path)
+
+
+def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl_per_mm, *,
+                       published, sensitive=False, small=False, watershed=False, precise=False,
+                       plate_mm=None, edited=None, edits=None, source_image=None, orientation=None,
+                       engine_label=None, extra_settings=None):
+    """run_metadata.json for one plate, from EXPLICIT engine flags. Shared by save_results
+    and the app's Export all, so both describe a result the same way (CT-R1 F6)."""
+    import provenance
+    label = engine_label or provenance.engine_name(
+        published=bool(published), sensitive=bool(sensitive) and not published, precise=bool(precise))
+    n_manual = sum(1 for p in plaques if p.get("source") not in (None, "auto"))
+    if edited is None:
+        edited = n_manual > 0
+    settings = {"plate_size_mm": plate_mm, "small_plaque": bool(small),
+                "published": bool(published), "sensitive": bool(sensitive) and not published,
+                "watershed": bool(watershed) and not published, "edited": bool(edited)}
+    if source_image:
+        settings["source_image"] = source_image
+    if orientation is not None:
+        settings["orientation"] = list(orientation)
+    settings.update(extra_settings or {})
+    rec = {"file": os.path.basename(image_path), "path": image_path,
+           "sha256_16": provenance.file_digest(image_path), "n_plaques": int(n_rows),
+           "n_manual_or_edited": n_manual, "mm_per_px": pxl_per_mm,
+           "csv": os.path.basename(csv_path)}
+    if edits:
+        rec["edits"] = dict(edits)
+    return provenance.write_metadata(out_dir, tool, label, settings, [rec])
 
 
 def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=None, plate=None,
                  scalebar_mm=None, scalebar_anchor=None, scalebar_color=(255, 255, 255),
-                 published=None, write_provenance=True, engine_label=None):
+                 published=None, write_provenance=True, engine_label=None, *,
+                 sensitive=None, small=None, watershed=None, precise=False, plate_mm=None,
+                 edited=None, edits=None, source_image=None, orientation=None,
+                 labels="numbers", key=False, write_key=False):
     """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
     sibling saying which engine and edits produced them (PT-9 never covered the editor or
-    the app's Save; AUDIT-2026-10.md, PT-31)."""
+    the app's Save; AUDIT-2026-10.md, PT-31).
+
+    Keyword-only, all optional (CT-R1 F6): ``sensitive`` / ``small`` / ``watershed`` /
+    ``precise`` are the flags of the engine that PRODUCED the plaques, ``plate_mm`` the dish
+    diameter the calibration stands for, ``edited`` / ``edits`` whether and how the plaque set
+    or calibration was changed by hand, ``source_image`` / ``orientation`` the original file
+    and the rotate/flip steps when ``image_path`` is an oriented copy. Left as None they fall
+    back to what this function always did (the module-level engine settings; "edited" = any
+    non-auto plaque) so the CLI editor, measure_samples.py and the batch runner are unchanged.
+    The desktop app passes all of them: its Save used to record whatever engine another tab
+    had last run. ``labels`` / ``key`` style the overlay (see annotate_plaques);
+    ``write_key=True`` also writes out_<stem>_legend_key.png + _legend_text.txt."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -465,7 +965,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
         })
     annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,    # outlines + numbers + scale bar
                                  scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
-                                 scalebar_color=scalebar_color)
+                                 scalebar_color=scalebar_color, labels=labels, key=key,
+                                 published=published, precise=precise)
 
     name = os.path.splitext(os.path.split(image_path)[1])[0]
     ext = os.path.splitext(os.path.split(image_path)[1])[1]
@@ -476,23 +977,31 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     pd.DataFrame(rows, columns=["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
                                 "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
     pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
+    if write_key and plaques:
+        try:
+            from plaque_stats import legend_key
+            legend_key.write_key_files(plate_key(plaques, precise),
+                                       os.path.splitext(img_path)[0], formats=("png",))
+        except Exception:                             # a key must never break a save
+            pass
     if write_provenance:
         try:
-            import provenance
             if published is None:
                 published = bool(pst.use_published)
-            label = engine_label or provenance.engine_name(
-                published=published, sensitive=bool(getattr(pst, "sensitive", False)) and not published)
-            n_manual = sum(1 for p in plaques if p.get("source") not in (None, "auto"))
-            provenance.write_metadata(
-                out_dir, "plaque_gui.save_results", label,
-                {"plate_size_mm": (plate or {}).get("plate_mm"), "small_plaque": bool(pst.small_plaques),
-                 "published": bool(published), "watershed": bool(pst.watershed_enabled),
-                 "edited": n_manual > 0},
-                [{"file": os.path.basename(image_path), "path": image_path,
-                  "sha256_16": provenance.file_digest(image_path), "n_plaques": len(rows),
-                  "n_manual_or_edited": n_manual, "mm_per_px": pxl_per_mm,
-                  "csv": os.path.basename(csv_path)}])
+            if sensitive is None:
+                sensitive = bool(getattr(pst, "sensitive", False))
+            if small is None:
+                small = bool(pst.small_plaques)
+            if watershed is None:
+                watershed = bool(pst.watershed_enabled)
+            if plate_mm is None:
+                plate_mm = (plate or {}).get("plate_mm")
+            write_run_metadata(out_dir, "plaque_gui.save_results", image_path, csv_path, len(rows),
+                               plaques, pxl_per_mm, published=published, sensitive=sensitive,
+                               small=small, watershed=watershed, precise=precise,
+                               plate_mm=plate_mm, edited=edited, edits=edits,
+                               source_image=source_image, orientation=orientation,
+                               engine_label=engine_label)
         except Exception:                             # provenance must never break a save
             pass
     return csv_path, img_path, len(rows)

@@ -97,6 +97,24 @@ class FlowLayout(QLayout):
             line_h = max(line_h, sz.height())
         return y + line_h - rect.y() + m.bottom()
 
+class _FitVBox(QVBoxLayout):
+    """A QVBoxLayout that does not ADVERTISE height-for-width to its parent scroll area.
+
+    The Measure tab contains wrapping toolbars (FlowLayout), which makes an ordinary box
+    layout report hasHeightForWidth(). A QScrollArea with widgetResizable then sizes the tab
+    to heightForWidth(width) -- its PREFERRED height (971 px here) -- in every window, so the
+    canvas and the feedback line ended up below the fold (CT-R1 F11). Internally the box still
+    gives each wrapping toolbar the height it needs for the current width; only the report to
+    the scroll area changes, so the tab is fitted to the viewport and the canvas takes the
+    height that is left. MeasureTab.resizeEvent publishes the true minimum height."""
+
+    def hasHeightForWidth(self):
+        return False
+
+    def heightForWidth(self, w):
+        return -1
+
+
 # Engine/mode catalogue: label -> (kwargs/flag, helper text).
 MODES = [
     ("Published (validated)", "published",
@@ -179,16 +197,23 @@ class MeasureTab(QWidget):
                               "Tip: measure the AGAR base (often ~85 mm), not the printed lid size.")
         self.plate_85 = QPushButton("85 mm")
         self.plate_85.setToolTip("Quick-set 85 mm — a common agar-base diameter.")
-        self.plate_85.clicked.connect(lambda: self.plate.setValue(85))
+        self.plate_85.clicked.connect(lambda: self._quick_dish(85))
         self.plate_100 = QPushButton("100 mm")
         self.plate_100.setToolTip("Quick-set 100 mm — the nominal lid diameter.")
-        self.plate_100.clicked.connect(lambda: self.plate.setValue(100))
+        self.plate_100.clicked.connect(lambda: self._quick_dish(100))
         # changing the dish size (typing OR the 85/100 buttons) live-re-scales the current image
         self.plate.valueChanged.connect(self._on_dish_value_changed)
 
         # image orientation — rotate / flip the plate (e.g. to match your Fiji hand-labelling)
         self._cur_img = None       # current (oriented) BGR array
         self._detect_src = None    # path detection runs on (an oriented temp; None => image_path)
+        self._orient_ops = []      # rotate/flip steps applied to the image on screen (metadata)
+        # CT-R1 F15: what a running detection was asked to open. image_path / _detect_src /
+        # _cur_img / _orient_ops only change when that detection SUCCEEDS (on_detected), so a
+        # failed open leaves the tab pointing at the image that is still on screen.
+        self._pending = None
+        self._det_settings = None  # (engine key, watershed) the result on screen was made with
+        self._dish_msg = None      # why a Dish action could not rescale (shown under the card)
         self.orient_btn = QPushButton("Orient ▾")
         self.orient_btn.setToolTip("Rotate or flip the plate to match your reference orientation "
                                    "(e.g. your Fiji hand-labelling). Re-runs detection on the new view.")
@@ -214,12 +239,18 @@ class MeasureTab(QWidget):
         self.mode.setCurrentIndex(self._def_mode)
         # flag the recommended engine right in the dropdown (label stays clean for status text)
         self.mode.setItemText(self._def_mode, MODES[self._def_mode][0] + "   ★ recommended")
+        if not _precise_ok:
+            # CT-R1 F15: say so in the list, instead of only after the user has picked it
+            self.mode.setItemText(3, MODES[3][0] + "   (not installed)")
+            self.mode.setItemData(3, "The Precise engine needs PyTorch + the PlaqSeg model, which "
+                                     "are not installed on this computer.", Qt.ToolTipRole)
         self.mode.setToolTip("Detection engine / mode. Hover an option or read the line below.")
         self.mode.currentIndexChanged.connect(self._mode_changed)
 
         self.watershed = QCheckBox("Split touching plaques")
         self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch. "
                                   "Helpful on crowded plates; ignored under Published mode.")
+        self.watershed.stateChanged.connect(lambda _=0: self._update_stale())
 
         self.exclude_overlaps = QCheckBox("Exclude overlaps from stats")
         self.exclude_overlaps.setToolTip("Leave overlapping/touching plaques (OVERLAP=yes, shown "
@@ -264,8 +295,12 @@ class MeasureTab(QWidget):
         self.progress = QProgressBar(); self.progress.setRange(0, 0)   # indeterminate
         self.progress.setVisible(False); self.progress.setMaximumWidth(220)
         self.busy_label = QLabel(""); self.busy_label.setObjectName("ModeHelp")
+        # CT-R1 F25: Engine / Split-touching changed but the result on screen is the old one
+        self.stale_label = QLabel(""); self.stale_label.setVisible(False)
+        self.stale_label.setStyleSheet(f"font-weight:700; color:{style.LIGHT['warn']};")
         strip = QHBoxLayout(); strip.setContentsMargins(2, 0, 2, 0)
         strip.addWidget(self.mode_help, 1)
+        strip.addWidget(self.stale_label)
         strip.addWidget(self.busy_label); strip.addWidget(self.progress)
 
         # ---- canvas (left) ------------------------------------------------- #
@@ -351,12 +386,53 @@ class MeasureTab(QWidget):
         split.addWidget(self.canvas_holder); split.addWidget(right)
         split.setSizes([720, 470]); split.setChildrenCollapsible(False)
 
-        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        # CT-R1 F11: _FitVBox, not QVBoxLayout -- see its docstring (the tab was laid out
+        # 971 px tall in every window, with the canvas and its feedback line below the fold).
+        lay = _FitVBox(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(params_box)
         lay.addLayout(strip)
+        self._params_box, self._right, self._strip = params_box, right, strip
         lay.addWidget(split, 1)
+        self._split = split
+        split.splitterMoved.connect(lambda *_a: self._sync_min_height())
 
         self._apply_a11y()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        # The tab's real minimum height depends on its width (the toolbars wrap). Publish it,
+        # so the outer scroll area scrolls only when the window is too small for that minimum
+        # and otherwise hands the canvas all the height that is left (CT-R1 F11).
+        self._sync_min_height()
+
+    def _sync_min_height(self):
+        """Publish the tab's real minimum height for its CURRENT width: the wrapped parameter
+        row + the help strip + the taller of the canvas card (editor toolbar rows, feedback
+        line, a usable image, legend row) and the right panel. Summed by hand: _FitVBox hides
+        height-for-width from the scroll area on purpose, so the layout cannot be asked."""
+        lay = self.layout()
+        if lay is None or self.width() <= 0:
+            return
+
+        def h4w(widget_or_layout, w):
+            if widget_or_layout.hasHeightForWidth() and w > 0:
+                return max(widget_or_layout.heightForWidth(w), 0)
+            ms = widget_or_layout.minimumSizeHint() if hasattr(widget_or_layout, "minimumSizeHint") \
+                else widget_or_layout.minimumSize()
+            return max(ms.height(), 0)
+
+        m = lay.contentsMargins()
+        inner = self.width() - m.left() - m.right()
+        ch = self.canvas_holder
+        cl = ch.layout()
+        cw = ch.width() if ch.width() > 0 else int(inner * 0.6)
+        canvas_need = (cl.minimumHeightForWidth(cw) if cl.hasHeightForWidth()
+                       else cl.minimumSize().height())
+        need = (m.top() + m.bottom() + 2 * lay.spacing()
+                + h4w(self._params_box, inner) + h4w(self._strip, inner)
+                + max(canvas_need, self._right.minimumSizeHint().height()))
+        if need > 0 and need != self.minimumHeight():
+            self.setMinimumHeight(need)
 
     # -- accessibility ------------------------------------------------------ #
     def _apply_a11y(self):
@@ -398,8 +474,10 @@ class MeasureTab(QWidget):
             grid.addWidget(cap, 0, col)
             grid.addWidget(val, 1, col)
             self._metrics[key] = val
+            self._metric_caps[key] = cap
 
         self._metrics = {}
+        self._metric_caps = {}
         metric(0, "count", "PLAQUES")
         metric(1, "median", "MEDIAN Ø (mm)")
         metric(2, "mean", "MEAN Ø (mm)")
@@ -410,10 +488,15 @@ class MeasureTab(QWidget):
         grid.addWidget(self.flag_label, 2, 0, 1, 4)
         return card
 
-    def _set_summary(self, n=None, median=None, mean=None, cal=None, flag=None, mode=None):
+    def _set_summary(self, n=None, median=None, mean=None, cal=None, flag=None, mode=None, unit="mm"):
+        """`unit` = "mm", or "px" when there is no mm scale: the card then shows PIXEL
+        diameters under headings that say so, instead of 0.00 "mm" (CT-R1 F14)."""
         self._metrics["count"].setText("—" if n is None else str(n))
-        self._metrics["median"].setText("—" if median is None else f"{median:.2f}")
-        self._metrics["mean"].setText("—" if mean is None else f"{mean:.2f}")
+        self._metric_caps["median"].setText("MEDIAN Ø (%s)" % unit)
+        self._metric_caps["mean"].setText("MEAN Ø (%s)" % unit)
+        fmt = "%.2f" if unit == "mm" else "%.1f"
+        self._metrics["median"].setText("—" if median is None else fmt % median)
+        self._metrics["mean"].setText("—" if mean is None else fmt % mean)
         cal_lbl = self._metrics["cal"]
         if cal:
             cal_lbl.setText(f"{cal:.4f} mm/px  ✓")
@@ -440,7 +523,54 @@ class MeasureTab(QWidget):
     def _mode_changed(self, idx):
         self.mode_help.setText(MODES[idx][2])
         key = MODES[idx][1]
+        if key == "published" and self.watershed.isChecked():
+            # CT-R1 F25: the box was greyed out but stayed ticked, as if it still applied
+            self.watershed.setChecked(False)
         self.watershed.setEnabled(key not in ("published",))
+        self._update_stale()
+
+    def _engine_key_of(self, det):
+        """The engine that PRODUCED a result, from its own flags (not the dropdown, which the
+        user may have changed since)."""
+        if det.get("precise"):
+            return "precise"
+        if det.get("published"):
+            return "published"
+        return "sensitive" if det.get("sensitive") else "current"
+
+    def _engine_label_of(self, det):
+        key = self._engine_key_of(det)
+        return next(label for label, k, _h in MODES if k == key)
+
+    def _update_stale(self):
+        """Show 'settings changed: press Re-detect' while the Engine / Split-touching controls
+        no longer describe the result on screen (CT-R1 F25: nothing marked it as stale)."""
+        stale = False
+        if self.det is not None and self.editor is not None and self._det_settings is not None:
+            key, ws = self._det_settings
+            now_key = self._mode_key()
+            now_ws = self.watershed.isChecked() and now_key not in ("published", "precise")
+            stale = (now_key != key) or (bool(now_ws) != bool(ws))
+        if stale:
+            self.stale_label.setText("⚠ settings changed: press Re-detect  (on screen: %s)"
+                                     % self._engine_label_of(self.det))
+        self.stale_label.setVisible(stale)
+
+    def _dish_note(self, text=None):
+        """A one-line explanation under the summary numbers for a Dish action that could not
+        do anything (CT-R1 F14: the 85 / 100 buttons did nothing, silently)."""
+        self._dish_msg = text
+        self.refresh_table()            # (this resets the status bar, so the note goes after it)
+        if text:
+            self.window().statusBar().showMessage(text, 8000)
+
+    def _quick_dish(self, mm):
+        """The 85 / 100 buttons: set the Dish box and, if that cannot rescale the plate on
+        screen, say why."""
+        same = abs(self.plate.value() - mm) < 1e-9
+        self.plate.setValue(mm)
+        if same and self.editor is not None and not self.busy:
+            self._on_dish_value_changed(mm)      # the box did not change, so nothing fired
 
     def _on_dish_value_changed(self, val):
         """Live-recalibrate the current image when the dish size changes (typing or the 85/100
@@ -448,7 +578,41 @@ class MeasureTab(QWidget):
         update immediately. Before an image is loaded it's a no-op (the value applies at detect)."""
         if self.busy or self.editor is None:
             return
-        self.editor.set_plate_mm(val)
+        if self.editor.set_plate_mm(val):
+            self._dish_note(None)
+        else:
+            self._dish_note("No dish outline was found on this image, so the Dish size has nothing "
+                            "to rescale. Use “Set plate” (click 3 points on the rim) or the "
+                            "“Ruler” to calibrate.")
+
+    def _on_calibration_changed(self, plate_mm):
+        """Set plate / Ruler / an undo of either changed the scale in the editor: show the dish
+        size it now stands for in the Dish box. Signals blocked, so this does not come back
+        as a rescale (CT-R1 F20: the box kept saying 90 after Set plate 85)."""
+        if plate_mm is None or plate_mm <= 0:
+            return
+        self.plate.blockSignals(True)
+        try:
+            self.plate.setValue(float(plate_mm))
+        finally:
+            self.plate.blockSignals(False)
+
+    def _confirm_discard(self, action):
+        """Ask ONCE before an action that throws away unsaved hand edits (CT-R1 F8: Orient and
+        Re-detect discarded erased plaques, drawn shapes and a hand calibration without a
+        word). True = go ahead."""
+        ed = self.editor
+        if ed is None or not getattr(ed, "dirty", False):
+            return True
+        ans = QMessageBox.question(
+            self, "Unsaved edits",
+            "You have unsaved edits on this plate (plaques added or removed, a hand "
+            "calibration or a scale-bar change).\n\n%s replaces them with a fresh detection. "
+            "Save results or Export all first if you want to keep them.\n\n"
+            "Discard the edits and continue?" % action,
+            QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
+        # Yes is accepted too: scripted callers that answer every question with Yes mean "go on"
+        return ans in (QMessageBox.Discard, QMessageBox.Yes)
 
     # -- drag and drop ------------------------------------------------------ #
     def dragEnterEvent(self, e):
@@ -465,26 +629,33 @@ class MeasureTab(QWidget):
         for u in e.mimeData().urls():
             p = u.toLocalFile()
             if p.lower().endswith(IMG_EXTS):
-                self.image_path = p
-                self._cur_img = None; self._detect_src = None
-                self._detect()               # loads/replaces the current image
+                if not self._confirm_discard("Opening another image"):
+                    e.ignore(); return
+                self._detect(self._new_image_request(p))   # loads/replaces the current image
                 e.acceptProposedAction()
                 return
         e.ignore()
 
     # -- actions ------------------------------------------------------------ #
+    @staticmethod
+    def _new_image_request(path):
+        """A detection request for a freshly opened file (identity orientation)."""
+        return {"image_path": path, "detect_src": None, "cur_img": None, "orient_ops": []}
+
     def open_image(self):
         if self.busy:
             return
         path, _ = QFileDialog.getOpenFileName(self, "Select a plaque image", "", IMG_FILTER)
         if not path:
             return
-        self.image_path = path
-        self._cur_img = None; self._detect_src = None   # fresh image → identity orientation
-        self._detect()
+        if not self._confirm_discard("Opening another image"):
+            return
+        self._detect(self._new_image_request(path))
 
     def redetect(self):
         if self.image_path and not self.busy:
+            if not self._confirm_discard("Re-detect"):
+                return
             self._detect()
 
     def _orient(self, op):
@@ -493,17 +664,13 @@ class MeasureTab(QWidget):
         stay named/saved next to the original image."""
         if self.busy or self.image_path is None:
             return
-        if self.editor is not None and any(p.get("source") == "manual" for p in self.editor.plaques):
-            if QMessageBox.question(
-                    self, "Re-orient plate",
-                    "Rotating/flipping re-runs detection and discards your manual edits.\n"
-                    "Best to orient the plate first, then label. Continue?",
-                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-                return
+        if not self._confirm_discard("Rotating or flipping the plate"):
+            return
         try:
-            if self._cur_img is None:
-                self._cur_img = engine_api.read_image(self.image_path)
-            self._cur_img = engine_api.rotate_flip(self._cur_img, op)
+            cur = self._cur_img
+            if cur is None:
+                cur = engine_api.read_image(self.image_path)
+            cur = engine_api.rotate_flip(cur, op)
             stem = os.path.splitext(os.path.basename(self.image_path))[0]
             # Keep the oriented copy next to the outputs, not in the temp folder, and open
             # the editor ON that copy: exported labels then point at an image that exists
@@ -512,12 +679,12 @@ class MeasureTab(QWidget):
             out_dir = os.path.join(os.path.dirname(self.image_path), "out")
             os.makedirs(out_dir, exist_ok=True)
             tmp = os.path.join(out_dir, stem + "_oriented.png")
-            engine_api.write_image(tmp, self._cur_img)
-            self._detect_src = tmp
+            engine_api.write_image(tmp, cur)
         except Exception as e:
             QMessageBox.warning(self, "Orientation failed", str(e))
             return
-        self._detect()
+        self._detect({"image_path": self.image_path, "detect_src": tmp, "cur_img": cur,
+                      "orient_ops": list(self._orient_ops) + [op]})
 
     def _set_busy(self, on, message=""):
         self.busy = on
@@ -557,12 +724,21 @@ class MeasureTab(QWidget):
         except (RuntimeError, AttributeError):
             pass
 
-    def _detect(self):
+    def _detect(self, req=None):
+        """Run a detection. `req` says WHAT to open ({image_path, detect_src, cur_img,
+        orient_ops}); None = the image already on the tab, as it is. Nothing on the tab changes
+        until the detection succeeds (on_detected commits the request; CT-R1 F15)."""
+        if req is None:
+            req = {"image_path": self.image_path, "detect_src": self._detect_src,
+                   "cur_img": self._cur_img, "orient_ops": list(self._orient_ops)}
         key = self._mode_key()
-        name = os.path.basename(self.image_path)
+        src = req["detect_src"] or req["image_path"]
+        req["settings"] = {"key": key, "plate_mm": self.plate.value(),
+                           "watershed": bool(self.watershed.isChecked()) and key not in ("published", "precise")}
         if key == "precise":
-            self._detect_precise(name)
+            self._detect_precise(req, src)
             return
+        self._pending = req
         self._start_busy(_BUSY_STD)
         self.window().statusBar().showMessage(f"Detecting ({MODES[self.mode.currentIndex()][0]})…")
         kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked())
@@ -572,12 +748,12 @@ class MeasureTab(QWidget):
             kw["small"] = True; kw["sensitive"] = True
         else:  # current
             kw["small"] = True
-        w = Worker(engine_api.detect_single, self._detect_src or self.image_path, **kw)
+        w = Worker(engine_api.detect_single, src, **kw)
         w.signals.finished.connect(self.on_detected)
         w.signals.error.connect(self.on_error)
         self.pool.start(w)
 
-    def _detect_precise(self, name):
+    def _detect_precise(self, req, src):
         ok, reason = engine_api.precise_available()
         if not ok:
             QMessageBox.information(
@@ -585,15 +761,43 @@ class MeasureTab(QWidget):
                 "Precise mode needs a second environment (PlaqSeg / PyTorch) and the model "
                 "weights, which are not installed on this machine:\n\n" + reason +
                 "\n\nFalling back is easy — pick Published, Current or Sensitive above.")
-            self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+            self.window().statusBar().showMessage(self._not_opened_message(
+                req, "Precise is not installed — pick another engine"))
             return
+        self._pending = req
         self._start_busy(_BUSY_PRECISE)
         self.window().statusBar().showMessage("Precise pipeline running (this can take a minute)…")
-        w = Worker(engine_api.detect_precise, self._detect_src or self.image_path,
-                   plate_mm=self.plate.value())
+        w = Worker(engine_api.detect_precise, src, plate_mm=self.plate.value())
         w.signals.finished.connect(self.on_precise_detected)
         w.signals.error.connect(self.on_precise_error)
         self.pool.start(w)
+
+    def _not_opened_message(self, req, why):
+        """Status text for a detection that did not happen / failed: say which image is still
+        the one on screen when the request was for a different file."""
+        new = (req or {}).get("image_path")
+        if self.editor is not None and self.image_path and new and new != self.image_path:
+            return "%s. %s was NOT opened; still showing %s." % (
+                why, os.path.basename(new), os.path.basename(self.image_path))
+        return why + "."
+
+    def _commit_request(self, det):
+        """A detection succeeded: NOW the tab points at what it opened, and the result is
+        stamped with what produced it (watershed, requested dish mm, the source file and any
+        rotate/flip steps) so every export can say so without reading the widgets later."""
+        req, self._pending = self._pending, None
+        if req is None:                 # a result handed in directly (self-test, tests)
+            return
+        self.image_path = req["image_path"]
+        self._detect_src = req["detect_src"]
+        self._cur_img = req["cur_img"]
+        self._orient_ops = list(req["orient_ops"])
+        s = req.get("settings") or {}
+        self._det_settings = (s.get("key"), bool(s.get("watershed")))
+        det.setdefault("watershed", bool(s.get("watershed")))
+        det.setdefault("plate_mm_requested", s.get("plate_mm"))
+        det["source_image"] = self.image_path
+        det["orientation"] = list(self._orient_ops)
 
     def _mount_editor(self):
         if self.editor is not None:
@@ -605,28 +809,58 @@ class MeasureTab(QWidget):
                                    on_change=self.refresh_table,
                                    face=style.LIGHT["surface"])
         self.editor.selection_changed.connect(self._on_canvas_selection)
-        self.canvas_layout.addWidget(self.editor)
+        self.editor.calibration_changed.connect(self._on_calibration_changed)
+        self.editor.dirty_changed.connect(lambda _on=True: self._show_status())
+        self.canvas_layout.addWidget(self.editor, 1)
+        QTimer.singleShot(0, self._sync_min_height)     # once the editor has its width
+
+    def _status_text(self):
+        """'19 detected + 14 detect-area · Published (validated) (edited)': what is on screen,
+        by how it got there, the engine that PRODUCED it, and whether it has unsaved edits
+        (CT-R1 F20: a Published result with 14 detect-area plaques still read 'Published')."""
+        if self.editor is None or self.det is None:
+            return ""
+        c = self.editor.counts()
+        parts = ["%d detected" % c["detected"]]
+        if c["detect_area"]:
+            parts.append("%d detect-area" % c["detect_area"])
+        if c["by_hand"]:
+            parts.append("%d added by hand" % c["by_hand"])
+        # short engine name ("Published", not "Published (validated)") so "(edited)" reads clearly;
+        # edited = differs from the detection result, or hand edits not yet saved
+        eng = self._engine_label_of(self.det).split(" (")[0]
+        edited = self.editor.edited or self.editor.dirty
+        return "%s · %s%s" % (" + ".join(parts), eng, " (edited)" if edited else "")
+
+    def _show_status(self):
+        txt = self._status_text()
+        if txt:
+            self.window().statusBar().showMessage(txt)
 
     def on_detected(self, det):
+        self._commit_request(det)
         self.det = det
+        self._dish_msg = None
         try:
             self._mount_editor()
         finally:
             self._set_busy(False)      # an editor error must not leave the tab locked
         self.refresh_table()
         self._set_image_info()
-        label = MODES[self.mode.currentIndex()][0]
-        self.window().statusBar().showMessage(f"{det['n_plaques']} plaques detected · {label}")
+        self._update_stale()
 
     def on_precise_detected(self, det):
+        self._commit_request(det)
         self.det = det
-        self._mount_editor()
-        self._set_busy(False)
+        self._dish_msg = None
+        try:
+            self._mount_editor()
+        finally:
+            self._set_busy(False)
         # plaques are now the editable Precise detections -> normal table path
         self.refresh_table()
         self._set_image_info()
-        n = det["n_plaques"]
-        self.window().statusBar().showMessage(f"{n} plaques (Precise · PST+PlaqSeg)")
+        self._update_stale()
 
     def _set_image_info(self):
         """Show the loaded photo's name + pixel size + camera/date + file size above the canvas."""
@@ -688,10 +922,14 @@ class MeasureTab(QWidget):
         if summ.get("uncertainty_flag"):
             extra = "⚠ Detectors disagree on count — verify by eye."
             flag = (flag + "  " + extra) if flag else extra
-        df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
-                                      det["pxl_per_mm"], det["lawn_gray"],
-                                      published=det.get("published"), plate=det.get("plate"))
-        self._set_table_df(df)
+        # The table comes from the EDITOR (its plaques, its current plate and calibration, the
+        # result's own engine flag) -- the same call every export makes, so the screen and the
+        # files cannot disagree (CT-R1 F7).
+        full = self.editor.table(with_reason=True)
+        reasons = [str(r) if r else "" for r in full["QC_REASON"].tolist()]
+        df = full.drop(columns=["QC_REASON"])
+        cal = self.editor.ppm
+        self._set_table_df(df, reasons=reasons, calibrated=bool(cal))
         n = len(df)
         stats_df = df
         if self.exclude_overlaps.isChecked() and "OVERLAP" in df.columns:
@@ -700,21 +938,51 @@ class MeasureTab(QWidget):
         if n_excl:
             ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."
             flag = (flag + "  " + ov_msg) if flag else ov_msg
-        dm = pd.to_numeric(stats_df["DIAMETER_MM"], errors="coerce").dropna()
-        cal = det["pxl_per_mm"]
+        if not cal:
+            # CT-R1 F14: no mm scale. The card switches to pixel diameters and says why, in
+            # place of "0.00 mm" that looked like a measurement.
+            if self.editor.plate and self.plate.value() <= 0:
+                why = ("⚠ Dish size is 0: sizes are in pixels. Type the dish diameter in the Dish "
+                       "box, or use Set plate or the Ruler to calibrate.")
+            else:
+                why = ("⚠ No dish found: sizes are in pixels. Use Set plate or the Ruler to "
+                       "calibrate.")
+            if self._dish_msg:      # the user just tried the Dish box / 85 / 100 buttons
+                why += "  The Dish size has no dish outline to rescale on this image."
+            flag = (why + "  " + flag) if flag else why
+        elif self._dish_msg:
+            flag = (flag + "  " + self._dish_msg) if flag else self._dish_msg
+        dm =pd.to_numeric(stats_df["DIAMETER_MM" if cal else "DIAMETER_PXL"], errors="coerce").dropna()
         self._set_summary(
             n=n,
             median=(dm.median() if len(dm) else None),
             mean=(dm.mean() if len(dm) else None),
-            cal=cal, flag=flag)
+            cal=cal, flag=flag, unit=("mm" if cal else "px"))
+        self._show_status()
 
     # -- canvas <-> table selection link ------------------------------------ #
-    def _set_table_df(self, df):
+    _MM_COLUMNS = ("AREA_MM2", "DIAMETER_MM")
+
+    def _set_table_df(self, df, reasons=None, calibrated=True):
         """Refresh the table without letting the model-reset wipe the canvas selection,
-        then re-mirror the canvas selection into the fresh rows."""
+        then re-mirror the canvas selection into the fresh rows.
+
+        Display only (the model keeps the measure_table frame as it is, in CSV column order):
+        mm cells read "—" when there is no mm scale (CT-R1 F14); a flagged row is tinted, its
+        QC_FLAG cell explains itself on hover, and the QC_FLAG column is SHOWN second, where it
+        can be seen without scrolling (F24)."""
         self._syncing = True
         try:
-            self.model.set_dataframe(df)
+            has_qc = df is not None and "QC_FLAG" in df.columns
+            self.model.set_dataframe(
+                df, dash_columns=(() if calibrated else self._MM_COLUMNS),
+                cell_tooltips=({"QC_FLAG": reasons} if (has_qc and reasons is not None) else None),
+                flag_column=("QC_FLAG" if has_qc else None))
+            if has_qc:
+                hdr = self.table.horizontalHeader()
+                vis = hdr.visualIndex(list(df.columns).index("QC_FLAG"))
+                if vis != 1 and hdr.count() > 1:
+                    hdr.moveSection(vis, 1)
         finally:
             self._syncing = False
         if self.editor is not None:
@@ -773,8 +1041,12 @@ class MeasureTab(QWidget):
                 row = self.model.dataframe().iloc[i]
                 turb = row["TURBIDITY_REL"]
                 turb = "—" if turb in ("", None) else turb
+                if self.editor.ppm:
+                    size = f"Ø {row['DIAMETER_MM']} mm  ·  area {row['AREA_MM2']} mm²"
+                else:               # no mm scale: pixels, not "0.0 mm" (CT-R1 F14)
+                    size = f"Ø {row['DIAMETER_PXL']} px  ·  area {row['AREA_PXL']} px²"
                 self.sel_readout.setText(
-                    f"Selected  #{row['INDEX']}  ·  Ø {row['DIAMETER_MM']} mm  ·  area {row['AREA_MM2']} mm²"
+                    f"Selected  #{row['INDEX']}  ·  {size}"
                     f"  ·  gray {row['MEAN_GRAY']}  ·  turbidity {turb}  —  Ctrl+C to copy this row")
                 return
             except (StopIteration, IndexError, KeyError):
@@ -788,7 +1060,8 @@ class MeasureTab(QWidget):
             return
         from app import fiji_export, fiji_dialog
         app_df = fiji_export.app_match_frame(self.editor.plaques, self.editor.orig_bgr,
-                                             self.editor.plate, self.editor.ppm)
+                                             self.editor.plate, self.editor.ppm,
+                                             published=self.editor._pub())
         dlg = fiji_dialog.FijiCompareDialog(app_df, calibrated=bool(self.editor.ppm), parent=self)
         dlg.exec()
 
@@ -797,30 +1070,337 @@ class MeasureTab(QWidget):
             return
         try:
             self.editor.save()
-            out_dir = os.path.join(os.path.dirname(self.image_path), "out")
+            # the folder the editor actually wrote to (it belongs to the image ON SCREEN; the
+            # tab used to rebuild the path from a file name that could be another image, F15)
+            out_dir = self.editor.out_dir
+            self.editor._update_hint("✓ saved the results (CSV, annotated image, legend key) → 'out' folder")
             self.window().statusBar().showMessage(f"Saved to {out_dir}")
             QMessageBox.information(self, "Saved", f"Results written to:\n{out_dir}")
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
 
+    def _set_placeholder(self, text):
+        try:
+            if self.editor is None:
+                self.placeholder.setText(text)
+        except (RuntimeError, AttributeError):
+            pass
+
     def on_error(self, msg):
+        req, self._pending = self._pending, None     # nothing was opened: the tab is unchanged
         self._set_busy(False)
-        self.placeholder.setText("Detection failed. Try another image or mode.")
-        self.window().statusBar().showMessage("Detection failed.")
+        self._set_placeholder("Detection failed. Try another image or mode.")
+        self.window().statusBar().showMessage(self._not_opened_message(req, "Detection failed"))
         QMessageBox.critical(self, "Detection failed", msg[:1000])
 
     def on_precise_error(self, msg):
+        req, self._pending = self._pending, None
         self._set_busy(False)
-        self.placeholder.setText("Precise detection unavailable.")
-        self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+        self._set_placeholder("Precise detection unavailable.")
+        self.window().statusBar().showMessage(self._not_opened_message(
+            req, "Precise unavailable — pick another engine"))
         QMessageBox.information(self, "Precise engine unavailable", msg[:1200])
 
 
 # --------------------------------------------------------------------------- #
+#  Summary tables shared by the Batch and Compare tabs (CT-R1 F18, F23)
+# --------------------------------------------------------------------------- #
+from PySide6.QtGui import QFontMetrics  # noqa: E402
+from PySide6.QtWidgets import QBoxLayout  # noqa: E402  (only the Compare tab needs it)
+
+
+def _is_blank(val):
+    """True for the values a summary table shows as an empty cell (None / NaN / pd.NA / '')."""
+    if val is None:
+        return True
+    if isinstance(val, str):
+        return val.strip() == "" or val.strip().lower() in ("nan", "none", "<na>")
+    try:
+        return bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return False
+
+
+def _fmt_cell(val, kind=None):
+    """Display text of one summary-table cell. The CSV on disk keeps full precision; the
+    table shows whole counts, 4 significant digits, yes/no for flags and an EMPTY cell (not
+    'nan') where there is no value."""
+    if _is_blank(val):
+        return ""
+    if isinstance(val, bool) or type(val).__name__ in ("bool_", "bool"):
+        return "yes" if bool(val) else "no"
+    if isinstance(val, str):
+        return val
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return str(val)
+    if kind == "count" or (float(f).is_integer() and abs(f) < 1e6 and kind is None
+                           and not isinstance(val, float)):
+        return str(int(round(f)))
+    if kind == "sci":
+        return "%.3g" % f if abs(f) < 1e4 else "%.2e" % f
+    return "%.4g" % f
+
+
+class SummaryTableModel(PandasTableModel):
+    """PandasTableModel for the per-plate / per-phage summaries: short human header labels
+    with the CSV column name + meaning as tooltip, rounded numbers, blanks instead of 'nan'.
+    Qt.UserRole still returns the raw value, so sorting is by the real number."""
+
+    def __init__(self, columns=None):
+        super().__init__()
+        self._meta = dict(columns or {})        # CSV column -> (label, tooltip, kind)
+
+    def _col(self, section):
+        return str(self._df.columns[section])
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        col = self._col(index.column())
+        val = self._df.iloc[index.row(), index.column()]
+        if role == Qt.DisplayRole:
+            return _fmt_cell(val, self._meta.get(col, ("", "", None))[2])
+        if role == Qt.UserRole:
+            return val
+        if role == Qt.ToolTipRole:
+            if isinstance(val, str) and len(val) > 30:
+                return val                       # long text (an error) is readable on hover
+            return self._meta.get(col, (col, None, None))[1]
+        if role == Qt.TextAlignmentRole:
+            numeric = not isinstance(val, (str, bool)) and type(val).__name__ != "bool_"
+            return int((Qt.AlignRight if numeric else Qt.AlignLeft) | Qt.AlignVCenter)
+        return None
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and section < len(self._df.columns):
+            col = self._col(section)
+            label, tip, _kind = self._meta.get(col, (col, None, None))
+            if role == Qt.DisplayRole:
+                return label
+            if role == Qt.ToolTipRole:
+                return ("%s\n(CSV column: %s)" % (tip, col)) if tip else "CSV column: %s" % col
+            return None
+        return super().headerData(section, orientation, role)
+
+
+class NaturalSortProxy(NumericSortProxy):
+    """Sorts numbers by value, text in natural order (Plate_2 before Plate_10), and keeps
+    empty cells together after everything else."""
+
+    @staticmethod
+    def _key(val):
+        if _is_blank(val):
+            return (2, 0.0, [])
+        if isinstance(val, str):
+            return (1, 0.0, batch_measure.natural_key(val))
+        try:
+            return (0, float(val), [])
+        except (TypeError, ValueError):
+            return (1, 0.0, batch_measure.natural_key(str(val)))
+
+    def lessThan(self, left, right):
+        return (self._key(self.sourceModel().data(left, Qt.UserRole))
+                < self._key(self.sourceModel().data(right, Qt.UserRole)))
+
+
+def _visible_columns(df):
+    """`df` without the columns that are blank in every row (half of per_phage.csv is empty
+    when there is no blank image, and the table showed them all as 'nan'; CT-R1 F23)."""
+    if df is None or not len(df.columns):
+        return df
+    keep = [c for c in df.columns if len(df) == 0 or not all(_is_blank(v) for v in df[c].tolist())]
+    return df[keep]
+
+
+def _summary_table(columns):
+    """(view, model, proxy) for a read-only summary table, sortable, sized to its contents."""
+    view = CopyableTableView(); model = SummaryTableModel(columns)
+    proxy = NaturalSortProxy(); proxy.setSourceModel(model)
+    view.setModel(proxy); view.setSortingEnabled(True)
+    view.setAlternatingRowColors(True)
+    view.verticalHeader().setVisible(False)
+    view.horizontalHeader().setStretchLastSection(True)
+    view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    # the sorted column needs room for its arrow: re-fit when the user sorts by another one
+    view.horizontalHeader().sortIndicatorChanged.connect(lambda *_: _fit_columns(view))
+    return view, model, proxy
+
+
+def _fit_columns(view, max_width=420):
+    """Size every column to its contents AND its full header text; cap very long text.
+    Qt's own resizeColumnsToContents reserves room for a sort arrow on EVERY column (~40 px
+    each), which pushed the last columns of the summaries off the card; only the column that
+    is sorted needs it."""
+    hdr, model = view.horizontalHeader(), view.model()
+    if model is None:
+        return
+    bold = QFont(hdr.font()); bold.setBold(True)       # the stylesheet draws headers semi-bold
+    fm_head, fm_cell = QFontMetrics(bold), view.fontMetrics()
+    sorted_col = hdr.sortIndicatorSection() if hdr.isSortIndicatorShown() else -1
+    hdr.setStretchLastSection(False)
+    for c in range(model.columnCount()):
+        head = str(model.headerData(c, Qt.Horizontal, Qt.DisplayRole) or "")
+        w = fm_head.horizontalAdvance(head) + 26 + (22 if c == sorted_col else 0)
+        for r in range(min(model.rowCount(), 500)):
+            w = max(w, fm_cell.horizontalAdvance(str(model.data(model.index(r, c), Qt.DisplayRole) or "")) + 22)
+        hdr.resizeSection(c, min(w, max_width))
+    # the last column takes whatever width is left, but only when it holds text: a stretched
+    # numeric column puts its right-aligned numbers at the far edge of the card, far from
+    # their header (seen in the Batch and per-phage tables)
+    last = model.columnCount() - 1
+    cells = [str(model.data(model.index(r, last), Qt.DisplayRole) or "") for r in range(min(model.rowCount(), 50))]
+    def _num(t):
+        try:
+            float(t); return True
+        except ValueError:
+            return False
+    hdr.setStretchLastSection(not any(_num(t) for t in cells if t))
+
+
+def _read_csv_or_empty(path):
+    """A CSV as a DataFrame; an absent or zero-byte file is an empty frame, never an exception
+    on the GUI thread (qc.csv is one byte when every image of a run failed)."""
+    try:
+        return pd.read_csv(path)
+    except (OSError, ValueError, pd.errors.EmptyDataError):
+        return pd.DataFrame()
+
+
+def _truthy(v):
+    return str(v).strip().lower() in ("true", "1", "yes")
+
+
+_STAT = {"PLAQUE_MEAN": ("pooled", "mean over every plaque of the phage, pooled across its "
+                                   "plates (plaques are not independent replicates)"),
+         "PLATE_MEAN": ("plate mean", "mean of the per-plate means: the plate is the replicate, "
+                                      "so compare phages with this one"),
+         "PLATE_SD": ("plate SD", "standard deviation between the per-plate means (blank with "
+                                  "one plate)")}
+_QUANTITY = {"TRANSMITTANCE": ("Transm.", "transmittance = light through the plaque relative to "
+                                          "the blank agar (with a blank image) or to the lawn (without)"),
+             "OD": ("OD", "optical density of the plaque against the blank agar"),
+             "TURBIDITY": ("Turbidity", "plaque OD / lawn OD: 0 = as clear as agar, 1 = as opaque "
+                                        "as the lawn")}
+PHAGE_COLUMNS = {"PHAGE": ("Phage", "Phage / sample label (from the file name).", None),
+                 "N_PLATES": ("Plates", "Number of plates of this phage that had plaques.", "count"),
+                 "N_PLAQUES": ("Plaques", "Number of plaques measured, all plates together.", "count")}
+for _q, (_qlab, _qtip) in _QUANTITY.items():
+    for _s, (_slab, _stip) in _STAT.items():
+        PHAGE_COLUMNS["%s_%s" % (_q, _s)] = ("%s %s" % (_qlab, _slab),
+                                             "%s — %s.\n%s." % (_q.capitalize(), _stip,
+                                                                _qtip[0].upper() + _qtip[1:]), None)
+
+PLATE_COLUMNS = {
+    "PLATE": ("Plate", "Plate label (the image file name).", None),
+    "PHAGE": ("Phage", "Phage / sample this plate belongs to.", None),
+    "N_PLAQUES": ("Plaques", "Number of plaques counted on this plate.", "count"),
+    "PFU_PER_ML": ("PFU/mL", "Titer = plaques × dilution factor ÷ plated volume (mL).", "sci"),
+    "PFU_PER_ML_CI95_LO": ("95 % low", "Lower end of the 95 % interval of the titer (exact "
+                                       "Poisson limits on the plaque count).", "sci"),
+    "PFU_PER_ML_CI95_HI": ("95 % high", "Upper end of the 95 % interval of the titer (exact "
+                                        "Poisson limits on the plaque count).", "sci"),
+    "COUNTABLE_30_300": ("Countable (30–300)", "yes when the plate has 30 to 300 plaques, the "
+                                               "conventional range for a reliable titer; no "
+                                               "when it has fewer or more.", None),
+    "OD_REFERENCE": ("OD reference", "absolute = measured against the blank-agar image; "
+                                     "lawn-relative = no blank (or no dish found), so only "
+                                     "transmittance relative to the lawn is reported.", None),
+}
+
+BATCH_COLUMNS = {
+    "image": ("Image", "Image file name.", None),
+    "n_plaques": ("Plaques", "Number of plaques measured on the plate.", "count"),
+    "mm_per_px": ("mm/pixel", "Calibration: millimetres per image pixel (from the dish "
+                              "diameter). Empty when no dish was found.", None),
+    "median_diam_mm": ("Median (mm)", "Median plaque diameter on the plate, in mm.", None),
+    "mean_diam_mm": ("Mean (mm)", "Mean plaque diameter on the plate, in mm.", None),
+    "axis_ratio": ("Axis ratio", "Long / short axis of the detected dish. Above 1.03 the "
+                                 "photo was taken at an angle and sizes may be biased.", None),
+    "tilt_flag": ("Tilted?", "yes when the dish axis ratio is above 1.03 (photo taken at an "
+                             "angle).", None),
+    "n_edge": ("Edge", "Plaques touching the dish rim or the image border (QC flag EDGE). "
+                       "Open the plate in Measure to check them.", "count"),
+    "n_overlap": ("Overlap", "Plaques touching another plaque (QC flag OVERLAP): their sizes "
+                             "are unreliable.", "count"),
+    "n_merged": ("Merged?", "Plaques that look like two counted as one (QC flag MERGED?: far "
+                            "larger than the plate median, or far from round).", "count"),
+    "error": ("Problem", "Why this image could not be measured.", None),
+}
+
+
+def compare_qc_note(q, failed=(), titer=False):
+    """The Compare tab's QC sentence(s), from qc.csv rows `q` (CT-R1 F5). Polarity is a
+    pass/fail only for plates measured against a blank (ABSOLUTE_OD): without one the engine
+    does not assess it, and the tab must not call it a failure. Plates with no plaques are
+    named, because they are absent from the per-phage table."""
+    failed = [str(f) for f in failed]
+    n = len(q)
+    parts = ["%d plate%s analysed." % (n, "" if n == 1 else "s")]
+    if failed:
+        parts.append("⚠ %d image%s could not be read (see errors.csv): %s."
+                     % (len(failed), "" if len(failed) == 1 else "s", ", ".join(failed)))
+    if n == 0:
+        return "  ".join(parts)
+    plates = q["PLATE"].astype(str).tolist()
+    absolute = [_truthy(v) for v in q["ABSOLUTE_OD"]] if "ABSOLUTE_OD" in q else [False] * n
+    pol_ok = [_truthy(v) for v in q["POLARITY_OK"]] if "POLARITY_OK" in q else [True] * n
+    dish = [_truthy(v) for v in q["DISH_FOUND"]] if "DISH_FOUND" in q else [True] * n
+    counts = pd.to_numeric(q["N_PLAQUES"], errors="coerce").fillna(0).tolist() if "N_PLAQUES" in q else [1] * n
+    cv = pd.to_numeric(q["ILLUM_CV"], errors="coerce").tolist() if "ILLUM_CV" in q else [float("nan")] * n
+    nod = [p for p, d in zip(plates, dish) if not d]
+    zero = [p for p, c in zip(plates, counts) if c == 0]
+    bad = [p for p, a, ok in zip(plates, absolute, pol_ok) if a and not ok]
+    rel = [p for p, a in zip(plates, absolute) if not a]
+    uneven = [p for p, v in zip(plates, cv) if v == v and v > 0.15]
+    if nod:
+        parts.append("⚠ no dish found (sizes and turbidity unreliable): %s." % ", ".join(nod))
+    if zero:
+        parts.append("0 plaques: %s." % ", ".join(zero))
+    if bad:
+        parts.append("⚠ polarity fail (plaques darker than the lawn; check that the plates were "
+                     "back-lit): %s." % ", ".join(bad))
+    if uneven:
+        parts.append("⚠ uneven illumination (add a flat-field image): %s." % ", ".join(uneven))
+    if len(rel) == n:
+        parts.append("Lawn-relative only (no blank): polarity not assessed.")
+    elif rel:
+        parts.append("Lawn-relative only (the blank could not be applied): polarity not assessed "
+                     "for %s." % ", ".join(rel))
+    if not (nod or bad or uneven or failed):
+        parts.append("✓ QC passed (dish found%s)." % (", polarity" if len(rel) < n else ""))
+    if not titer:
+        parts.append("No titer: fill in both Titer boxes (dilution factor and plated volume) "
+                     "to get PFU/mL.")
+    return "  ".join(parts)
+
+
+def parse_number(text):
+    """A number typed into a Titer box: 1e6, 1000000, 2.5 or 10^6. Returns a float, or None
+    when the text is not ONE unambiguous number ('1,000,000' is refused: a comma is a decimal
+    mark in half the world, and a wrong guess is a titer wrong by orders of magnitude)."""
+    import re
+    t = str(text).strip().replace(" ", "")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)?(?:[x×*])?10\^(-?\d+)", t)
+    try:
+        v = (float(m.group(1) or 1) * 10.0 ** int(m.group(2))) if m else float(t)
+    except (ValueError, OverflowError):
+        return None
+    return v if v == v and abs(v) != float("inf") else None
+
+
+# --------------------------------------------------------------------------- #
 class CompareTab(QWidget):
+    _FIG_MAX_W = 640           # figures are scaled to the panel width, never above this
+
     def __init__(self, pool):
         super().__init__()
         self.pool = pool
+        self.last_out = None       # output folder of the last finished run
+        self._last_df = None       # its plaque table (re-drawn when the key switch changes)
+        self._figures = []         # records of the figures the last run wrote (and nothing else)
+        self._fig_labels = []      # (QLabel, full-size QPixmap) of the figures on screen
 
         self.folder = self._pathrow("Plate folder (filename = phage)", browse_dir=True,
                                      tip="A folder of plate images; the file name is used as the "
@@ -840,7 +1420,12 @@ class CompareTab(QWidget):
         self.core = QDoubleSpinBox(); self.core.setRange(0.2, 1.0); self.core.setValue(1.0)
         self.core.setSingleStep(0.1)
         self.dilution = QLineEdit(); self.dilution.setPlaceholderText("dilution factor (e.g. 1e6)")
+        self.dilution.setToolTip("For PFU/mL: the RECIPROCAL of the dilution that was plated — "
+                                 "type 1e6 (or 1000000) for a 10⁻⁶ dilution. Fill in both Titer "
+                                 "boxes, or leave both empty.")
         self.volume = QLineEdit(); self.volume.setPlaceholderText("plated volume µL")
+        self.volume.setToolTip("For PFU/mL: the volume of diluted lysate plated, in microlitres "
+                               "(e.g. 100). Fill in both Titer boxes, or leave both empty.")
 
         opts_box = QGroupBox("Options")
         opts = QGridLayout(opts_box); opts.setHorizontalSpacing(14); opts.setVerticalSpacing(8)
@@ -854,52 +1439,93 @@ class CompareTab(QWidget):
         self.run_btn = QPushButton(" Run comparison"); self.run_btn.setObjectName("Primary")
         self.run_btn.setIcon(_icon(QStyle.SP_MediaPlay))
         self.run_btn.clicked.connect(self.run)
+        self.open_btn = QPushButton(" Open output folder"); self.open_btn.setEnabled(False)
+        self.open_btn.setIcon(_icon(QStyle.SP_DirOpenIcon)); self.open_btn.clicked.connect(self._open_out)
+        self.open_btn.setToolTip("Open the folder with the CSVs, the figures (PNG, SVG, PDF) and "
+                                 "their legend keys (enabled after a run).")
         self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setVisible(False)
         self.progress.setMaximumWidth(220)
-        runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addStretch()
-        runrow.addWidget(self.progress)
+        runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addWidget(self.open_btn)
+        runrow.addStretch(); runrow.addWidget(self.progress)
 
         self.qc = QLabel("—"); self.qc.setWordWrap(True); self.qc.setObjectName("ModeHelp")
-        self.table = CopyableTableView(); self.model = PandasTableModel()
-        self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
-        self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # per-phage summary (per_phage.csv) and per-plate counts + titer (qc.csv)
+        self.table, self.model, self.proxy = _summary_table(PHAGE_COLUMNS)
+        self.plate_table, self.plate_model, self.plate_proxy = _summary_table(PLATE_COLUMNS)
+
+        # the figure panel: Legend key… | Place key on figure, then the figures of THIS run
+        self.key_btn = QPushButton("Legend key…"); self.key_btn.setEnabled(False)
+        self.key_btn.clicked.connect(self._save_keys)
+        self.key_btn.setToolTip("Save the legend key of every figure shown here: each phage with "
+                                "its exact colour, plus what the box-plot marks mean — as PNG, "
+                                "SVG and PDF, with the legend text. (The same files are already "
+                                "beside the figures in the output folder.)")
+        self.key_cb = QCheckBox("Place key on figure"); self.key_cb.setChecked(True)
+        self.key_cb.setToolTip("Draw the legend key on the figures themselves (the same entries "
+                               "as the stand-alone key from “Legend key…”). Untick for figures "
+                               "without a key; the shown figures are re-drawn at once.")
+        self.key_cb.toggled.connect(self._rerender)
+        keyrow = QHBoxLayout(); keyrow.setContentsMargins(4, 0, 4, 0)
+        keyrow.addWidget(self.key_btn); keyrow.addWidget(self.key_cb); keyrow.addStretch()
 
         self.figs = QWidget(); self.figs_layout = QVBoxLayout(self.figs)
-        self.figs_placeholder = QLabel(
-            "Comparison figures will appear here after a run\n"
-            "(per-phage bars, diameter histograms).")
-        self.figs_placeholder.setObjectName("Placeholder")
-        self.figs_placeholder.setAlignment(Qt.AlignCenter)
-        self.figs_layout.addWidget(self.figs_placeholder)
-        self.figs_layout.addStretch()
-        figscroll = QScrollArea(); figscroll.setWidgetResizable(True); figscroll.setWidget(self.figs)
-        figscroll.setFrameShape(QFrame.NoFrame)
+        self.figs_placeholder = None
+        self.figscroll = QScrollArea(); self.figscroll.setWidgetResizable(True)
+        self.figscroll.setWidget(self.figs)
+        self.figscroll.setFrameShape(QFrame.NoFrame)
+        # figures are scaled to the panel width (see _rescale_figures): only ever scroll down
+        self.figscroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.figscroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self._show_placeholder("Comparison figures will appear here after a run\n"
+                               "(box plots and histograms per phage).")
 
         left = QFrame(); left.setObjectName("Card")
         ll = QVBoxLayout(left); ll.setContentsMargins(12, 10, 12, 12)
         cap = QLabel("Per-phage summary"); cap.setObjectName("SummaryHeading")
-        ll.addWidget(cap); ll.addWidget(self.table); ll.addWidget(self.qc)
+        cap2 = QLabel("Per-plate counts and titer"); cap2.setObjectName("SummaryHeading")
+        ll.addWidget(cap); ll.addWidget(self.table, 2)
+        ll.addWidget(cap2); ll.addWidget(self.plate_table, 3)
+        ll.addWidget(self.qc)
         right = QFrame(); right.setObjectName("Card")
         rl = QVBoxLayout(right); rl.setContentsMargins(8, 8, 8, 8)
-        rl.addWidget(figscroll)
+        rl.addLayout(keyrow)
+        rl.addWidget(self.figscroll, 1)
 
-        results = QSplitter()
-        results.addWidget(left); results.addWidget(right)
-        results.setSizes([520, 560]); results.setChildrenCollapsible(False)
+        self.results = QSplitter()
+        self.results.addWidget(left); self.results.addWidget(right)
+        self.results.setSizes([730, 500]); self.results.setChildrenCollapsible(False)
+        self.results.splitterMoved.connect(lambda *_: self._rescale_figures())
 
         inputs_box = QGroupBox("Inputs")
         ib = QVBoxLayout(inputs_box)
         for r in (self.folder, self.blank, self.flat):
             ib.addLayout(r["row"])
 
+        # Inputs above Options in a narrow window (as before); side by side once the window
+        # is wide enough, which gives the results ~150 px more height (CT-R1 F23: at
+        # 1320x880 the tables and figures had 290 px). See resizeEvent.
+        self._top = QBoxLayout(QBoxLayout.TopToBottom); self._top.setSpacing(10)
+        self._top.addWidget(inputs_box, 3); self._top.addWidget(opts_box, 2)
+
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
-        lay.addWidget(inputs_box)
-        lay.addWidget(opts_box)
+        lay.addLayout(self._top)
         lay.addLayout(runrow)
-        lay.addWidget(results, 1)
+        lay.addWidget(self.results, 1)
+
+    # -- layout ------------------------------------------------------------- #
+    def sizeHint(self):
+        # MainWindow pins a tab's sizeHint as its minimum size. The two tables and the figure
+        # panel can all shrink and scroll inside themselves, so do not let their roomy
+        # default hints force a page scrollbar at the default window size.
+        s = super().sizeHint()
+        return QSize(s.width(), max(self.minimumSizeHint().height(), min(s.height(), 640)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        want = QBoxLayout.LeftToRight if self.width() >= 1180 else QBoxLayout.TopToBottom
+        if self._top.direction() != want:
+            self._top.setDirection(want)
+        self._rescale_figures()
 
     def _pathrow(self, label, file=False, browse_dir=False, tip=""):
         edit = QLineEdit(); edit.setToolTip(tip)
@@ -916,82 +1542,202 @@ class CompareTab(QWidget):
         row = QHBoxLayout(); row.addWidget(lab); row.addWidget(edit, 1); row.addWidget(btn)
         return {"row": row, "edit": edit}
 
-    def run(self):
+    # -- run ---------------------------------------------------------------- #
+    def _check_inputs(self):
+        """Everything the engine would refuse, checked BEFORE the worker starts, each with a
+        message that says what is wrong and what to do (CT-R1 F2, F3). Returns the keyword
+        arguments for engine_api.run_compare, or None after showing a warning."""
+        def stop(title, text):
+            QMessageBox.warning(self, title, text)
+            return None
+
         directory = self.folder["edit"].text().strip()
         if not directory or not os.path.isdir(directory):
-            QMessageBox.warning(self, "Pick a folder", "Choose a folder of phage plate images.")
-            return
-        out_dir = os.path.join(directory, "out_turbidity")
+            return stop("Pick a folder", "Choose a folder of phage plate images.")
+        if not engine_api.compare_images(directory):
+            return stop("No images found",
+                        "No images found in %s.\n\nThe folder must hold the plate photos "
+                        "(.tif, .jpg, .png or .heic), one plate per file; the file name is "
+                        "used as the phage label." % directory)
         kw = dict(plate_mm=self.plate.value(), small=self.small.isChecked(),
-                  blank=self.blank["edit"].text().strip() or None,
-                  flat=self.flat["edit"].text().strip() or None,
                   core=self.core.value(), group_by_prefix=self.group.isChecked(),
-                  watershed=self.watershed.isChecked(), out_dir=out_dir)
-        try:
-            if self.dilution.text().strip():
-                kw["dilution"] = float(self.dilution.text())
-            if self.volume.text().strip():
-                kw["volume_ul"] = float(self.volume.text())
-        except ValueError:
-            QMessageBox.warning(self, "Titer", "Dilution and volume must be numbers."); return
-        self.run_btn.setEnabled(False)
-        self.progress.setVisible(True)
-        self.window().statusBar().showMessage("Running batch comparison…")
+                  watershed=self.watershed.isChecked(),
+                  out_dir=os.path.join(directory, "out_turbidity"),
+                  key_on_figure=self.key_cb.isChecked())
+        for name, row, what in (("blank", self.blank, "Blank-agar image"),
+                                ("flat", self.flat, "Flat-field image")):
+            path = row["edit"].text().strip()
+            if path and not os.path.isfile(path):
+                return stop("%s not found" % what,
+                            "%s not found:\n%s\n\nPick the file again with Browse…, or clear "
+                            "the box to run without it." % (what, path))
+            kw[name] = path or None
+        dil_t, vol_t = self.dilution.text().strip(), self.volume.text().strip()
+        if bool(dil_t) != bool(vol_t):
+            return stop("Titer needs both values",
+                        "PFU/mL needs both Titer boxes: the dilution factor (e.g. 1e6) AND the "
+                        "plated volume in µL (e.g. 100).\n\nFill in the %s, or clear both boxes "
+                        "to run without a titer."
+                        % ("plated volume" if dil_t else "dilution factor"))
+        if dil_t:
+            dil, vol = parse_number(dil_t), parse_number(vol_t)
+            if dil is None or dil < 1:
+                return stop("Dilution factor",
+                            "The dilution factor must be a number of 1 or more: it is the "
+                            "RECIPROCAL of the dilution that was plated, e.g. 1e6 (or 1000000) "
+                            "for a 10⁻⁶ dilution.\n\nYou typed “%s”." % dil_t)
+            if vol is None or vol <= 0:
+                return stop("Plated volume",
+                            "The plated volume must be a number greater than 0, in microlitres "
+                            "(e.g. 100 for 0.1 mL).\n\nYou typed “%s”." % vol_t)
+            kw["dilution"], kw["volume_ul"] = dil, vol
+        return directory, kw
+
+    def run(self):
+        checked = self._check_inputs()
+        if checked is None:
+            return
+        directory, kw = checked
+        self._set_busy(True)
+        self.window().statusBar().showMessage("Running turbidity comparison…")
         w = Worker(engine_api.run_compare, directory, **kw)
         w.signals.finished.connect(self.on_done)
         w.signals.error.connect(self.on_error)
         self.pool.start(w)
 
+    def _set_busy(self, on):
+        self.run_btn.setEnabled(not on)
+        self.key_cb.setEnabled(not on)
+        self.key_btn.setEnabled(not on and bool(self._figures))
+        self.progress.setVisible(on)
+
     def on_done(self, res):
-        self.run_btn.setEnabled(True)
-        self.progress.setVisible(False)
         out_dir = res["out_dir"]
-        per = os.path.join(out_dir, "per_phage.csv")
-        if os.path.exists(per):
-            self.model.set_dataframe(pd.read_csv(per))
-        qcp = os.path.join(out_dir, "qc.csv")
-        if os.path.exists(qcp):
-            q = pd.read_csv(qcp)
-            bad = []
-            if "POLARITY_OK" in q: bad += list(q.loc[q["POLARITY_OK"] == False, "PLATE"].astype(str))
-            nod = list(q.loc[~q["DISH_FOUND"], "PLATE"].astype(str)) if "DISH_FOUND" in q else []
-            note = f"{len(q)} plates analysed."
-            if nod: note += f"  ⚠ no dish: {', '.join(nod)}"
-            if bad: note += f"  ⚠ polarity fail (check imaging): {', '.join(bad)}"
-            if not (nod or bad): note += "  ✓ QC passed (dish + polarity)."
-            self.qc.setText(note)
+        self.last_out = out_dir
+        self._last_df = res.get("df")
+        self._figures = list(res.get("figures") or [])
+        self._set_busy(False)
+        self.open_btn.setEnabled(True)
+        self._load_tables(out_dir)
+        self._show_figures()
+        self.window().statusBar().showMessage(f"Done → {out_dir}")
+
+    def on_error(self, msg):
+        self._set_busy(False)
+        self.window().statusBar().showMessage("Comparison failed.")
+        QMessageBox.critical(self, "Comparison failed",
+                             "The comparison could not run:\n\n" + str(msg)[:1000])
+
+    # -- tables ------------------------------------------------------------- #
+    def _load_tables(self, out_dir):
+        per = _read_csv_or_empty(os.path.join(out_dir, "per_phage.csv"))
+        self.model.set_dataframe(_visible_columns(per))
+        self.table.sortByColumn(0, Qt.AscendingOrder)       # ascending by phage
+        _fit_columns(self.table)
+
+        q = _read_csv_or_empty(os.path.join(out_dir, "qc.csv"))
+        titer = "PFU_PER_ML" in q.columns
+        self.plate_model.set_dataframe(_visible_columns(self._plate_frame(q)))
+        self.plate_table.sortByColumn(0, Qt.AscendingOrder)
+        _fit_columns(self.plate_table)
+
+        failed = []
+        try:                                   # errors.csv is only current when this run failed some
+            import json
+            with open(os.path.join(out_dir, "run_metadata.json"), encoding="utf-8") as fh:
+                n_failed = int(json.load(fh).get("n_failed") or 0)
+            if n_failed:
+                err = _read_csv_or_empty(os.path.join(out_dir, "errors.csv"))
+                failed = err["PLATE"].astype(str).tolist() if "PLATE" in err else ["%d" % n_failed]
+        except (OSError, ValueError):
+            pass
+        self.qc.setText(compare_qc_note(q, failed=failed, titer=titer))
+
+    @staticmethod
+    def _plate_frame(q):
+        """qc.csv -> the per-plate table: plate, phage, count, PFU/mL with its 95 % interval,
+        countable (30-300), and whether OD is absolute or lawn-relative (CT-R1 F3). A phage
+        whose plates all have 0 plaques has no row in per_phage.csv but has one here."""
+        cols = ["PLATE", "PHAGE", "N_PLAQUES", "PFU_PER_ML", "PFU_PER_ML_CI95_LO",
+                "PFU_PER_ML_CI95_HI", "COUNTABLE_30_300", "OD_REFERENCE"]
+        if q is None or not len(q) or "PLATE" not in q.columns:
+            return pd.DataFrame(columns=cols[:3] + cols[6:])
+        out = pd.DataFrame({"PLATE": q["PLATE"].astype(str)})
+        out["PHAGE"] = q["PHAGE"].astype(str) if "PHAGE" in q else ""
+        counts = pd.to_numeric(q["N_PLAQUES"], errors="coerce") if "N_PLAQUES" in q else pd.Series([float("nan")] * len(q))
+        out["N_PLAQUES"] = pd.array([None if c != c else int(c) for c in counts], dtype="Int64")
+        for c in ("PFU_PER_ML", "PFU_PER_ML_CI95_LO", "PFU_PER_ML_CI95_HI"):
+            if c in q:
+                out[c] = pd.to_numeric(q[c], errors="coerce")
+        out["COUNTABLE_30_300"] = ["" if c != c else ("yes" if 30 <= c <= 300 else "no") for c in counts]
+        if "ABSOLUTE_OD" in q:
+            out["OD_REFERENCE"] = ["absolute (blank)" if _truthy(v) else "lawn-relative"
+                                   for v in q["ABSOLUTE_OD"]]
+        return out
+
+    # -- figures ------------------------------------------------------------ #
+    def _clear_figures(self):
+        self._fig_labels = []
+        self.figs_placeholder = None
         while self.figs_layout.count():
             item = self.figs_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
-        import glob
-        for png in sorted(glob.glob(os.path.join(out_dir, "compare_*.png"))) + \
-                   sorted(glob.glob(os.path.join(out_dir, "hist_*.png"))):
-            if png.endswith("_legend_key.png"):      # a figure's key file, not a figure
-                continue
-            lbl = QLabel(); pm = QPixmap(png)
-            if not pm.isNull():
-                lbl.setPixmap(pm.scaledToWidth(520, Qt.SmoothTransformation))
-            self.figs_layout.addWidget(lbl)
-            self._add_key_text_row(png)
-        self.figs_layout.addStretch()
-        self.window().statusBar().showMessage(f"Done → {out_dir}")
 
-    def _add_key_text_row(self, png):
-        """Under a figure that colours its phages: where its legend key was saved (written by the
-        same run, beside the figure) and its legend text starter with a Copy button."""
-        txt = os.path.splitext(png)[0] + "_legend_text.txt"
-        if not os.path.exists(txt):
-            return                                    # box plots colour nothing: no key
-        try:
-            with open(txt, encoding="utf-8") as fh:
-                sentence = fh.read().strip()
-        except OSError:
+    def _show_placeholder(self, text):
+        self._clear_figures()
+        self.figs_placeholder = QLabel(text)
+        self.figs_placeholder.setObjectName("Placeholder")
+        self.figs_placeholder.setAlignment(Qt.AlignCenter)
+        self.figs_placeholder.setWordWrap(True)
+        self.figs_layout.addWidget(self.figs_placeholder)
+        self.figs_layout.addStretch()
+
+    def _show_figures(self):
+        """Show exactly the figures the last run wrote (`self._figures`), each with its legend
+        text starter. Nothing is read from the folder by name pattern, so an earlier run's
+        files can never appear (CT-R1 F4)."""
+        self.key_btn.setEnabled(bool(self._figures))
+        if not self._figures:
+            self._show_placeholder("No figures: this run found no plaques to plot.")
+            return
+        self._clear_figures()
+        for f in self._figures:
+            pm = QPixmap(f["png"])
+            if pm.isNull():
+                continue
+            lbl = QLabel(); lbl.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+            lbl.setToolTip("%s\nSaved as %s" % (f.get("title", ""), ", ".join(
+                os.path.basename(p) for p in f.get("files", []))))
+            self.figs_layout.addWidget(lbl)
+            self._fig_labels.append((lbl, pm))
+            self._add_key_text_row(f)
+        self.figs_layout.addStretch()
+        self._rescale_figures()
+        QTimer.singleShot(0, self._rescale_figures)      # again once the panel has its final width
+
+    def _rescale_figures(self):
+        if not self._fig_labels:
+            return
+        m = self.figs_layout.contentsMargins()
+        width = max(320, min(self._FIG_MAX_W,
+                             self.figscroll.viewport().width() - m.left() - m.right() - 4))
+        for lbl, pm in self._fig_labels:
+            lbl.setPixmap(pm.scaledToWidth(min(width, pm.width()), Qt.SmoothTransformation))
+
+    def _add_key_text_row(self, fig):
+        """Under each figure: its legend text starter (from the key the figure was drawn with
+        in THIS run) and a Copy button."""
+        sentence = fig.get("legend_text") or ""
+        if not sentence:
             return
         box = QLineEdit(sentence); box.setReadOnly(True); box.setCursorPosition(0)
-        box.setToolTip("Legend key saved beside the figure: %s"
-                       % os.path.basename(os.path.splitext(png)[0] + "_legend_key.png"))
+        box.setObjectName("LegendText")
+        box.setToolTip("Legend text starter for this figure — paste it into the figure legend "
+                       "and edit. Its key image is saved beside the figure: %s"
+                       % ", ".join(os.path.basename(p) for p in fig.get("key_files", [])
+                                   if not p.endswith(".txt")))
         copy = QPushButton("Copy")
         copy.clicked.connect(lambda _=False, b=box: QApplication.clipboard().setText(b.text()))
         cap = QLabel("Legend text starter"); cap.setObjectName("FieldLabel")
@@ -999,11 +1745,49 @@ class CompareTab(QWidget):
         rl.addWidget(cap); rl.addWidget(box, 1); rl.addWidget(copy)
         self.figs_layout.addWidget(row)
 
-    def on_error(self, msg):
-        self.run_btn.setEnabled(True)
-        self.progress.setVisible(False)
-        self.window().statusBar().showMessage("Batch failed.")
-        QMessageBox.critical(self, "Batch failed", msg[:1000])
+    def _rerender(self, _checked=None):
+        """"Place key on figure" changed: re-draw the shown figures with / without the key
+        (same data, same colours; the stand-alone key files are rewritten with them)."""
+        if self._last_df is None or not self.last_out or not self._figures:
+            return                                   # nothing on screen yet: applies to the next run
+        self._set_busy(True)
+        self.window().statusBar().showMessage("Re-drawing the figures…")
+        w = Worker(engine_api.render_compare_figures, self._last_df, self.last_out,
+                   key_on_figure=self.key_cb.isChecked())
+        w.signals.finished.connect(self._rerendered)
+        w.signals.error.connect(self.on_error)
+        self.pool.start(w)
+
+    def _rerendered(self, res):
+        self._figures = list(res.get("figures") or [])
+        self._set_busy(False)
+        self._show_figures()
+        self.window().statusBar().showMessage(
+            "Figures re-drawn %s the legend key → %s"
+            % ("with" if self.key_cb.isChecked() else "without", res["out_dir"]))
+
+    def _save_keys(self):
+        """One click: the legend keys of the figures on screen, into a folder the user picks."""
+        if not self._figures:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            self, "Save the legend keys of the shown figures to…", self.last_out or "")
+        if not dest:
+            return
+        try:
+            paths = engine_api.save_compare_keys(self._figures, dest)
+        except Exception as e:                       # noqa: BLE001 -- report, never crash
+            QMessageBox.warning(self, "Legend key",
+                                "Could not save the legend keys to %s:\n%s" % (dest, e))
+            return
+        n = len([f for f in self._figures if f.get("key")])
+        self.window().statusBar().showMessage(
+            "Legend keys of %d figure%s saved (%d files) → %s"
+            % (n, "" if n == 1 else "s", len(paths), dest), 8000)
+
+    def _open_out(self):
+        if self.last_out and os.path.isdir(self.last_out):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_out))
 
 
 # --------------------------------------------------------------------------- #
@@ -1271,11 +2055,16 @@ class BatchTab(QWidget):
         self.mode.setToolTip("Detection engine for the batch. Current is a good fast default; "
                              "Precise is very slow over a whole folder.")
         self.watershed = QCheckBox("Split touching plaques")
-        self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch.")
         self.small = QCheckBox("Small plaques (engine -small gates)")
-        self.small.setToolTip("Lower the engine's size gates for plaques under ~2.5 mm. Published "
-                              "runs WITHOUT this unless ticked, matching the Measure tab and the CLI; "
-                              "Current and Sensitive always use the small gates in the app.")
+        # CT-R1 F18: each box is only enabled for the engines that use it, and shows what the
+        # run will really do. The user's own choices are remembered here so switching engine
+        # and back does not lose them.
+        self._busy = False
+        self._ws_choice = False            # "Split touching plaques" for Current / Sensitive
+        self._small_choice = False         # "Small plaques" for Published
+        self.watershed.toggled.connect(self._option_toggled)
+        self.small.toggled.connect(self._option_toggled)
+        self.mode.currentIndexChanged.connect(self._sync_options)
         self.crops = QCheckBox("Also export Fiji-calibrated plate crops")
         self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
                               "baked in (plus a .fiji.txt). Opens in Fiji already scaled in mm, so "
@@ -1294,11 +2083,10 @@ class BatchTab(QWidget):
                              "CSV, an all-plaques CSV and an annotated image for each.")
         self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
 
-        self.table = CopyableTableView(); self.model = PandasTableModel()
-        self.proxy = NumericSortProxy(); self.proxy.setSourceModel(self.model)
-        self.table.setModel(self.proxy); self.table.setSortingEnabled(True)
-        self.table.setAlternatingRowColors(True); self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # whole counts, blanks instead of "nan", 4 significant digits, full header labels,
+        # natural image order (CT-R1 F18) -- see SummaryTableModel
+        self.table, self.model, self.proxy = _summary_table(BATCH_COLUMNS)
+        self._sync_options()
 
         inputs = QGroupBox("Batch inputs")
         gl = QGridLayout(inputs); gl.setHorizontalSpacing(10); gl.setVerticalSpacing(8)
@@ -1344,11 +2132,68 @@ class BatchTab(QWidget):
         if p:
             self.folder.setText(p)
 
+    # -- options that depend on the engine (CT-R1 F18) ----------------------- #
+    def _mode_key(self):
+        return MODES[self.mode.currentIndex()][1]
+
+    def _applied_options(self):
+        """(watershed, small) as the run will really use them for the chosen engine."""
+        key = self._mode_key()
+        return (self._ws_choice and key in ("current", "sensitive"),
+                self._small_choice if key == "published" else True)
+
+    def _option_toggled(self, _checked=None):
+        key = self._mode_key()
+        if self.sender() is self.watershed and key in ("current", "sensitive"):
+            self._ws_choice = self.watershed.isChecked()
+        elif self.sender() is self.small and key == "published":
+            self._small_choice = self.small.isChecked()
+        self._sync_options()                 # a box that does not apply snaps back to the truth
+
+    def _sync_options(self, *_):
+        key = self._mode_key()
+        ws_applies = key in ("current", "sensitive")
+        small_is_choice = key == "published"
+        ws, small = self._applied_options()
+        for box, val in ((self.watershed, ws), (self.small, small)):
+            box.blockSignals(True); box.setChecked(bool(val)); box.blockSignals(False)
+        self.watershed.setEnabled(ws_applies and not self._busy)
+        self.small.setEnabled(small_is_choice and not self._busy)
+        # say it in the label too: a disabled box alone is easy to miss
+        self.watershed.setText("Split touching plaques" if ws_applies
+                               else "Split touching plaques (not used by this engine)")
+        self.small.setText("Small plaques (engine -small gates)" if small_is_choice
+                           else "Small plaques (always on with this engine)")
+        self.watershed.setToolTip(
+            "Watershed segmentation to separate plaques whose edges touch."
+            if ws_applies else
+            "Not available with this engine: Published never splits plaques (it is the "
+            "unchanged published algorithm) and Precise does not use this option. Choose "
+            "Current or Sensitive to use it.")
+        self.small.setToolTip(
+            "Lower the engine's size gates for plaques under ~2.5 mm. Published runs WITHOUT "
+            "this unless ticked, matching the Measure tab and the command line."
+            if small_is_choice else
+            "Always on with this engine: Current, Sensitive and Precise always use the small "
+            "gates in the app, so there is nothing to choose. Only Published can run without "
+            "them.")
+
     def _run(self):
         folder = self.folder.text().strip()
         if not folder or not os.path.isdir(folder):
             QMessageBox.warning(self, "Pick a folder", "Choose a folder of plate images."); return
-        key = MODES[self.mode.currentIndex()][1]
+        if not batch_measure.find_images(folder):
+            # an empty folder used to "succeed": "0 images → out_batch" and two empty CSVs
+            msg = "No images found in %s" % folder
+            self.status.setText(msg + " — nothing was measured.")
+            self.window().statusBar().showMessage(msg)
+            QMessageBox.warning(self, "No images found",
+                                msg + ".\n\nThe folder must hold the plate photos themselves "
+                                "(.tif, .jpg, .png or .heic), one plate per file; sub-folders "
+                                "are not searched.")
+            return
+        key = self._mode_key()
+        watershed, small = self._applied_options()
         if key == "precise" and not engine_api.precise_available()[0]:
             QMessageBox.information(self, "Precise unavailable",
                                     "Precise isn't available here; pick another engine."); return
@@ -1357,26 +2202,42 @@ class BatchTab(QWidget):
                                     "Precise runs the deep model on every image (~1 min each). "
                                     "For a large folder, Current is far faster.")
         self._set_busy(True); self.window().statusBar().showMessage("Batch running…")
+        # only what applies to this engine is passed on (and so recorded in run_metadata.json)
         w = Worker(batch_measure.batch_measure, folder, plate_mm=self.plate.value(), mode=key,
-                   watershed=self.watershed.isChecked(), crops=self.crops.isChecked(),
-                   small=self.small.isChecked())
+                   watershed=watershed, crops=self.crops.isChecked(),
+                   small=(small if key == "published" else False))
         w.kwargs["progress"] = w.signals.progress.emit
         w.signals.progress.connect(self.status.setText)
         w.signals.finished.connect(self._done); w.signals.error.connect(self._err)
         self.pool.start(w)
 
     def _set_busy(self, on):
+        self._busy = bool(on)
         self.progress.setVisible(on)
-        for x in (self.run_btn, self.mode, self.plate, self.watershed, self.crops, self.small):
+        for x in (self.run_btn, self.mode, self.plate, self.crops):
             x.setEnabled(not on)
+        self._sync_options()                 # the two engine-dependent boxes
 
     def _done(self, res):
         self._set_busy(False)
-        self.model.set_dataframe(res["summary_df"])
+        df = res["summary_df"]
+        if "error" in df.columns:
+            # The Image column already names the file: show the reason alone, so it is
+            # readable in the column (per_plate.csv keeps "file: reason  [path]").
+            why = {e.get("image"): e.get("reason") for e in (res.get("errors") or [])}
+            df = df.copy()
+            df["error"] = [why.get(i) or e for i, e in zip(df["image"], df["error"])]
+        self.model.set_dataframe(df)
+        self.table.sortByColumn(0, Qt.AscendingOrder)     # by image name, natural order
+        _fit_columns(self.table)
         self.last_out = res["out_dir"]; self.open_btn.setEnabled(True)
-        msg = f"{res['n_images']} images → {res['out_dir']}"
-        if res.get("errors"):
-            msg += f"   ⚠ {len(res['errors'])} failed"
+        n, bad = int(res["n_images"]), len(res.get("errors") or [])
+        if n == 0:
+            msg = "No images found in %s — nothing was measured." % self.folder.text().strip()
+        else:
+            msg = "%d image%s measured → %s" % (n - bad, "" if n - bad == 1 else "s", res["out_dir"])
+            if bad:
+                msg += ("   ⚠ %d could not be measured (see the Problem column)" % bad)
         self.status.setText(msg); self.window().statusBar().showMessage(msg)
 
     def _err(self, m):
@@ -1849,6 +2710,9 @@ class AgreementTab(QWidget):
         return path
 
 
+WORKER_STACK_BYTES = 16 * 1024 * 1024      # stack of the app's worker threads (CT-R1 F1)
+
+
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1861,6 +2725,12 @@ class MainWindow(QMainWindow):
         self.resize(min(1320, _av.width() - 40), min(880, _av.height() - 60))
         self.setMinimumSize(min(760, _av.width() - 20), min(520, _av.height() - 40))
         self.pool = QThreadPool(); self.pool.setMaxThreadCount(1)  # engine flags are global
+        # CT-R1 F1: macOS gives every secondary thread a 512 KB stack (the main thread has
+        # 8 MB) and Qt's pool threads take that default. numpy/OpenBLAS (LAPACK inverts a
+        # matrix on the stack) under matplotlib's layout code overflows it, so the Compare
+        # tab died with "Bus error" on any folder that had plaques to plot. 16 MB is twice
+        # the main thread's stack and is only reserved, not committed.
+        self.pool.setStackSize(WORKER_STACK_BYTES)
 
         root = QWidget(); root.setObjectName("AppRoot")
         rlay = QVBoxLayout(root); rlay.setContentsMargins(0, 0, 0, 0); rlay.setSpacing(0)
