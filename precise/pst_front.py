@@ -30,6 +30,10 @@ import plaque_size_tool as pst
 
 
 def detect(image_path, plate_mm, base=None):
+    # CT-R1 detection: both passes call run_detection WITHOUT ``scale``, i.e. the pre-1.3
+    # one-pass -small path with the dish from that same pass. The app's new plaque-size scales
+    # and standard-pass dish (D1/D2) deliberately do not reach Precise, so its numbers do not
+    # change (see engine_api.detect_precise, which builds ``base`` with legacy=True).
     # PST NORMAL pass (used for the density switch reference count). When the caller already
     # ran the identical normal detection (engine_api.detect_precise computes `base` for the
     # editor), reuse it instead of repeating that ~3 s pass.

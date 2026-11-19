@@ -79,7 +79,9 @@ def test_measure_tab_detects_and_fills_the_table(window, qtbot, neutral_plate_ti
     tab.det = None
     tab.redetect()
     qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=TIMEOUT)
-    assert tab.det["published"] is False and tab.det["small"] is True
+    # CT-R1 detection D1: Current runs the Auto plaque size (both scales), not forced -small
+    assert tab.det["published"] is False and tab.det["small"] is False
+    assert tab.det["scale"] == "auto"
 
 
 def test_measure_tab_is_not_left_busy_when_the_editor_fails(window, monkeypatch):
@@ -142,20 +144,22 @@ def test_batch_published_matches_the_cli_unless_small_is_ticked(window, qtbot, n
     tab.folder.setText(str(folder))
     tab.mode.setCurrentIndex(_mode_index("published"))
     tab.plate.setValue(90)
-    tab.small.setChecked(False)
+    assert tab.scale_box.scale() == "standard"          # Published default = the CLI
+    assert [tab.scale_box.itemData(i) for i in range(tab.scale_box.count())] == ["standard", "small"]
     tab._run()
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     meta = json.load(open(os.path.join(tab.last_out, "run_metadata.json")))
     assert meta["engine"] == "Published" and meta["settings"]["small"] is False
+    assert meta["settings"]["plaque_size"] == "standard"
     assert tab.model.rowCount() == 1
     n_plain = int(meta["images"][0]["n_plaques"])
 
     tab.last_out = None
-    tab.small.setChecked(True)
+    tab.scale_box.set_scale("small")
     tab._run()
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     meta = json.load(open(os.path.join(tab.last_out, "run_metadata.json")))
-    assert meta["settings"]["small"] is True
+    assert meta["settings"]["small"] is True and meta["settings"]["plaque_size"] == "small"
     assert int(meta["images"][0]["n_plaques"]) >= n_plain   # the small gates only ever add
 
 

@@ -51,16 +51,33 @@ def write_image(path, bgr):
     cv2.imwrite(path, bgr)
 
 
-def detect_single(path, plate_mm=None, small=False, watershed=False, published=False, sensitive=False):
+def detect_single(path, plate_mm=None, small=False, watershed=False, published=False, sensitive=False,
+                  scale=None, legacy=False):
     """Run the validated detection on one image; return a results dict (no Qt types).
-    sensitive=True lowers the size gates to catch tiny plaques (forced off under published)."""
+    sensitive=True lowers the size gates to catch tiny plaques (forced off under published).
+
+    ``scale`` = "auto" | "standard" | "small" (CT-R1 detection D1): the plaque-size handling,
+    see plaque_gui.run_detection. None keeps the old switch: small=True is "small",
+    small=False is "standard". Published never runs Auto (it falls back to Standard).
+    ``legacy=True`` runs the pre-1.3 one-pass path (the dish from the same pass, nothing
+    dropped); only Precise uses it, so its calibration and ROI do not change."""
+    scale = pgui.resolve_scale(scale, small, published=bool(published))
+    info = {}
     with _LOCK:
         pst.use_published = bool(published)
         pst.watershed_enabled = bool(watershed) and not bool(published)
         plate_size = str(plate_mm) if plate_mm else None
         (display_rgb, orig_bgr, proc_gray, plaques,
          ppm, candidates, lawn_gray, plate) = pgui.run_detection(
-             path, plate_size, bool(small), bool(sensitive))
+             path, plate_size, scale == "small", bool(sensitive),
+             scale=(None if legacy else scale), info=info)
+    # CT-R1 detection D4: plain warnings about the dish / image size, for every engine
+    # (informational only: no number changes)
+    try:
+        import plaque_qc
+        info["dish_warnings"] = plaque_qc.dish_plausibility(plate, orig_bgr.shape)
+    except Exception:                         # a warning must never break a detection
+        pass
     if not ppm:
         # No dish to calibrate from (e.g. an already-cropped plate). If the image carries
         # an embedded ImageJ/Fiji mm scale — like our own "Cropped plate for Fiji" export —
@@ -73,7 +90,14 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         "display_rgb": display_rgb,
         # which engine produced this -- carried with the result so sizing/provenance
         # never depend on the mutable pst globals (AUDIT-2026-10.md, PT-30)
-        "published": bool(published), "small": bool(small),
+        "published": bool(published), "small": scale == "small",
+        # how the plaque sizes were found and where the dish came from (CT-R1 detection D1-D4)
+        "scale": scale,
+        "dish_source": info.get("dish_source"),
+        "dish_reason": info.get("dish_reason"),
+        "n_outside_dish": int(info.get("n_outside_dish") or 0),
+        "n_small_added": int(info.get("n_small_added") or 0),
+        "dish_warnings": list(info.get("dish_warnings") or []),
         "sensitive": bool(sensitive) and not bool(published),
         "orig_bgr": orig_bgr,
         "proc_gray": proc_gray,
@@ -137,7 +161,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     circs = [_circularity(p) for p in plaques]
     try:
         import plaque_qc
-        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs)
+        # CT-R1 detection D5: the grey image (BRIGHT) and the scale (TINY in mm) go in too
+        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs,
+                                              gray=gray, mm_per_px=ppm)
     except Exception:                        # never let QC break the table
         qc = [("", "")] * len(plaques)
     rows = []
@@ -331,7 +357,10 @@ def detect_precise(path, plate_mm=None, out_dir=None, timeout=900, progress=None
 
     # Geometry/calibration + the original BGR come from the validated engine (fast, plaque env)
     # so the table / overlay / scale bar have what they need regardless of the precise CSV.
-    base = detect_single(path, plate_mm=plate_mm, small=True)
+    # legacy=True: Precise keeps the one-pass -small detection and the dish it has always taken
+    # from it (its mm scale and 0.80 R ROI); the CT-R1 dish fix (D2) is NOT applied to Precise
+    # until the owner decides, because a published preprint used these numbers.
+    base = detect_single(path, plate_mm=plate_mm, small=True, legacy=True)
 
     # ---- IN-PROCESS path (unified 'plaqueapp' env or frozen self-contained app) -------- #
     # If torch + ultralytics import here, run the whole Precise pipeline in THIS process —

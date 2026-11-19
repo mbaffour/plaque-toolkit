@@ -55,10 +55,11 @@ def _measure_fn():
 IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 
 # mode -> kwargs for engine_api.detect_single (precise is handled separately via detect_precise)
+# Current / Sensitive run the app's default plaque size, Auto (both scales; CT-R1 detection D1)
 _MODE_KWARGS = {
     "published": {"published": True},
-    "current": {"small": True},
-    "sensitive": {"small": True, "sensitive": True},
+    "current": {"scale": "auto"},
+    "sensitive": {"scale": "auto", "sensitive": True},
 }
 
 

@@ -110,6 +110,11 @@ def parse_args():
                          "lossy temp-file re-encode when dimming, and NO EXIF transpose. Implies "
                          "--published. Use this to reproduce a number produced by the upstream "
                          "tool itself; see docs/UPSTREAM_EXACT.md. Cannot read HEIC.")
+    ap.add_argument("--multiscale", dest="multiscale", required=False, action="store_true",
+                    help="opt-in: run the detector at BOTH plaque-size scales (standard and -small) "
+                         "and merge them: every standard plaque keeps its standard outline and size, "
+                         "and -small plaques are added only outside them (SOURCE = small). Adds a "
+                         "SOURCE column; ignored in --published mode (the desktop app's 'Auto')")
     ap.add_argument("--qc", dest="qc", required=False, action="store_true",
                     help="add QC_FLAG / QC_REASON columns (EDGE, MERGED?, TINY, OVERLAP) to every CSV; "
                          "purely additive -- no measurement changes (see plaque_qc.py)")
@@ -791,6 +796,15 @@ def main():
         print("(watershed recovery ON: touching plaques will be split and recovered)")
     if sensitive:
         print("(sensitive mode ON: detecting very small plaques - expect more, and some false positives)")
+    global multiscale
+    multiscale = bool(args.get('multiscale')) and not use_published
+    if args.get('multiscale') and use_published:
+        print("(--multiscale is ignored in --published mode: the published algorithm runs one pass)")
+    elif multiscale:
+        print("(multiscale ON: standard and -small passes merged; standard plaques keep their size)")
+        if small_plaques:
+            print("(-small is not needed with --multiscale: the -small pass is part of it)")
+            small_plaques = False
 
     run_images = []                      # provenance rows, one per image (PT-9)
     failed = []
@@ -806,6 +820,7 @@ def main():
                 {"plate_size_mm": plate_size, "small_plaque": bool(small_plaques),
                  "published": bool(use_published), "upstream_exact": bool(upstream_exact),
                  "sensitive": bool(sensitive), "watershed": bool(watershed_enabled),
+                 "multiscale": bool(multiscale),
                  "image": args.get('image'), "directory": args.get('directory'),
                  "out": out_dir_path},
                 run_images, extra={"run_id": _run_id, "n_failed": len(failed)})
@@ -851,6 +866,21 @@ def _process_one(image_path, plate_size, run_images, args):
         if _ar is not None and _ar > 1.03:
             print(f"  WARNING: dish looks elliptical (axis ratio {_ar:.2f}) - the photo may be "
                   f"tilted/foreshortened, biasing mm calibration. Image plates straight-on.")
+        # CT-R1 detection D4: plain warnings about the dish this run scales from (stdout and
+        # run_metadata.json only; no CSV changes)
+        _dish_warn = []
+        try:
+            import plaque_qc
+            _dd = None
+            if plate_df is not None and not plate_df.empty:
+                _b = plate_df['ENCL_DIAMETER_PXL'].idxmax()
+                _c = plate_df.loc[_b, 'ENCL_CENTER']
+                _dd = (float(_c[0]), float(_c[1]), float(plate_df.loc[_b, 'ENCL_DIAMETER_PXL']) / 2.0)
+            _dish_warn = plaque_qc.dish_plausibility(_dd, image_size)
+            for _w in _dish_warn:
+                print("  WARNING: " + _w)
+        except Exception:
+            _dish_warn = []
 
         # OPT-IN watershed recovery of touching/merged plaques. No-op (and no SOURCE
         # column) unless --watershed and not --published, so default output is unchanged.
@@ -894,6 +924,8 @@ def _process_one(image_path, plate_size, run_images, args):
         else:
             green_df_copy['MEAN_COLOUR'] = 0
 
+        if multiscale and not use_published:
+            green_df_copy = _merge_small_pass(image, plate_size, plate_df, green_df_copy)
         green_df_copy = renumerate_df(green_df_copy)
         green_df_copy = add_turbidity(orig_image, plate_df, green_df_copy)
         if args.get('qc') and len(green_df_copy):
@@ -904,7 +936,10 @@ def _process_one(image_path, plate_size, run_images, args):
                     big = plate_df['ENCL_DIAMETER_PXL'].idxmax()
                     c = plate_df.loc[big, 'ENCL_CENTER']
                     dish = (float(c[0]), float(c[1]), float(plate_df.loc[big, 'ENCL_DIAMETER_PXL']) / 2.0)
-                fl, why = plaque_qc.flags_for_dataframe(green_df_copy, image_size, dish=dish)
+                fl, why = plaque_qc.flags_for_dataframe(
+                    green_df_copy, image_size, dish=dish,
+                    gray=cv2.cvtColor(orig_image, cv2.COLOR_BGR2GRAY),
+                    mm_per_px=last_calibration.get('mm_per_px'))
                 green_df_copy = green_df_copy.copy()
                 green_df_copy['QC_FLAG'] = fl
                 green_df_copy['QC_REASON'] = why
@@ -932,6 +967,7 @@ def _process_one(image_path, plate_size, run_images, args):
                 "dimmed": bool(image_brightness > 70),
                 "mm_per_px": last_calibration['mm_per_px'],
                 "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
+                "dish_warnings": list(_dish_warn),
                 "csv": "data-green-%s.csv" % output_stem(image_path),
             })
         except Exception as exc:         # pragma: no cover - defensive only
@@ -939,6 +975,44 @@ def _process_one(image_path, plate_size, run_images, args):
                                "provenance_error": str(exc)})
         print("Process completed successfully")
         print(str(len(green_df_copy)) + ' plaques were found\n')
+
+
+multiscale = False    # --multiscale (CT-R1 detection D1); never on under --published
+
+
+def _merge_small_pass(image, plate_size, plate_df, green_df):
+    """--multiscale: run the -small pass on the same (dimmed) image and ADD its plaques that lie
+    outside every standard plaque, with the app's rule (plaque_gui.merge_scales). The standard
+    rows are returned unchanged (their sizes are exactly the default run's), the added rows are
+    sized with the same standard-pass dish and marked SOURCE = small."""
+    global small_plaques
+    import plaque_gui
+    prev = small_plaques
+    small_plaques = True
+    try:
+        b2, _h2, clr2 = process_image(image, 2.5)
+        g2, _r2, _o2, _p2 = filter_contours(get_contours(b2), b2.shape)
+    finally:
+        small_plaques = prev
+    g2 = check_duplicate_plaques(g2.copy())
+    if len(g2):
+        g2 = calculate_size_mm(plate_size, g2, plate_df)
+        g2['MEAN_COLOUR'] = g2.apply(lambda x: get_mean_grey_colour(clr2, x['CONTOURS']), axis=1)
+        g2 = g2[g2['MEAN_COLOUR'].abs() >= 40]
+    green_df = green_df.copy()
+    if 'SOURCE' not in green_df.columns:
+        green_df['SOURCE'] = 'auto'
+    if not len(g2):
+        return green_df
+    std = plaque_gui._plaque_dicts(green_df)
+    sml = plaque_gui._plaque_dicts(g2)
+    for i, p in enumerate(sml):
+        p['_row'] = i
+    _merged, _n = plaque_gui.merge_scales(std, sml)
+    rows = [p['_row'] for p in _merged[len(std):]]
+    add = g2.iloc[rows].copy()
+    add['SOURCE'] = 'small'
+    return pd.concat([green_df, add], ignore_index=True)
 
 
 def renumerate_df(df):

@@ -47,10 +47,46 @@ draw_scalebar = True
 # --------------------------------------------------------------------------- #
 #  Detection (mirrors plaque_size_tool.main() for a single image)
 # --------------------------------------------------------------------------- #
-def run_detection(image_path, plate_size, small, sensitive=False):
+SCALES = ("auto", "standard", "small")
+# Labels for the app's "Plaque size" choice (key, label). Published offers only the last two.
+SCALE_LABELS = (("auto", "Auto (both scales)"), ("standard", "Standard"),
+                ("small", "Small (< ~2.5 mm)"))
+
+
+def resolve_scale(scale=None, small=False, published=False):
+    """The plaque-size scale a run really uses. ``scale`` wins; None falls back to the old
+    ``small`` switch (True = "small", False = "standard"). Published never runs Auto: it is
+    the unchanged published algorithm, one pass at the standard or the -small block size."""
+    s = scale if scale in SCALES else ("small" if small else "standard")
+    if published and s == "auto":
+        s = "standard"
+    return s
+
+
+def run_detection(image_path, plate_size, small, sensitive=False, scale=None, info=None):
     """Return (display_rgb, orig_bgr, proc_gray, plaques, pxl_per_mm, candidates, lawn_gray, plate).
     sensitive=True lowers the size gates to catch very small plaques (more, noisier); it is
-    forced OFF in --published mode so the validated algorithm is never altered."""
+    forced OFF in --published mode so the validated algorithm is never altered.
+
+    ``scale`` (CT-R1 detection D1-D3) selects the app's plaque-size handling for the
+    NON-published engines: "standard" (block 231), "small" (block 49) or "auto" (both passes
+    merged, see _run_scaled). Left as None the call is exactly the pre-1.3 one-pass path
+    (``small`` picks the block size, the dish comes from that same pass, nothing is dropped):
+    Precise's PST front relies on that so its numbers do not change. Under --published the
+    one-pass path always runs (``scale`` only picks small or standard), so the app's Published
+    engine keeps matching `plaque_size_tool.py --published`.
+
+    ``info``: an optional dict this call fills with how the result was made (scale, where the
+    dish came from or why there is none, n_outside_dish, dish_warnings); the 8-tuple return
+    stays as it was for every existing caller."""
+    if scale is not None:
+        if pst.use_published:
+            small = resolve_scale(scale, small, published=True) == "small"
+        else:
+            return _run_scaled(image_path, plate_size, resolve_scale(scale), sensitive, info)
+    if info is not None:
+        info.update({"scale": "small" if small else "standard", "dish_source": "same pass",
+                     "dish_reason": None, "n_outside_dish": 0, "dish_warnings": []})
     pst.small_plaques = bool(small)
     pst.sensitive = bool(sensitive) and not pst.use_published
     pst.debug_mode = False
@@ -118,13 +154,22 @@ def run_detection(image_path, plate_size, small, sensitive=False):
             cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
         else:
             cx, cy = row["ENCL_CENTER"]
-        plaques.append({
+        _p = {
             "source": row.get("SOURCE", "auto"),
             "kind": "contour",
             "contour": np.asarray(row["HULL"], dtype=np.int32),
             "area_pxl": float(row["AREA_PXL"]),
             "center": (float(cx), float(cy)),
-        })
+            # QC inputs only (CT-R1 detection D5); no measured value depends on them
+            "encl_diam_px": float(row["ENCL_DIAMETER_PXL"]),
+        }
+        try:
+            _ha = float(row["AREA_PXL"])
+            _p["solidity"] = (round(float(cv2.contourArea(np.asarray(row["CONTOURS"], dtype=np.int32))) / _ha, 4)
+                              if _ha > 0 else None)
+        except Exception:
+            pass
+        plaques.append(_p)
 
     # candidate contours for auto-trace: every non-plate shape the detector found
     # (including the ones it filtered out of the green set), so a click can snap to
@@ -171,6 +216,230 @@ def run_detection(image_path, plate_size, small, sensitive=False):
 
     display_rgb = cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
     return display_rgb, orig, high_contrast, plaques, pxl_per_mm, candidates, lawn_gray, plate
+
+
+# --------------------------------------------------------------------------- #
+#  Plaque-size scales for the app's Current / Sensitive engines (CT-R1 detection D1-D3)
+# --------------------------------------------------------------------------- #
+CONCENTRIC_PX = 5          # plaque_size_tool.check_duplicate_plaques' centre tolerance
+
+
+def _contour_center(contour, fallback):
+    m = cv2.moments(contour)
+    if m["m00"] != 0:
+        return (m["m10"] / m["m00"], m["m01"] / m["m00"])
+    return (float(fallback[0]), float(fallback[1]))
+
+
+def _detect_pass(image, small, sensitive):
+    """One pass of the validated detector at one block size (231, or 49 when ``small``), with
+    the same de-duplication and mean-colour gate run_detection applies. Returns
+    (green_df, red_df, other_df, plate_df, raw_green_df, high_contrast)."""
+    pst.small_plaques = bool(small)
+    pst.sensitive = bool(sensitive) and not pst.use_published
+    pst.debug_mode = False
+    binary_image, high_contrast, clr_high_contrast = pst.process_image(image, 2.5)
+    contours = pst.get_contours(binary_image)
+    image_size = binary_image.shape
+    green_df, red_df, other_df, plate_df = pst.filter_contours(contours, image_size)
+    raw_green = green_df
+    if pst.watershed_enabled:
+        rec = pst.recover_merged_plaques(image_size, green_df, red_df, other_df)
+        green_df = green_df.copy()
+        green_df["SOURCE"] = "auto"
+        if not rec.empty:
+            rec = rec.copy()
+            rec["SOURCE"] = "watershed"
+            green_df = pd.concat([green_df, rec], ignore_index=True)
+    g = pst.check_duplicate_plaques(green_df.copy())
+    if g.size > 0:
+        mc = g.apply(lambda x: pst.get_mean_grey_colour(clr_high_contrast, x["CONTOURS"]), axis=1)
+        g = g[mc.abs() >= 40]
+    return g, red_df, other_df, plate_df, raw_green, high_contrast
+
+
+def _roundest_dish_idx(plate_df):
+    """The app's dish rule (unchanged): the ROUNDEST large contour, largest among ties."""
+    if plate_df is None or plate_df.empty:
+        return None
+    try:
+        _ad = plate_df.apply(pst.calc_AREA_PXL_diff, axis=1)
+        cand = plate_df[_ad <= float(_ad.min()) + 0.05]
+        return cand["ENCL_DIAMETER_PXL"].idxmax()
+    except Exception:
+        return plate_df["ENCL_DIAMETER_PXL"].idxmax()
+
+
+def _plate_from_row(plate_df, idx):
+    plate_hull = np.asarray(plate_df.loc[idx, "HULL"], dtype=np.int32)
+    (pcx, pcy), prad = cv2.minEnclosingCircle(plate_hull)
+    axis_ratio = None
+    try:
+        if len(plate_hull) >= 5:
+            (_c, (_a1, _a2), _ang) = cv2.fitEllipse(plate_hull)
+            lo, hi = min(_a1, _a2), max(_a1, _a2)
+            axis_ratio = (hi / lo) if lo > 0 else None
+    except Exception:
+        axis_ratio = None
+    return {"hull": plate_hull.reshape(-1, 2), "center": (float(pcx), float(pcy)),
+            "radius": float(prad), "diam_px": float(plate_df.loc[idx, "ENCL_DIAMETER_PXL"]),
+            "axis_ratio": axis_ratio}
+
+
+def _plaque_dicts(green_df, source=None):
+    out = []
+    for _, row in green_df.iterrows():
+        src = row.get("SOURCE", "auto")
+        if source is not None and src == "auto":
+            src = source
+        hull = np.asarray(row["HULL"], dtype=np.int32)
+        p = {"source": src, "kind": "contour", "contour": hull,
+             "area_pxl": float(row["AREA_PXL"]),
+             "center": _contour_center(row["CONTOURS"], row["ENCL_CENTER"]),
+             "encl_diam_px": float(row["ENCL_DIAMETER_PXL"])}
+        try:
+            # shape of the RAW outline (the hull is convex by construction, so its solidity is
+            # always 1): feeds the QC MERGED? flag (CT-R1 detection D5)
+            raw = np.asarray(row["CONTOURS"], dtype=np.int32)
+            ha = float(row["AREA_PXL"])
+            p["solidity"] = round(float(cv2.contourArea(raw)) / ha, 4) if ha > 0 else None
+        except Exception:
+            pass
+        out.append(p)
+    return out
+
+
+def _inside(contour, pt):
+    return cv2.pointPolygonTest(np.asarray(contour, dtype=np.int32).reshape(-1, 1, 2),
+                                (float(pt[0]), float(pt[1])), False) >= 0
+
+
+def dedupe_by_containment(plaques):
+    """Drop a plaque's CORE when it was also found as its halo: a plaque whose centre lies
+    inside a LARGER plaque's outline that contains no other plaque (CT-R1 F14). The larger
+    outline is kept, as the standard pass would. When a larger outline contains two or more
+    plaques it is a cluster outlined as one blob, and the plaques inside are real: nothing is
+    dropped (the QC flag NESTED marks them). Returns (kept, n_dropped); order is preserved."""
+    n = len(plaques)
+    inner = {k: [i for i in range(n) if i != k
+                 and plaques[i]["area_pxl"] < plaques[k]["area_pxl"]
+                 and _inside(plaques[k]["contour"], plaques[i]["center"])]
+             for k in range(n)}
+    drop = {lst[0] for lst in inner.values() if len(lst) == 1}
+    return [p for i, p in enumerate(plaques) if i not in drop], len(drop)
+
+
+def merge_scales(standard, small):
+    """Dual-scale merge (CT-R1 detection D1, tester improvement I2). EVERY standard-pass plaque
+    is kept with its standard (block-231) outline, so its size is exactly what the standard
+    pass measures. A small-pass (block-49) plaque is ADDED only when its centre is not inside
+    any standard plaque's outline and not within the concentric tolerance of a standard
+    centre; the additions are de-duplicated by containment among themselves (F14) and marked
+    source "small". Returns (merged, n_added)."""
+    add = []
+    for p in small:
+        c = p["center"]
+        if any(_inside(s["contour"], c) for s in standard):
+            continue
+        if any(abs(c[0] - s["center"][0]) <= CONCENTRIC_PX and abs(c[1] - s["center"][1]) <= CONCENTRIC_PX
+               for s in standard):
+            continue
+        add.append(p)
+    add, _n = dedupe_by_containment(add)
+    for p in add:
+        if p.get("source") in (None, "auto"):
+            p["source"] = "small"
+    return list(standard) + add, len(add)
+
+
+def _run_scaled(image_path, plate_size, scale, sensitive, info):
+    """run_detection for the app's Current / Sensitive engines with a plaque-size scale.
+
+    * standard: one block-231 pass.
+    * small:    one block-49 pass, concentric core/halo duplicates removed by containment.
+    * auto:     both passes merged (merge_scales): large plaques keep their full standard
+                outline (the block-49 pass outlines only the core of plaques wider than
+                ~50 px, CT-R1 F1) and small plaques the standard gates miss are still found.
+    The dish always comes from the STANDARD pass when it finds one (the block-49 threshold
+    puts the rim on the outer halo, +4-5 % on 4 of 17 bundled plates, and misses it on
+    Plate_2; CT-R1 F2), else from the small pass, else there is none and ``dish_reason``
+    says why. Plaques whose centre lies outside the dish are dropped and counted
+    (``n_outside_dish``, CT-R1 F18) unless the dish itself looks implausible."""
+    prev = (pst.small_plaques, pst.sensitive)
+    try:
+        orig = pst.read_image_bgr(image_path)
+        image = orig
+        if float(cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY).mean()) > 70:
+            image = np.clip(orig.astype(np.float32) * 0.5, 0, 255).astype(np.uint8)
+        # the standard pass runs in every scale: it gives the dish (and, outside Small, plaques)
+        std = _detect_pass(image, False, sensitive)
+        sml = _detect_pass(image, True, sensitive) if scale in ("auto", "small") else None
+    finally:
+        pst.small_plaques, pst.sensitive = prev
+
+    std_g, std_r, std_o, std_plate, std_raw, std_hc = std
+    std_pl = _plaque_dicts(std_g)
+    if scale == "standard":
+        plaques, proc, cand_dfs = std_pl, std_hc, [std_raw, std_r, std_o]
+        n_added = 0
+    else:
+        sml_g, sml_r, sml_o, _sml_plate, sml_raw, sml_hc = sml
+        sml_pl = _plaque_dicts(sml_g)
+        if scale == "small":
+            plaques, _nd = dedupe_by_containment(sml_pl)
+            proc, cand_dfs, n_added = sml_hc, [sml_raw, sml_r, sml_o], 0
+        else:
+            plaques, n_added = merge_scales(std_pl, sml_pl)
+            proc, cand_dfs = std_hc, [std_raw, std_r, std_o, sml_raw, sml_r, sml_o]
+
+    # dish: standard pass first, small pass as the fallback (CT-R1 F2)
+    plate, dish_source, dish_reason = None, None, None
+    idx = _roundest_dish_idx(std_plate)
+    if idx is not None:
+        plate, dish_source = _plate_from_row(std_plate, idx), "standard pass"
+    elif sml is not None and _roundest_dish_idx(sml[3]) is not None:
+        plate, dish_source = _plate_from_row(sml[3], _roundest_dish_idx(sml[3])), "small pass"
+    else:
+        dish_reason = ("no round contour larger than 100,000 px (the dish rim) was found; "
+                       "sizes are in pixels unless you set the plate by hand")
+
+    # CT-R1 F18 (D3): a detection whose centre lies outside the dish is not a plaque on this
+    # lawn (glare on the wall, the label, the bench). Dropped and counted -- unless the "dish"
+    # is itself implausibly small (a plaque taken for the dish, F9), which would drop everything.
+    n_outside = 0
+    if plate is not None:
+        import plaque_qc
+        if not plaque_qc.dish_too_small(plate, orig.shape):
+            inside = [p for p in plaques if _inside(plate["hull"], p["center"])]
+            n_outside = len(plaques) - len(inside)
+            plaques = inside
+
+    pxl_per_mm = None
+    if plate_size and plate is not None and plate["diam_px"] > 0:
+        try:
+            pxl_per_mm = float(plate_size) / float(plate["diam_px"])
+        except (TypeError, ValueError):
+            pxl_per_mm = None
+
+    candidates = []
+    for row_df in cand_dfs:
+        for _, row in row_df.iterrows():
+            area = float(row["AREA_PXL"])
+            if area <= 0 or area >= 100000:
+                continue
+            candidates.append({"hull": np.asarray(row["HULL"], dtype=np.int32), "area": area,
+                               "center": _contour_center(row["CONTOURS"], row["ENCL_CENTER"])})
+
+    orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+    dish_mask = pst._mask_from_contour(orig_gray.shape, plate["hull"]) if plate is not None else None
+    auto_masks = [pst._mask_from_contour(orig_gray.shape, p["contour"]) for p in plaques]
+    lawn_gray = pst.estimate_lawn_gray(orig_gray, dish_mask, auto_masks)
+
+    if info is not None:
+        info.update({"scale": scale, "dish_source": dish_source, "dish_reason": dish_reason,
+                     "n_outside_dish": n_outside, "n_small_added": n_added, "dish_warnings": []})
+    return (cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), orig, proc, plaques, pxl_per_mm,
+            candidates, lawn_gray, plate)
 
 
 def detect_region(orig_bgr, roi, sensitive=True, small=True):
@@ -356,8 +625,11 @@ PLAQUE_CLASSES = {
 }
 CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap")
 # a plaque's SOURCE -> its class (a freehand outline is "added by hand" like a circle or trace)
-_SOURCE_CLASS = {"auto": "auto", "manual": "manual", "freehand": "manual",
+# "small" = found only by the small-scale pass of the Auto plaque size (CT-R1 detection D1):
+# a detector result like "auto", drawn and keyed as such; only the SOURCE column tells them apart
+_SOURCE_CLASS = {"auto": "auto", "small": "auto", "manual": "manual", "freehand": "manual",
                  "region": "region", "watershed": "watershed"}
+DETECTOR_SOURCES = ("auto", "small")
 LABEL_MODES = ("numbers", "numbers + mm", "none")
 # where a label is tried, in this order: right, left, above, below, then the four diagonals
 LABEL_SIDES = ("E", "W", "N", "S", "NE", "SE", "NW", "SW")
@@ -895,13 +1167,18 @@ def save_image(img_bgr, out_path):
 def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl_per_mm, *,
                        published, sensitive=False, small=False, watershed=False, precise=False,
                        plate_mm=None, edited=None, edits=None, source_image=None, orientation=None,
-                       engine_label=None, extra_settings=None):
+                       engine_label=None, extra_settings=None, detection=None):
     """run_metadata.json for one plate, from EXPLICIT engine flags. Shared by save_results
-    and the app's Export all, so both describe a result the same way (CT-R1 F6)."""
+    and the app's Export all, so both describe a result the same way (CT-R1 F6).
+
+    ``detection`` (optional dict, CT-R1 detection D1-D4): how the plaques and the dish were
+    found -- ``scale`` (plaque size: auto / standard / small) goes into the settings as
+    ``plaque_size``; ``dish_source``, ``dish_reason``, ``n_outside_dish`` and
+    ``dish_warnings`` into the plate's record."""
     import provenance
     label = engine_label or provenance.engine_name(
         published=bool(published), sensitive=bool(sensitive) and not published, precise=bool(precise))
-    n_manual = sum(1 for p in plaques if p.get("source") not in (None, "auto"))
+    n_manual = sum(1 for p in plaques if p.get("source") not in (None,) + DETECTOR_SOURCES)
     if edited is None:
         edited = n_manual > 0
     settings = {"plate_size_mm": plate_mm, "small_plaque": bool(small),
@@ -911,6 +1188,9 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
         settings["source_image"] = source_image
     if orientation is not None:
         settings["orientation"] = list(orientation)
+    det_info = dict(detection or {})
+    if det_info.get("scale"):
+        settings["plaque_size"] = det_info["scale"]
     settings.update(extra_settings or {})
     rec = {"file": os.path.basename(image_path), "path": image_path,
            "sha256_16": provenance.file_digest(image_path), "n_plaques": int(n_rows),
@@ -918,6 +1198,9 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
            "csv": os.path.basename(csv_path)}
     if edits:
         rec["edits"] = dict(edits)
+    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings"):
+        if k in det_info:
+            rec[k] = det_info[k]
     return provenance.write_metadata(out_dir, tool, label, settings, [rec])
 
 
@@ -926,7 +1209,7 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                  published=None, write_provenance=True, engine_label=None, *,
                  sensitive=None, small=None, watershed=None, precise=False, plate_mm=None,
                  edited=None, edits=None, source_image=None, orientation=None,
-                 labels="numbers", key=False, write_key=False):
+                 labels="numbers", key=False, write_key=False, detection=None):
     """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
     sibling saying which engine and edits produced them (PT-9 never covered the editor or
     the app's Save; AUDIT-2026-10.md, PT-31).
@@ -1001,7 +1284,7 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                                small=small, watershed=watershed, precise=precise,
                                plate_mm=plate_mm, edited=edited, edits=edits,
                                source_image=source_image, orientation=orientation,
-                               engine_label=engine_label)
+                               engine_label=engine_label, detection=detection)
         except Exception:                             # provenance must never break a save
             pass
     return csv_path, img_path, len(rows)

@@ -284,7 +284,8 @@ def test_batch_numbers_plaques_top_to_bottom_like_the_measure_tab(neutral_plate_
     folder = tmp_path / "f"
     folder.mkdir()
     shutil.copy(neutral_plate_tif, folder / "P.tif")
-    det = engine_api.detect_single(str(folder / "P.tif"), plate_mm=90, small=True)
+    # the Batch tab's Current = the Auto plaque size (CT-R1 detection D1)
+    det = engine_api.detect_single(str(folder / "P.tif"), plate_mm=90, scale="auto")
     centres = [tuple(p["center"]) for p in det["plaques"]]
     ordered = sorted(det["plaques"], key=lambda p: (p["center"][1], p["center"][0]))
     assert len(centres) >= 4 and centres != [tuple(p["center"]) for p in ordered], \
@@ -329,7 +330,9 @@ def test_batch_csv_has_whole_counts_flag_counts_and_only_applied_options(neutral
     res2 = batch_measure.batch_measure(str(folder), plate_mm=90, mode="current", watershed=True,
                                        out_dir=str(tmp_path / "o2"))
     meta2 = json.load(open(os.path.join(res2["out_dir"], "run_metadata.json")))
-    assert meta2["settings"]["watershed"] is True and meta2["settings"]["small"] is True
+    # CT-R1 detection D1: Current runs the Auto plaque size, not forced -small
+    assert meta2["settings"]["watershed"] is True and meta2["settings"]["small"] is False
+    assert meta2["settings"]["plaque_size"] == "auto"
 
 
 def test_batch_cli_says_no_images_found(tmp_path, capsys):
@@ -791,36 +794,37 @@ def test_batch_options_follow_the_engine_and_only_applied_ones_are_recorded(wind
 
     def state():
         return (tab.watershed.isEnabled(), tab.watershed.isChecked(),
-                tab.small.isEnabled(), tab.small.isChecked())
+                tab.scale_box.isEnabled(), tab.scale_box.scale())
 
+    # CT-R1 detection D1: "Plaque size" replaced the "Small plaques" box
     tab.mode.setCurrentIndex(_mode_index("current"))
-    assert state() == (True, False, False, True)          # small gates: always on, not a choice
-    assert "always" in tab.small.toolTip().lower() and "always on" in tab.small.text()
-    tab.small.setChecked(False)                           # cannot be switched off for this engine
-    assert tab.small.isChecked()
+    assert state() == (True, False, True, "auto")         # Auto (both scales) by default
     tab.watershed.setChecked(True)
     tab.mode.setCurrentIndex(_mode_index("sensitive"))
-    assert state() == (True, True, False, True)
+    assert state() == (True, True, True, "auto")
+    tab.mode.setCurrentIndex(_mode_index("precise"))
+    assert tab.scale_box.isEnabled() is False and tab.scale_box.scale() is None
     tab.mode.setCurrentIndex(_mode_index("published"))
-    assert state() == (False, False, True, False)         # Published never splits; -small is a choice
+    assert state() == (False, False, True, "standard")    # Published never splits; never Auto
     assert "not used by this engine" in tab.watershed.text()
     assert "Published never splits" in tab.watershed.toolTip()
 
     tab.folder.setText(str(folder))
     tab.plate.setValue(90)
     tab._run()
-    assert not tab.small.isEnabled() and not tab.watershed.isEnabled()      # busy
+    assert not tab.scale_box.isEnabled() and not tab.watershed.isEnabled()      # busy
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
-    assert state() == (False, False, True, False)         # the run must not re-enable the wrong box
+    assert state() == (False, False, True, "standard")    # the run must not re-enable the wrong box
     meta = json.load(open(os.path.join(tab.last_out, "run_metadata.json")))
     assert meta["engine"] == "Published"
     assert meta["settings"]["watershed"] is False and meta["settings"]["small"] is False
 
     tab.mode.setCurrentIndex(_mode_index("current"))
-    assert state() == (True, True, False, True)           # the earlier tick is remembered
+    assert state() == (True, True, True, "auto")          # the earlier tick is remembered
     tab.last_out = None
     tab._run()
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     meta = json.load(open(os.path.join(tab.last_out, "run_metadata.json")))
-    assert meta["settings"]["watershed"] is True and meta["settings"]["small"] is True
+    assert meta["settings"]["watershed"] is True and meta["settings"]["small"] is False
+    assert meta["settings"]["plaque_size"] == "auto"
     assert not dialogs

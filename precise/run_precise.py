@@ -66,7 +66,11 @@ def main():
     ap.add_argument("--plate-mm", default="100")
     ap.add_argument("--conf", default="0.1")
     ap.add_argument("--iou", default="0.5")
-    ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
+    # CT-R1 F22: honour the same overrides as the in-process path (precise/pipeline.py)
+    ap.add_argument("--weights", default=os.environ.get("PLAQSEG_WEIGHTS") or DEFAULT_WEIGHTS)
+    ap.add_argument("--imgsz", default=os.environ.get("PLAQSEG_IMGSZ") or "1280",
+                    help="YOLO inference size (default: $PLAQSEG_IMGSZ, else 1280, the size the "
+                         "shipped weights were validated at)")
     ap.add_argument("--plaque-py", default=PLAQUE_PY)
     ap.add_argument("--plaqseg-py", default=PLAQSEG_PY)
     ap.add_argument("--blob", action="store_true",
@@ -106,7 +110,8 @@ def main():
 
     # --- Stage 3: PlaqSeg primary (plaqseg env) on the ORIGINAL image.
     run([a.plaqseg_py, RUN_PLAQSEG, a.weights, image, out, tag,
-         "--conf", a.conf, "--iou", a.iou, "--ppm", "%.10f" % mm_per_px],
+         "--conf", a.conf, "--iou", a.iou, "--ppm", "%.10f" % mm_per_px,
+         "--imgsz", str(int(a.imgsz))],
         cwd=ROOT)
 
     # --- Stages 2,4-10: combine (plaqseg env).
@@ -119,6 +124,17 @@ def main():
     run([a.plaqseg_py, os.path.join(HERE, "combine.py"), pst_json, ps_csv, out, tag,
          blob_flag],
         cwd=ROOT, env=combine_env)
+
+    # the detector side of the run, as the in-process path records it (CT-R1 F22)
+    sum_path = os.path.join(out, "summary_%s.json" % tag)
+    try:
+        from precise.yolo_meta import yolo_block
+        summ = json.load(open(sum_path))
+        summ["yolo"] = yolo_block(a.weights, a.conf, a.iou, int(a.imgsz))
+        with open(sum_path, "w") as fh:
+            json.dump(summ, fh, indent=2)
+    except Exception as exc:              # never break a result for its bookkeeping
+        print("  (could not record the yolo block: %s)" % exc)
 
     print("PRECISE_PLATE_DONE tag=%s out=%s" % (tag, out))
 

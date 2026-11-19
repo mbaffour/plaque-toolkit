@@ -282,6 +282,13 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
     # ---- Stage 3: PlaqSeg primary (masked) ------------------------------- #
     ps = [d for d in ps_all if accepted(d["x"], d["y"])]
     n_plaqseg = len(ps)
+    # CT-R1 F20 (reporting only, nothing kept or dropped differently): how many PlaqSeg
+    # detections lie on the dish but outside the lawn ROI (LAWN_FRAC of the radius)
+    n_outside_roi = 0
+    for d in ps_all:
+        ix, iy = int(round(d["x"])), int(round(d["y"]))
+        if 0 <= ix < W and 0 <= iy < H and dish_mask[iy, ix] and not lawn_mask[iy, ix]:
+            n_outside_roi += 1
     ps_xy = np.array([[d["x"], d["y"]] for d in ps]) if ps else np.zeros((0, 2))
 
     # match radius: median PlaqSeg equivalent radius, floored at 0.35 mm.
@@ -462,6 +469,7 @@ def combine_detections(pst, ps_all, out_dir, tag, blob_enabled=True, bgr=None,
         "n_pst_recovered": len(pst_recovered),
         "n_blob_recovered": len(blob_recovered),
         "n_final": n_final,
+        "n_outside_roi": n_outside_roi,
         "match_radius_px": round(match_r, 1),
         "match_radius_mm": (round(match_r * mm_per_px, 3) if mm_per_px else None),
         "median_diam_mm": (round(float(np.median(diams)), 3) if len(diams) else None),

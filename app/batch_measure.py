@@ -31,8 +31,10 @@ IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 # separately (it calls engine_api.detect_precise, not detect_single).
 MODE_KWARGS = {
     "published": {"published": True},
-    "current":   {"small": True},
-    "sensitive": {"small": True, "sensitive": True},
+    # Auto = both plaque-size scales merged (CT-R1 detection D1); the Batch tab's "Plaque size"
+    # choice overrides it through ``scale``
+    "current":   {"scale": "auto"},
+    "sensitive": {"scale": "auto", "sensitive": True},
 }
 
 
@@ -115,7 +117,7 @@ def _safe_float(v):
 
 
 def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=False,
-                  out_dir=None, progress=None, crops=False):
+                  out_dir=None, progress=None, crops=False, scale=None):
     """Measure every image in ``folder`` and write combined CSVs.
 
     Parameters
@@ -131,6 +133,10 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
         Passed through to detect_single. ``small`` only takes effect for the
         "published" mode override below (the other modes already set it); it is
         accepted for API symmetry with the GUI.
+    scale : {"auto", "standard", "small"} or None
+        Plaque size (CT-R1 detection D1). None = the mode's default: Auto for Current and
+        Sensitive, Standard for Published (Small when ``small`` is True). Published never
+        runs Auto (it falls back to Standard); Precise ignores it.
     out_dir : str or None
         Output directory. Defaults to ``<folder>/out_batch`` and is created.
     progress : callable(str) or None
@@ -177,7 +183,15 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # (AUDIT-2026-10.md, PT-33).
     if small and mode == "published":
         mode_kwargs["small"] = True
-    small_used = bool(mode_kwargs.get("small", False))
+    if scale is not None and mode != "precise":
+        mode_kwargs.pop("small", None)
+        mode_kwargs["scale"] = plaque_gui.resolve_scale(scale, published=(mode == "published"))
+    if mode == "precise":
+        scale_used = None
+    else:
+        scale_used = plaque_gui.resolve_scale(mode_kwargs.get("scale"), mode_kwargs.get("small", False),
+                                              published=(mode == "published"))
+    small_used = scale_used == "small"
 
     images = find_images(folder)
     N = len(images)
@@ -185,6 +199,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     plate_rows = []     # one dict per image -> per_plate.csv
     all_frames = []     # list of per-image plaque DataFrames -> all_plaques.csv
     errors = []         # list of {"image", "error"} for failures
+    det_info = {}       # image -> dish provenance (CT-R1 detection D2-D4)
 
     for i, path in enumerate(images, start=1):
         name = os.path.splitext(os.path.basename(path))[0]
@@ -207,6 +222,10 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             ppm = det["pxl_per_mm"]
             lawn_gray = det["lawn_gray"]
             plate = det.get("plate")
+            # how the dish was found and what was dropped, for run_metadata.json (D2-D4)
+            det_info[os.path.basename(path)] = {
+                k: det[k] for k in ("dish_source", "dish_reason", "n_outside_dish",
+                                    "dish_warnings") if k in det}
 
             # ---- save annotated image + per-image CSV -------------------- #
             # save_results creates ``perimg`` itself; it writes the overlay and
@@ -316,10 +335,12 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                                    sensitive=(mode == "sensitive"),
                                    precise=(mode == "precise")),
             {"mode": mode, "plate_size_mm": plate_mm, "small": small_used,
+             "plaque_size": scale_used,
              "watershed": watershed_used, "crops": bool(crops), "folder": folder},
-            [{"file": r.get("image"), "n_plaques": r.get("n_plaques"),
-              "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),
-              "tilt_flag": r.get("tilt_flag"), "error": r.get("error")}
+            [dict({"file": r.get("image"), "n_plaques": r.get("n_plaques"),
+                   "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),
+                   "tilt_flag": r.get("tilt_flag"), "error": r.get("error")},
+                  **det_info.get(r.get("image"), {}))
              for r in plate_rows],
             {"n_failed": len(errors)})
     except Exception as exc:

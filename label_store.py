@@ -125,7 +125,8 @@ def file_into_store(meta, plaques, image_path=None, *, source="app", engine=None
             for p in plaques:
                 w.writerow({k: p.get(k) for k in cols})
 
-    n_manual = sum(1 for p in plaques if str(p.get("source", "auto")) != "auto")
+    # "small" = the detector's small-scale pass (CT-R1 detection D1), not a hand edit
+    n_manual = sum(1 for p in plaques if str(p.get("source", "auto")) not in ("auto", "small"))
     row = {"date": full_meta["date"], "label_id": label_id, "sample": sample, "replicate": rep or "",
            "image": os.path.basename(img) if img else "", "image_stored": image_stored,
            "label_json": os.path.relpath(label_json, root).replace("\\", "/"),

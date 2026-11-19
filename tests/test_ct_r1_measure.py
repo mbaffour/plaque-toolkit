@@ -166,7 +166,9 @@ def test_f6_f7_every_export_uses_the_results_own_engine_and_matches_the_screen(
     meta = json.load(open(os.path.join(out, "run_metadata.json")))
     assert meta["engine"] == "Sensitive"
     st = meta["settings"]
-    assert st["sensitive"] is True and st["small_plaque"] is True and st["published"] is False
+    # CT-R1 detection D1: Sensitive runs the Auto plaque size, not forced -small
+    assert st["sensitive"] is True and st["small_plaque"] is False and st["published"] is False
+    assert st["plaque_size"] == "auto"
     assert st["watershed"] is False
     assert st["plate_size_mm"] == pytest.approx(100.0, abs=0.01)     # used to be null
     assert st["edited"] is False
