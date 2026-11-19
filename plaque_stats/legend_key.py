@@ -70,11 +70,74 @@ def _srgb_to_lab(rgb):
 
 _NAME_LAB = [(n, _srgb_to_lab(mcolors.to_rgb(h))) for n, h in COLOUR_NAMES]
 
+# CT-R1 SM-F20 / DA-F17 / web F21: the nearest-name match called Okabe-Ito orange "gold", the
+# plate purple "light blue" and the plate red "brown". Every colour the toolkit SHIPS (the
+# Okabe-Ito publication default, the plate palette, the named themes of plaque_stats, the
+# matplotlib default cycle of the turbidity histograms, make_figure.py's palette) has a fixed
+# word here, chosen so that no two colours of one palette share a word. Nearest-name matching is
+# only used for custom colours.
+SHIPPED_COLOUR_WORDS = {
+    # Okabe-Ito (Okabe & Ito 2008, their own names)
+    "#0072B2": "blue", "#E69F00": "orange", "#009E73": "bluish green", "#CC79A7": "reddish purple",
+    "#56B4E9": "sky blue", "#D55E00": "vermillion", "#F0E442": "yellow", "#999999": "grey",
+    "#000000": "black",
+    # plate palette (plaque_stats.REP_PALETTE)
+    "#4C6E9C": "steel blue", "#E0A458": "light orange", "#6AAA64": "green", "#B65C5C": "muted red",
+    "#8A78B0": "purple", "#4FA3A5": "teal", "#C77CB5": "pink", "#9A8C6B": "olive brown",
+    "#6C6C6C": "dark grey",
+    # set2
+    "#66C2A5": "mint green", "#FC8D62": "salmon orange", "#8DA0CB": "lavender blue",
+    "#E78AC3": "light pink", "#A6D854": "yellow-green", "#FFD92F": "golden yellow",
+    "#E5C494": "light brown", "#B3B3B3": "light grey",
+    # tab10 = matplotlib's default cycle (turbidity histograms)
+    "#1F77B4": "blue", "#FF7F0E": "orange", "#2CA02C": "green", "#D62728": "red",
+    "#9467BD": "purple", "#8C564B": "brown", "#E377C2": "pink", "#7F7F7F": "grey",
+    "#BCBD22": "olive", "#17BECF": "cyan",
+    # warm
+    "#B4451F": "rust red", "#D98032": "orange", "#E9B44C": "gold", "#9B2226": "dark red",
+    "#CA6702": "dark orange", "#BB3E03": "burnt orange", "#AE2012": "deep red",
+    "#EE9B00": "golden orange",
+    # cool
+    "#3D5A80": "slate blue", "#5E8B9E": "greyish blue", "#98C1D9": "light blue", "#293241": "navy",
+    "#6AAA9E": "sea green", "#5C7AA0": "dusky blue", "#7FB3C9": "pale blue",
+    # grays
+    "#4D4D4D": "dark grey", "#A6A6A6": "silver grey", "#C9C9C9": "pale grey",
+    "#2B2B2B": "charcoal grey", "#8F8F8F": "medium grey", "#606060": "slate grey",
+    "#B8B8B8": "ash grey",
+    # neutral colours the figures draw
+    "#B9C2BD": "light grey", "#FFFFFF": "white",
+}
+_SHADES = ("light", "dark", "medium", "pale", "deep")
+
 
 def colour_name(colour):
-    """Nearest plain colour name (CIE76 distance in Lab) for any matplotlib colour."""
+    """Plain colour word for any matplotlib colour: the fixed word of a shipped palette colour
+    (SHIPPED_COLOUR_WORDS), else the nearest plain name (CIE76 distance in Lab)."""
+    hx = mcolors.to_hex(colour, keep_alpha=False).upper()
+    if hx in SHIPPED_COLOUR_WORDS:
+        return SHIPPED_COLOUR_WORDS[hx]
     lab = _srgb_to_lab(mcolors.to_rgb(colour))
     return min(_NAME_LAB, key=lambda nl: sum((a - b) ** 2 for a, b in zip(lab, nl[1])))[0]
+
+
+def safe_text(text):
+    """Text for a matplotlib label that can never raise a mathtext error (CT-R1 web F22).
+    matplotlib parses a string with an even number of unescaped ``$`` as mathtext, so a title
+    such as ``Cost $5 vs $6`` or ``a $\\x$ b`` raised a parser error. Real mathtext that parses
+    (``Plaque area (mm$^2$)``) is kept; anything else gets its ``$`` escaped so it prints as typed."""
+    if text is None:
+        return text
+    s = str(text)
+    n = s.count("$") - s.count(r"\$")
+    if n <= 0 or n % 2:
+        return s                                   # not mathtext: drawn literally already
+    try:
+        from matplotlib.mathtext import MathTextParser
+        MathTextParser("path").parse(s, dpi=72)
+        return s
+    except Exception:                              # noqa: BLE001 -- any parse failure
+        import re
+        return re.sub(r"(?<!\\)\$", r"\\$", s)
 
 
 def to_hex(colour):
@@ -117,15 +180,34 @@ def entry(label, colour, kind="marker", marker="o", filled=True, edge=None, line
 
 
 def make_key(entries, title=None, fontsize=9.0, title_fontsize=None, frameon=False,
-             font_family=None):
+             font_family=None, preamble=None, note=None, ncol=None):
     """Bundle a figure's entries with the legend styling both the embedded and the stand-alone
     key use. ``font_family`` defaults to the font matplotlib resolves right now (call this while
-    the figure's own rcParams are in force)."""
+    the figure's own rcParams are in force); ``font_families`` keeps the figure's whole family
+    list after it, so an SVG key names the same fallbacks as the figure (CT-R1 SM-F22).
+    ``preamble`` opens the text starter (e.g. which samples the grey violins are), ``note``
+    closes it (what the bar and whisker are); neither changes the drawn key. ``ncol`` = legend
+    columns (None: one column up to 12 rows, then enough columns of <= 12 rows)."""
     if font_family is None:
         font_family = resolved_font_family()
+    fam = matplotlib.rcParams.get("font.family") or ["sans-serif"]
+    fam = [fam] if isinstance(fam, str) else list(fam)
     return {"entries": list(entries), "title": title, "fontsize": float(fontsize),
             "title_fontsize": float(title_fontsize if title_fontsize is not None else fontsize),
-            "frameon": bool(frameon), "font_family": font_family}
+            "frameon": bool(frameon), "font_family": font_family,
+            "font_families": [font_family] + [f for f in fam if f != font_family],
+            "preamble": preamble, "note": note, "ncol": ncol}
+
+
+KEY_ROWS_PER_COLUMN = 12
+
+
+def key_columns(key):
+    """Number of legend columns: long keys wrap into columns of at most 12 rows (CT-R1 DA-F17)."""
+    if key.get("ncol"):
+        return int(key["ncol"])
+    n = len(rows(key)[0])
+    return max(1, -(-n // KEY_ROWS_PER_COLUMN))
 
 
 def resolved_font_family():
@@ -205,15 +287,17 @@ def legend_handles(key):
     """(handles, labels, header_flags, title) for a key -- the ONE place both the embedded and
     the stand-alone key are drawn from."""
     rws, title = rows(key)
-    return ([_handle(r) for r in rws], [r["label"] for r in rws],
+    return ([_handle(r) for r in rws], [safe_text(r["label"]) for r in rws],
             [r["kind"] == "header" for r in rws], title)
 
 
 def _legend_kwargs(key):
     from matplotlib.font_manager import FontProperties
     from matplotlib.legend_handler import HandlerTuple
-    return {"prop": FontProperties(family=key["font_family"], size=key["fontsize"]),
-            "frameon": key["frameon"], "handler_map": {tuple: HandlerTuple(ndivide=1)}}
+    fams = key.get("font_families") or [key["font_family"]]
+    return {"prop": FontProperties(family=fams, size=key["fontsize"]),
+            "frameon": key["frameon"], "handler_map": {tuple: HandlerTuple(ndivide=1)},
+            "ncol": key_columns(key)}
 
 
 def _finish_legend(leg, headers, key):
@@ -221,7 +305,8 @@ def _finish_legend(leg, headers, key):
         if h:
             t.set_fontweight("bold")
     title = leg.get_title()                    # title font set here: works on matplotlib < 3.6 too
-    title.set_fontfamily(key["font_family"]); title.set_fontsize(key["title_fontsize"])
+    title.set_fontfamily(key.get("font_families") or key["font_family"])
+    title.set_fontsize(key["title_fontsize"])
     return leg
 
 
@@ -244,7 +329,9 @@ def key_figure(key):
     """The stand-alone key: a bare matplotlib Figure (no pyplot) holding only the legend."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-    fig = Figure(figsize=(3, 0.4 + 0.25 * max(1, len(key["entries"]))), facecolor="white")
+    nc = key_columns(key)
+    nr = -(-max(1, len(rows(key)[0])) // nc)
+    fig = Figure(figsize=(3 * nc, 0.4 + 0.25 * max(1, nr)), facecolor="white")
     FigureCanvasAgg(fig)
     handles, labels, headers, title = legend_handles(key)
     kw = _legend_kwargs(key)
@@ -297,9 +384,17 @@ def write_key_files(key, base, formats=("png",), dpi=300):
 
 
 # --------------------------------------------------------------------------- text starter
+def _base_word(w):
+    """'dark red' -> 'red': the colour word without a shade prefix."""
+    head, _, rest = w.partition(" ")
+    return rest if (head in _SHADES and rest) else w
+
+
 def _colour_words(entries):
     """Colour word per entry; when two entries with DIFFERENT colours would read the same,
-    add 'light'/'dark' by lightness so the sentence still tells them apart."""
+    they are told apart by lightness ('dark' / 'medium' / 'light' + the base word). A word that
+    already carries a shade is shaded from its base word, never stacked ('light light grey',
+    'dark dark red': CT-R1 SM-F20)."""
     words = [colour_name(e["colour"]) if e.get("colour") else "" for e in entries]
     by_word = {}
     for i, w in enumerate(words):
@@ -308,16 +403,17 @@ def _colour_words(entries):
         hexes = list(dict.fromkeys(entries[i]["colour"] for i in idx))
         if not w or len(hexes) < 2:
             continue
+        base = _base_word(w)
         light = {h: _srgb_to_lab(mcolors.to_rgb(h))[0] for h in hexes}
         ranked = sorted(hexes, key=lambda h: light[h])
         shade = {}
         for k, h in enumerate(ranked):
             if k == 0:
-                shade[h] = "dark " + w
+                shade[h] = "dark " + base
             elif k == len(ranked) - 1:
-                shade[h] = "light " + w
+                shade[h] = "light " + base
             else:
-                shade[h] = "medium " + w
+                shade[h] = "medium " + base
         for i in idx:
             words[i] = shade[entries[i]["colour"]]
     return words
@@ -351,7 +447,20 @@ def text_starter(key):
         return ""
     entries = key["entries"]
     words = _colour_words(entries)
-    return "; ".join("%s (%s)" % (e["label"], _describe(e, w)) for e, w in zip(entries, words)) + "."
+
+    def clause(e, w):
+        lab, desc = e["label"], _describe(e, w)
+        # "WT (control; blue, filled circles)", not "WT (control) (blue, ...)" (CT-R1 web F21)
+        if lab.endswith(" (control)"):
+            return "%s (control; %s)" % (lab[:-len(" (control)")], desc)
+        return "%s (%s)" % (lab, desc)
+
+    text = "; ".join(clause(e, w) for e, w in zip(entries, words)) + "."
+    if key.get("preamble"):
+        text = "%s: %s" % (str(key["preamble"]).rstrip(".: "), text)
+    if key.get("note"):
+        text = "%s %s" % (text, str(key["note"]).strip())
+    return text
 
 
 def entries_signature(key):
