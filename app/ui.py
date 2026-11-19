@@ -1620,24 +1620,30 @@ class AgreementTab(QWidget):
                        "Fiji / ImageJ. Each line must be the same plaque in both boxes; fix the "
                        "lists (see the preview) and compute again." % (len(tool), len(fiji)))
             return
-        unit, what = "mm", "diameters"
+        unit, what = "mm", "plaque diameters"
         if self.unit.currentData() == "area":
             tool, fiji = agreement.area_to_diam(tool), agreement.area_to_diam(fiji)
-            what = "diameters (area-equivalent)"
+            what = "plaque diameters (area-equivalent)"
         try:
-            s = agreement.compute(tool, fiji)
+            # CT-R1 SM-F16/F17: the same statistics + sentence as the CLI and the web app
+            s = agreement.full_stats(tool, fiji)
         except Exception as e:
-            self._fail(str(e)); return
+            self._fail("Cannot compute agreement: %s" % e); return
         self._last = (s, unit, what)
         m = self._metrics
         m["n"].setText(str(s["n"]))
         m["bias"].setText("%+.3f" % s["bias"])
-        m["loa"].setText("%+.2f…%+.2f" % (s["loa_lo"], s["loa_hi"]))
+        m["loa"].setText("%+.3f…%+.3f" % (s["loa_lo"], s["loa_hi"]))
+        m["loa"].setToolTip("bias ± 1.96 SD" if s["loa_method"] == "1.96 SD" else
+                            "n < 20: 95%% prediction limits, bias ± t·SD·√(1+1/n) = ± %.2f SD"
+                            % s["loa_mult"])
         m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] else "—")
         m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] else "—")
         m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] else "—")
         self._draw(s, unit)
         self.report.setPlainText(agreement.report_sentence(s, unit, what))
+        self.report.setToolTip("ICC(A,1) 95% CI: McGraw & Wong (1996) exact F interval; "
+                               "limits-of-agreement CI: Bland & Altman (1999).")
         for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
             b.setEnabled(True)
         self.window().statusBar().showMessage("Agreement computed on %d plaque pairs." % s["n"], 4000)

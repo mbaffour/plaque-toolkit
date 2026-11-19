@@ -47,9 +47,11 @@ matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.font
 __version__ = "1.0.0"
 
 
-# =============================================================================
-#  Vendored maths — copied verbatim from app/agreement.py (keep in sync)
-# =============================================================================
+# >>> SHARED AGREEMENT CORE >>>
+# Everything between the two SHARED markers is IDENTICAL in app/agreement.py (desktop tab) and
+# plaque_stats/agreement/agreement.py (CLI + web app); tests/test_ct_r1_agreement_validate.py
+# compares the two copies text-for-text. Edit one, paste into the other.
+# (The two packages are frozen separately, so one cannot import the other.)
 def _mean(a):
     return sum(a) / len(a)
 
@@ -61,6 +63,13 @@ def _sd(a):
     return math.sqrt(sum((x - m) ** 2 for x in a) / (len(a) - 1))
 
 
+def _finite(v):
+    try:
+        return v is not None and math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
+
+
 def pearson(x, y):
     mx, my = _mean(x), _mean(y)
     num = sum((x[i] - mx) * (y[i] - my) for i in range(len(x)))
@@ -69,29 +78,60 @@ def pearson(x, y):
     return num / math.sqrt(dx * dy) if dx > 0 and dy > 0 else float("nan")
 
 
+def _icc_ms(ref, test):
+    """Two-way ANOVA mean squares (MSR rows/plaques, MSC columns/methods, MSE residual)."""
+    n, k = len(ref), 2
+    allv = []
+    for i in range(n):
+        allv += [ref[i], test[i]]
+    grand = _mean(allv)
+    ssr = k * sum(((ref[i] + test[i]) / 2 - grand) ** 2 for i in range(n))
+    ssc = n * ((_mean(ref) - grand) ** 2 + (_mean(test) - grand) ** 2)
+    sse = sum((v - grand) ** 2 for v in allv) - ssr - ssc
+    return ssr / (n - 1), ssc / (k - 1), sse / ((n - 1) * (k - 1))
+
+
 def icc_a1(ref, test):
     """ICC(A,1): two-way random effects, absolute agreement, single measures."""
     n = len(ref)
     if n < 2:
         return float("nan")
-    allv = []
-    for i in range(n):
-        allv += [ref[i], test[i]]
-    grand = _mean(allv)
     k = 2
-    ssr = k * sum(((ref[i] + test[i]) / 2 - grand) ** 2 for i in range(n))
-    ssc = n * ((_mean(ref) - grand) ** 2 + (_mean(test) - grand) ** 2)
-    sse = sum((v - grand) ** 2 for v in allv) - ssr - ssc
-    msr = ssr / (n - 1)
-    msc = ssc / (k - 1)
-    mse = sse / ((n - 1) * (k - 1))
+    msr, msc, mse = _icc_ms(ref, test)
     denom = msr + (k - 1) * mse + (k / n) * (msc - mse)
     return (msr - mse) / denom if denom else float("nan")
 
 
+ICC_CI_MIN_N = 5           # below this no interval is reported ("n too small for an interval")
+
+
+def icc_ci(tool, fiji, n_boot=None, seed=None):
+    """95% CI of ICC(A,1) by the exact F interval of McGraw & Wong (1996), Table 7, case 2A
+    (two-way, absolute agreement, single measure). CT-R1 SM-F15: replaces the percentile
+    bootstrap, whose coverage was 0.83-0.90 at n = 5-10. ``n_boot``/``seed`` are accepted
+    and ignored (old callers). Returns (nan, nan) below n = 5 or when undefined."""
+    n, k = len(tool), 2
+    if n < ICC_CI_MIN_N or n != len(fiji):
+        return float("nan"), float("nan")
+    ref, test = [float(v) for v in fiji], [float(v) for v in tool]
+    msr, msc, mse = _icc_ms(ref, test)
+    icc = icc_a1(ref, test)
+    if not _finite(icc) or icc >= 1.0 or mse <= 0:
+        return float("nan"), float("nan")
+    from scipy import stats as _st
+    a = k * icc / (n * (1 - icc))
+    b = 1 + k * icc * (n - 1) / (n * (1 - icc))
+    v = (a * msc + b * mse) ** 2 / ((a * msc) ** 2 / (k - 1) + (b * mse) ** 2 / ((n - 1) * (k - 1)))
+    fl = float(_st.f.ppf(0.975, n - 1, v))
+    fu = float(_st.f.ppf(0.975, v, n - 1))
+    lo = n * (msr - fl * mse) / (fl * (k * msc + (k * n - k - n) * mse) + n * msr)
+    hi = n * (fu * msr - mse) / (k * msc + (k * n - k - n) * mse + n * fu * msr)
+    return float(lo), float(hi)
+
+
 def _ba_slope(avg, diff):
-    """(slope, p) of diff ~ avg; p from the t-test on the slope (n - 2 df). Pure Python
-    except the t distribution, which comes from scipy when available."""
+    """(slope, p) of diff ~ avg (Bland-Altman proportional bias); p from the t-test on the
+    slope (n - 2 df)."""
     n = len(avg)
     if n < 3:
         return float("nan"), float("nan")
@@ -102,30 +142,33 @@ def _ba_slope(avg, diff):
     slope = sum((a - mx) * (d - my) for a, d in zip(avg, diff)) / sxx
     intercept = my - slope * mx
     resid = [d - (intercept + slope * a) for a, d in zip(avg, diff)]
-    if n <= 2:
-        return slope, float("nan")
-    se = math.sqrt(sum(r * r for r in resid) / (n - 2) / sxx) if sxx else float("nan")
+    se = math.sqrt(sum(r * r for r in resid) / (n - 2) / sxx)
     if not se or se != se:
         return slope, float("nan")
-    t = slope / se
-    try:
-        from scipy import stats as _st
-        p = float(2 * _st.t.sf(abs(t), n - 2))
-    except Exception:                               # pragma: no cover
-        p = float("nan")
-    return slope, p
+    from scipy import stats as _st
+    return slope, float(2 * _st.t.sf(abs(slope / se), n - 2))
 
 
-def _loa_ci_halfwidth(sd, n):
-    if n < 3 or sd != sd:
+LOA_LARGE_N = 20           # from here on the limits are bias +/- 1.96 SD
+
+
+def loa_multiplier(n):
+    """Multiplier k of the limits of agreement bias +/- k*SD. CT-R1 SM-F16: below 20 pairs
+    +/-1.96 SD holds only 77-85 % of new differences, so the limits become the 95 % prediction
+    interval t(0.975, n-1) * sqrt(1 + 1/n); from 20 pairs on they stay bias +/- 1.96 SD."""
+    if n >= LOA_LARGE_N:
+        return 1.96
+    from scipy import stats as _st
+    return float(_st.t.ppf(0.975, n - 1)) * math.sqrt(1.0 + 1.0 / n)
+
+
+def _loa_ci_halfwidth(sd, n, k=1.96):
+    """Half-width of the 95% CI of each limit of agreement, Bland & Altman (1999) exact form:
+    SE(limit) = SD * sqrt(1/n + k^2 / (2(n-1))), times t(0.975, n-1). (k = the limit multiplier.)"""
+    if n < 3 or not _finite(sd):
         return float("nan")
-    se = sd * math.sqrt(3.0 / n)
-    try:
-        from scipy import stats as _st
-        t = float(_st.t.ppf(0.975, n - 1))
-    except Exception:                               # pragma: no cover
-        t = 1.96
-    return t * se
+    from scipy import stats as _st
+    return float(_st.t.ppf(0.975, n - 1)) * sd * math.sqrt(1.0 / n + k * k / (2.0 * (n - 1)))
 
 
 def regress(x, y):
@@ -136,21 +179,45 @@ def regress(x, y):
     return slope, my - slope * mx
 
 
+def check_pairs(tool, fiji):
+    """Plain-language refusal BEFORE any statistic is computed (CT-R1 SM-F17): too few pairs,
+    unequal lengths, non-numbers, identical columns, or a column with no spread."""
+    if len(tool) != len(fiji):
+        raise ValueError("The two methods have different numbers of values (%d vs %d); each "
+                         "plaque needs one value from each method." % (len(tool), len(fiji)))
+    if len(tool) < 3:
+        raise ValueError("Need at least 3 paired values (got %d)." % len(tool))
+    for name, seq in (("tool", tool), ("reference", fiji)):
+        for i, v in enumerate(seq, start=1):
+            if not _finite(v):
+                raise ValueError("Value %d of the %s column is not a number (%r)." % (i, name, v))
+    if all(float(a) == float(b) for a, b in zip(tool, fiji)):
+        raise ValueError("The two columns are identical (every difference is 0), so there is "
+                         "nothing to compare. Check that the two columns hold the two methods.")
+    for name, seq in (("tool", tool), ("reference", fiji)):
+        if max(seq) == min(seq):
+            raise ValueError("Every %s value is the same (%g), so r and the ICC cannot be "
+                             "computed. Agreement needs plaques of different sizes." % (name, seq[0]))
+
+
 def compute(tool, fiji):
     """`tool` = the method under test, `fiji` = the reference. Bias is tool - fiji.
-    Returns a dict of agreement statistics (raises ValueError if < 3 pairs)."""
-    n = min(len(tool), len(fiji))
-    if n < 3:
-        raise ValueError("need at least 3 paired values")
-    tool, fiji = list(tool[:n]), list(fiji[:n])
+    Returns a dict of agreement statistics; raises ValueError (plain message) on input that
+    cannot be compared (see check_pairs)."""
+    tool, fiji = [float(v) for v in tool], [float(v) for v in fiji]
+    check_pairs(tool, fiji)
+    n = len(tool)
     diff = [tool[i] - fiji[i] for i in range(n)]
     avg = [(tool[i] + fiji[i]) / 2 for i in range(n)]
     bias, sd = _mean(diff), _sd(diff)
     grand = _mean(avg)
     slope, intercept = regress(fiji, tool)
+    k = loa_multiplier(n)
+    ba_slope, ba_p = _ba_slope(avg, diff)
     return {
         "n": n, "mean_tool": _mean(tool), "mean_fiji": _mean(fiji),
-        "bias": bias, "sd": sd, "loa_lo": bias - 1.96 * sd, "loa_hi": bias + 1.96 * sd,
+        "bias": bias, "sd": sd, "loa_lo": bias - k * sd, "loa_hi": bias + k * sd,
+        "loa_mult": k, "loa_method": "1.96 SD" if n >= LOA_LARGE_N else "t prediction",
         "rmse": math.sqrt(_mean([d * d for d in diff])),
         "pct_bias": (bias / grand * 100.0) if grand else float("nan"),
         "mae": _mean([abs(d) for d in diff]),
@@ -159,19 +226,16 @@ def compute(tool, fiji):
         "tool": tool, "fiji": fiji,
         # Bland-Altman proportional bias: regress the difference on the mean of the two
         # methods; a non-zero slope means the bias changes with plaque size (PT-46).
-        "ba_slope": _ba_slope(avg, diff)[0], "ba_slope_p": _ba_slope(avg, diff)[1],
-        # 95%% CI of each limit of agreement (Bland & Altman 1986: SE = SD * sqrt(3/n)).
-        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n),
+        "ba_slope": ba_slope, "ba_slope_p": ba_p,
+        # 95% CI of each limit of agreement (Bland & Altman 1999, exact form).
+        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n, k),
     }
 
 
-# =============================================================================
-#  Extra rigour: R^2, Pearson p, paired bias test, Lin's CCC, bootstrap ICC CI
-#  (a full method-comparison / agreement panel — not just correlation)
-# =============================================================================
 def ccc(x, y):
     """Lin's concordance correlation coefficient (accuracy AND precision)."""
-    x = np.asarray(x, float); y = np.asarray(y, float)
+    import numpy as _np
+    x = _np.asarray(x, float); y = _np.asarray(y, float)
     mx, my = x.mean(), y.mean()
     vx, vy = x.var(), y.var()            # population variances (Lin 1989)
     cov = ((x - mx) * (y - my)).mean()
@@ -179,53 +243,40 @@ def ccc(x, y):
     return float(2 * cov / denom) if denom else float("nan")
 
 
-def icc_ci(tool, fiji, n_boot=2000, seed=7):
-    """Percentile bootstrap 95% CI for ICC(A,1) (2000 resamples, seeded)."""
-    t = np.asarray(tool, float); f = np.asarray(fiji, float); n = len(t)
-    if n < 3:
-        return float("nan"), float("nan")
-    rng = np.random.default_rng(seed)
-    vals = []
-    for _ in range(n_boot):
-        idx = rng.integers(0, n, n)
-        vals.append(icc_a1(f[idx].tolist(), t[idx].tolist()))
-    vals = [v for v in vals if v == v]
-    if not vals:
-        return float("nan"), float("nan")
-    lo, hi = np.percentile(vals, [2.5, 97.5])
-    return float(lo), float(hi)
-
-
-def extra_stats(tool, fiji, seed=7):
+def extra_stats(tool, fiji, seed=None):
     """scipy-backed additions to compute(): R^2, Pearson p, paired t-test, CCC, ICC CI."""
-    r, rp = scstats.pearsonr(tool, fiji)
-    t, tp = scstats.ttest_rel(tool, fiji)
-    lo, hi = icc_ci(tool, fiji, seed=seed)
+    import warnings
+    from scipy import stats as _st
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r, rp = _st.pearsonr(tool, fiji)
+        t, tp = _st.ttest_rel(tool, fiji)
+    lo, hi = icc_ci(tool, fiji)
     return {"r2": float(r * r), "pearson_p": float(rp),
             "t_stat": float(t), "t_p": float(tp),
             "ccc": ccc(tool, fiji), "icc_lo": lo, "icc_hi": hi}
 
 
+def full_stats(tool, fiji):
+    """compute() + extra_stats(): everything the report sentence and the figure use."""
+    s = compute(tool, fiji)
+    s.update(extra_stats(s["tool"], s["fiji"]))
+    return s
+
+
 def _pfmt(p):
+    if not _finite(p):
+        return "not testable"
     return "< 0.001" if p < 0.001 else ("%.3f" % p)
 
 
 def _pstr(p):
-    """p-value WITH its operator, for inline use after the word 'p' — 'p < 0.001' / 'p = 0.034'
-    (avoids the awkward 'p = < 0.001')."""
+    """p-value WITH its operator, for inline use: 'p < 0.001' / 'p = 0.034' / 'p not testable'."""
+    if not _finite(p):
+        return "p not testable"
     return "p < 0.001" if p < 0.001 else "p = %.3f" % p
 
 
-def area_to_diameter(vals):
-    """Area-equivalent diameter d = 2·√(A/π) for each area value — the SAME formula the measurement
-    tool uses for its DIAMETER_MM column. Lets you feed AREA (mm²) columns and get the diameter (mm)
-    comparison without converting the spreadsheet yourself."""
-    return [2.0 * math.sqrt(max(float(v), 0.0) / math.pi) for v in vals]
-
-
-# =============================================================================
-#  Interpretation, report, figure (parameterised labels)
-# =============================================================================
 def icc_grade(icc):
     """Koo & Li (2016) reliability bands."""
     if icc != icc:
@@ -235,13 +286,8 @@ def icc_grade(icc):
 
 
 # --- Honest wording bands (PT-4) ------------------------------------------- #
-# The "paste-ready" sentence used to hard-code "closely agreed" and "highly
-# correlated" regardless of the numbers. The repo ships a committed artefact where
-# that produced: "closely agreed ... highly correlated (Pearson r = -0.013 ...)
-# ICC(A,1) = -0.012 ... (poor agreement)" -- a sentence that contradicts itself, in
-# text explicitly labelled ready to paste into a manuscript. The adjectives are now
-# derived from the statistics they describe.
-
+# The adjectives in the "paste-ready" sentence are derived from the statistics they describe
+# (a committed artefact once read "closely agreed ... ICC(A,1) = -0.012 (poor agreement)").
 def agreement_phrase(icc):
     """Verb phrase for the ICC(A,1) band (Koo & Li 2016). Matches icc_grade()."""
     if icc != icc:
@@ -277,44 +323,110 @@ def correlation_phrase(r, p=float("nan")):
     return strength
 
 
-def report_sentence(s, unit, what, label_tool, label_manual):
-    """A manuscript-ready sentence whose adjectives follow the actual statistics.
+SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
 
-    A poor result reads as a poor result: if ICC(A,1) < 0.5 the sentence says the
-    methods did NOT agree at the individual level and appends an explicit caveat.
-    """
-    icc_ci = ("" if s.get("icc_lo") != s.get("icc_lo")
-              else " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"]))
-    bias_ns = ("not significantly different from zero" if s.get("t_p", 1) >= 0.05
-               else "significantly different from zero")
-    icc = s["icc"]
-    r = s["r"]
-    p = s.get("pearson_p", float("nan"))
-    sentence = ("Plaque %s measured with %s %s %s (n = %d): %s "
-                "(Pearson r = %.3f, R² = %.3f, %s), with an intraclass correlation coefficient "
-                "ICC(A,1) = %.3f%s (%s agreement) and Lin's concordance correlation CCC = %.3f. "
-                "Bland-Altman analysis showed a mean bias of %+.3f %s (%.1f%%; %s, paired t-test %s) "
-                "with 95%% limits of agreement of %+.3f to %+.3f %s, and a regression slope of %.2f "
-                "(1.0 = no proportional bias)."
-                % (what, label_tool, agreement_phrase(icc), label_manual, s["n"],
-                   correlation_phrase(r, p),
-                   r, s.get("r2", r ** 2), _pstr(p), icc, icc_ci, icc_grade(icc),
-                   s.get("ccc", float("nan")), s["bias"], unit, s["pct_bias"], bias_ns,
-                   _pstr(s.get("t_p", float("nan"))), s["loa_lo"], s["loa_hi"], unit, s["slope"]))
-    bs, bp = s.get("ba_slope", float("nan")), s.get("ba_slope_p", float("nan"))
-    if bs == bs and bp == bp:
-        if bp < 0.05:
-            sentence += (" The difference depended on plaque size (Bland-Altman slope %+.3f %s per %s, %s): "
-                         "a proportional bias, so a single bias value does not describe the whole range."
-                         % (bs, unit, unit, _pstr(bp)))
+
+def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
+                    label_manual="Fiji / ImageJ"):
+    """THE paste-ready sentence (desktop tab, CLI report and web app all call this one).
+
+    Adjectives follow the statistics; a statistic missing from ``s`` leaves its clause out,
+    and a p-value that is NaN reads "not testable" (never "significantly different ... p = nan").
+    r and ICC are given to three decimals; below 10 pairs the wording is softened."""
+    nan = float("nan")
+    n = int(s["n"])
+    icc, r = s.get("icc", nan), s.get("r", nan)
+    phrase = agreement_phrase(icc)
+    what = str(what).strip() or "measurements"
+    lead = what[:1].upper() + what[1:]
+    if n < SMALL_N:
+        phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
+                       .replace("agreed", "appeared to agree")
+        lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
+    out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+    # correlation
+    if _finite(r):
+        p = s.get("pearson_p")
+        corr = "Pearson r = %.3f, R² = %.3f" % (r, s.get("r2", r * r))
+        if "pearson_p" in s:
+            corr += ", " + _pstr(p)
+        out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
+    else:
+        out += ": Pearson r could not be computed"
+    # ICC (+ CI) and CCC
+    if _finite(icc):
+        if _finite(s.get("icc_lo")) and _finite(s.get("icc_hi")):
+            ci = " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"])
+        elif "icc_lo" in s and n < ICC_CI_MIN_N:
+            ci = " (n too small for an interval)"
         else:
-            sentence += (" The difference did not depend on plaque size (Bland-Altman slope %+.3f, %s)."
-                         % (bs, _pstr(bp)))
-    if icc == icc and icc < 0.5:
-        sentence += (" These two methods therefore cannot be used interchangeably for "
-                     "individual %s; a similar group MEAN does not imply agreement, and any "
-                     "per-plaque claim needs a method that does agree." % what)
-    return sentence
+            ci = ""
+        out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f%s (%s agreement)" \
+               % (icc, ci, icc_grade(icc))
+        if _finite(s.get("ccc")):
+            out += " and Lin's concordance correlation CCC = %.3f" % s["ccc"]
+    out += "."
+    # Bland-Altman bias
+    bits = []
+    if _finite(s.get("pct_bias")):
+        bits.append("%.1f%%" % s["pct_bias"])
+    if "t_p" in s:
+        tp = s["t_p"]
+        if _finite(tp):
+            bits.append("%s, paired t-test %s" % ("significantly different from zero" if tp < 0.05
+                                                  else "not significantly different from zero",
+                                                  _pstr(tp)))
+        else:
+            bits.append("difference from zero not testable")
+    out += " Bland-Altman analysis showed a mean bias of %+.3f %s%s" \
+           % (s["bias"], unit, (" (%s)" % "; ".join(bits)) if bits else "")
+    loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
+    extra = []
+    if _finite(s.get("loa_ci_halfwidth")):
+        extra.append("each limit ±%.3f %s, 95%% CI" % (s["loa_ci_halfwidth"], unit))
+    if s.get("loa_method") == "t prediction":
+        extra.append("t-based prediction limits, as n < %d" % LOA_LARGE_N)
+    if extra:
+        loa += " (%s)" % "; ".join(extra)
+    out += " " + loa
+    if _finite(s.get("slope")):
+        out += ", and a regression slope of %.2f (1.0 = no proportional bias)" % s["slope"]
+    out += "."
+    bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
+    if _finite(bs) and _finite(bp):
+        if bp < 0.05:
+            out += (" The difference depended on plaque size (Bland-Altman slope %+.3f %s per %s, %s): "
+                    "a proportional bias, so a single bias value does not describe the whole range."
+                    % (bs, unit, unit, _pstr(bp)))
+        else:
+            out += (" The difference did not depend on plaque size (Bland-Altman slope %+.3f, %s)."
+                    % (bs, _pstr(bp)))
+    if _finite(icc) and icc < 0.5:
+        out += (" These two methods therefore cannot be used interchangeably for "
+                "individual %s; a similar group MEAN does not imply agreement, and any "
+                "per-plaque claim needs a method that does agree." % what)
+    return out
+# <<< SHARED AGREEMENT CORE <<<
+
+
+def _icc_ci_text(s):
+    if _finite(s.get("icc_lo")) and _finite(s.get("icc_hi")):
+        return "95%% CI %.3f-%.3f, McGraw & Wong F interval" % (s["icc_lo"], s["icc_hi"])
+    return "n too small for an interval" if s["n"] < ICC_CI_MIN_N else "CI undefined"
+
+
+def _loa_method_text(s):
+    if s.get("loa_method") == "t prediction":
+        return "bias ± t(0.975, n-1)·SD·√(1+1/n) = ±%.2f SD: prediction limits, as n < %d" % (
+            s["loa_mult"], LOA_LARGE_N)
+    return "bias ± 1.96 SD"
+
+
+def area_to_diameter(vals):
+    """Area-equivalent diameter d = 2·√(A/π) for each area value — the SAME formula the measurement
+    tool uses for its DIAMETER_MM column. Lets you feed AREA (mm²) columns and get the diameter (mm)
+    comparison without converting the spreadsheet yourself."""
+    return [2.0 * math.sqrt(max(float(v), 0.0) / math.pi) for v in vals]
 
 
 _TEAL, _AMB, _BLU, _OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
@@ -493,8 +605,10 @@ def run(args):
     convert = args.get("convert_area", False)
     if convert:                                            # columns are AREA → compare diameters
         tool_vals, manual_vals = area_to_diameter(tool_vals), area_to_diameter(manual_vals)
-    s = compute(tool_vals, manual_vals)
-    s.update(extra_stats(tool_vals, manual_vals))          # R², CCC, ICC CI, p-values
+    try:
+        s = full_stats(tool_vals, manual_vals)              # + R², CCC, ICC CI, p-values
+    except ValueError as e:                                  # CT-R1 SM-F17: plain refusal
+        raise SystemExit("Cannot compare these columns: %s" % e)
 
     unit = "mm" if convert else args["unit"]; what = args["what"]
     lt, lm = args["label_tool"], args["label_manual"]
@@ -520,7 +634,7 @@ def run(args):
     row = {k: s[k] for k in ("n", "mean_tool", "mean_fiji", "bias", "sd", "loa_lo", "loa_hi",
                              "rmse", "pct_bias", "mae", "r", "r2", "pearson_p", "t_stat", "t_p",
                              "icc", "icc_lo", "icc_hi", "ccc", "slope", "intercept",
-                             "ba_slope", "ba_slope_p", "loa_ci_halfwidth")}
+                             "ba_slope", "ba_slope_p", "loa_ci_halfwidth", "loa_mult", "loa_method")}
     row["icc_grade"] = icc_grade(s["icc"])
     pd.DataFrame([row]).to_csv(os.path.join(out, "agreement_stats_%s.csv" % suf), index=False)
 
@@ -534,12 +648,17 @@ def run(args):
         f.write("| n pairs | %d |\n" % s["n"])
         f.write("| Pearson r (p) | %.3f (%s) |\n" % (s["r"], _pfmt(s["pearson_p"])))
         f.write("| R^2 | %.3f |\n" % s["r2"])
-        f.write("| ICC(A,1) | %.3f (95%% CI %.3f-%.3f; %s) |\n"
-                % (s["icc"], s["icc_lo"], s["icc_hi"], icc_grade(s["icc"])))
+        f.write("| ICC(A,1) | %.3f (%s; %s) |\n"
+                % (s["icc"], _icc_ci_text(s), icc_grade(s["icc"])))
         f.write("| Lin's CCC | %.3f |\n" % s["ccc"])
         f.write("| mean bias (%s) | %+.3f (%.1f%%) |\n" % (unit, s["bias"], s["pct_bias"]))
         f.write("| bias vs 0 (paired t) | t = %.2f, %s |\n" % (s["t_stat"], _pstr(s["t_p"])))
-        f.write("| 95%% limits of agreement | %+.3f to %+.3f %s |\n" % (s["loa_lo"], s["loa_hi"], unit))
+        f.write("| 95%% limits of agreement | %+.3f to %+.3f %s (%s) |\n"
+                % (s["loa_lo"], s["loa_hi"], unit, _loa_method_text(s)))
+        f.write("| 95%% CI of each limit | ±%.3f %s (Bland & Altman 1999) |\n"
+                % (s["loa_ci_halfwidth"], unit))
+        f.write("| proportional bias (difference ~ mean) | slope %+.4f, %s |\n"
+                % (s["ba_slope"], _pstr(s["ba_slope_p"])))
         f.write("| RMSE / MAE (%s) | %.3f / %.3f |\n" % (unit, s["rmse"], s["mae"]))
         f.write("| regression (tool on ref) | y = %.3f x %+.3f  (slope 1.0 = no proportional bias) |\n\n"
                 % (s["slope"], s["intercept"]))
@@ -556,9 +675,9 @@ def run(args):
                 "the practical measure of how interchangeable the methods are.\n"
                 "- **Regression slope** near 1.0 (a flat Bland-Altman cloud) means the disagreement does "
                 "not grow with size.\n")
-    print("[done] %s: n=%d  r=%.3f  R2=%.3f  ICC=%.3f (%.3f-%.3f)  CCC=%.3f  bias=%+.3f %s (%.1f%%)  "
+    print("[done] %s: n=%d  r=%.3f  R2=%.3f  ICC=%.3f (%s)  CCC=%.3f  bias=%+.3f %s (%.1f%%)  "
           "LoA %+.3f..%+.3f  -> %s"
-          % (what, s["n"], s["r"], s["r2"], s["icc"], s["icc_lo"], s["icc_hi"], s["ccc"],
+          % (what, s["n"], s["r"], s["r2"], s["icc"], _icc_ci_text(s), s["ccc"],
              s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
