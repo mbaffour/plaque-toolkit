@@ -551,15 +551,35 @@ cohens_d <- function(a, b) {
   sp <- sqrt(((na - 1) * stats::var(a) + (nb - 1) * stats::var(b)) / (na + nb - 2))
   if (is.finite(sp) && sp > 0) (mean(a) - mean(b)) / sp else NA_real_
 }
-# The SD-ratio rule of the "Variances" choice: Levene cannot see unequal variances with ~3
-# plates per group, so a largest/smallest group SD ratio above 3 is flagged whatever Levene says.
-SD_RATIO_LIMIT <- 3
-sd_ratio_warning <- function(ratio, lev_p) {
-  sprintf(paste0("The largest group SD is %s times the smallest%s. Levene's test cannot reliably ",
-                 "detect unequal variances with this few values per group, so consider Variances = ",
-                 "'unequal' (Welch's ANOVA + Games-Howell)."),
-          if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "many",
-          if (is.na(lev_p)) "" else sprintf(" although Levene p = %s", fmt_p(lev_p)))
+# Spread of the groups when the classic (equal-variance) path ran. No warning from the raw SD
+# ratio (at 3 plates per group a 3x ratio is common by chance); instead
+#  (b) a neutral NOTE when any group has fewer than 5 values, and
+#  (c) a WARNING only when the two groups with the largest and smallest SD differ significantly
+#      in variance: two-sided F test, Bonferroni-adjusted over all k(k-1)/2 pairs.
+# Same rule, same wording as plaque_stats.py.
+SPREAD_MIN_N <- 5
+spread_check <- function(groups, unit_word = "plates") {
+  g <- groups[lengths(groups) >= 2]; k <- length(g)
+  if (k < 2) return(list(note = NULL, warning = NULL, ratio = NA_real_, p_adj = NA_real_))
+  sds <- vapply(g, stats::sd, 0); n <- lengths(g)
+  ia <- which.max(sds); ib <- which.min(sds)
+  ratio <- if (sds[ib] > 0) sds[ia] / sds[ib] else if (sds[ia] > 0) Inf else NA_real_
+  rtxt <- if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "Inf"
+  note <- NULL
+  if (min(lengths(groups)) < SPREAD_MIN_N)
+    note <- sprintf(paste0("ANOVA and Tukey assume the groups have similar spread. With %d %s per group this cannot ",
+                           "be checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to ",
+                           "differ in spread, choose Variances: unequal (Welch)."), min(lengths(groups)), unit_word, rtxt)
+  warning <- NULL; p_adj <- NA_real_
+  if (!is.na(ratio) && ia != ib) {
+    Fv <- if (is.finite(ratio)) ratio^2 else Inf
+    p_pair <- 2 * stats::pf(Fv, n[ia] - 1, n[ib] - 1, lower.tail = FALSE)
+    p_adj <- min(1, p_pair * k * (k - 1) / 2)
+    if (p_adj < 0.05)
+      warning <- sprintf(paste0("The spread differs between groups more than chance explains (SD ratio %s, adjusted %s): ",
+                                "Welch ANOVA + Games-Howell is the safer analysis."), rtxt, p_eq(p_adj))
+  }
+  list(note = note, warning = warning, ratio = ratio, p_adj = p_adj)
 }
 
 # d: group (factor, levels = plotting order), replicate (NA = none), value.
@@ -617,7 +637,7 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   out <- list(unit = unit, unit_requested = requested, have_rep = have_rep, rm = rm, src = src,
               groups = groups, n_per_group = ns, min_n = as.integer(min_n), plates = plates,
               levene_p = lev_p, normality_p = normal, parametric_used = use_param,
-              equal_var = equal_var, posthoc = NA_character_, method_note = NULL, cohens_d = NA_real_,
+              equal_var = equal_var, spread_note = NULL, spread_p_adj = NA_real_, posthoc = NA_character_, method_note = NULL, cohens_d = NA_real_,
               sd_ratio = NA_real_)
   pw <- all_pairs(lev); padj <- list()
   if (k == 2) {
@@ -658,8 +678,9 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
         padj <- tukey_p(groups)
         if (equal_var == "yes" && !is.na(lev_p) && lev_p < 0.05)
           warns <- c(warns, sprintf("Levene p = %.3f suggests the group variances differ, but Variances was set to 'equal', so the classic ANOVA and Tukey HSD were used.", lev_p))
-        if (equal_var == "auto" && !is.na(ratio) && ratio > SD_RATIO_LIMIT)
-          warns <- c(warns, sd_ratio_warning(ratio, lev_p))
+        sp <- spread_check(groups, if (unit == "replicate") "plates" else "plaques")
+        out$spread_note <- sp$note; out$spread_p_adj <- sp$p_adj
+        if (!is.null(sp$warning)) warns <- c(warns, sp$warning)   # advises only; Levene still picks the test
       }
     } else {
       out$test <- "Kruskal–Wallis"; out$posthoc <- "Dunn (Holm-adjusted)"
@@ -699,6 +720,7 @@ omnibus_text <- function(st) {
                  st$test, p_eq(st$p), unit_words, isTRUE(st$parametric_used), st$min_n, p_eq(st$levene_p))
   if (!is.na(st$posthoc)) msg <- paste0(msg, "\nPairwise: ", st$posthoc)
   if (!is.null(st$method_note)) msg <- paste0(msg, "\n", st$method_note)
+  if (!is.null(st$spread_note)) msg <- paste0(msg, "\n\nNOTE: ", st$spread_note)
   if (length(st$warnings)) msg <- paste0(msg, "\n\nWARNINGS:\n- ", paste(st$warnings, collapse = "\n- "))
   msg
 }

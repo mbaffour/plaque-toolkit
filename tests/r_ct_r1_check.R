@@ -57,21 +57,28 @@ chk("F1_B_auto_is_welch", stB$test == "Welch ANOVA" && stB$posthoc == "Games-How
     paste(stB$test, stB$posthoc))
 chk("F1_B_omnibus_p", near(stB$p, PY_B_OMNI), sprintf("R %.12g py %.12g", stB$p, PY_B_OMNI))
 chk("F1_B_pairwise_p", near(pw_p(stB), PY_B_PAIR), paste(sprintf("%.10g", pw_p(stB)), collapse = " "))
-chk("F1_B_sd_ratio_warning", any(grepl("Levene", stB$warnings)))
+chk("F1_B_welch_reason_stated", any(grepl("Levene", stB$warnings)))
 stBe <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "yes")
 chk("F1_B_equal_is_classic", stBe$test == "one-way ANOVA" && stBe$posthoc == "Tukey HSD" &&
       near(stBe$p, 0.019484354511230786) && near(unname(pw_p(stBe)), c(0.14034054967218046, 0.014997722692196347,
                                                                       0.41712136513547327)))
 stBu <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "no")
 chk("F1_B_unequal_forced", stBu$test == "Welch ANOVA" && near(stBu$p, PY_B_OMNI))
-# the SD-ratio warning: tight Levene but a 5x SD ratio with 3 plates per group
-set.seed(3)
-dd <- data.frame(group = factor(rep(c("a", "b", "c"), each = 6), levels = c("a", "b", "c")),
-                 replicate = rep(rep(c("p1", "p2", "p3"), each = 2), 3),
-                 value = c(1, 1.02, 1.01, 0.99, 1.0, 1.03, 2, 2.4, 1.7, 2.2, 1.9, 2.5, 3, 3.01, 3.02, 3.0, 2.99, 3.01))
-stR <- plaque_run_stats(dd, equal_var = "auto")
-chk("F1_sd_ratio_warning_text", any(grepl("largest group SD", stR$warnings)) && any(grepl("unequal", stR$warnings)),
-    paste(stR$warnings, collapse = " | "))
+# spread rule: NOTE with < 5 plates on the classic path, WARNING only on a significant Bonferroni F test
+set.seed(12)
+d8 <- do.call(rbind, lapply(list(c("a", 0.5), c("b", 0.05), c("c", 0.05)), function(x)
+  data.frame(group = x[1], replicate = paste0("p", 1:8), value = rnorm(8, 2, as.numeric(x[2])))))
+d8$group <- factor(d8$group, levels = c("a", "b", "c"))
+st8 <- plaque_run_stats(d8, parametric = "parametric", equal_var = "yes")
+chk("F1_spread_warning_when_significant", any(grepl("more than chance explains", st8$warnings)) && is.null(st8$spread_note),
+    paste(st8$warnings, collapse = " | "))
+stAuto8 <- plaque_run_stats(d8, parametric = "parametric", equal_var = "auto")
+chk("F1_spread_warning_does_not_switch_auto", identical(stAuto8$test == "Welch ANOVA", levene_p(stAuto8$groups) < 0.05))
+stEx <- plaque_run_stats(tidy(fx("../../plaque_stats/example_data_wide.csv")))
+chk("F1_example_has_note_not_warning", grepl("assume the groups have similar spread", stEx$spread_note) &&
+      grepl("With 3 plates per group", stEx$spread_note) && !any(grepl("chance explains|largest group SD", stEx$warnings)),
+    paste(stEx$spread_note, paste(stEx$warnings, collapse = "|")))
+chk("F1_note_shown_in_report_text", grepl("NOTE: ANOVA and Tukey assume", omnibus_text(stEx)))
 stA <- plaque_run_stats(tidy(fx("../../plaque_stats/example_data_long.csv"), value = "diameter_mm",
                              metric = "diameter_mm"))
 chk("F1_A_omnibus_p", stA$test == "one-way ANOVA" && near(stA$p, PY_A_OMNI), sprintf("%.12g", stA$p))
