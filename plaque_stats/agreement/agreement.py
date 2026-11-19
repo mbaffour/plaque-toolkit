@@ -623,8 +623,12 @@ def _finish(fig, s, which, show_key):
         _lk.attach(fig, key)
         if show_key:
             ncol = 4 if which == "both" else 2
-            _lk.embed(fig, key, loc="outside lower center", ncol=ncol, columnspacing=1.4,
-                      handlelength=2.2)
+            try:                           # 'outside' placement needs matplotlib >= 3.7
+                _lk.embed(fig, key, loc="outside lower center", ncol=ncol, columnspacing=1.4,
+                          handlelength=2.2)
+            except (ValueError, TypeError):
+                _lk.embed(fig, key, loc="lower center", ncol=ncol, columnspacing=1.4,
+                          handlelength=2.2)
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     if fig.canvas is None or type(fig.canvas).__name__ == "FigureCanvasBase":
         FigureCanvasAgg(fig)
