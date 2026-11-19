@@ -482,3 +482,100 @@ def test_a_browser_preview_equals_download_and_failed_upload(browser_page, tmp_p
     assert "Could not use bad.csv" in page.inner_text("#messages")
     assert page.query_selector("#fig_preview img") is None
     assert page.evaluate(off) == 8
+
+
+# =========================================================================== B: agreement, the rest
+def _agree_df(n=40):
+    t, m = _pairs(n)
+    return pd.DataFrame({"plaque_id": np.arange(1, n + 1), "toolkit_mm": t, "manual_mm": m})
+
+
+def test_b_f4_semicolon_decimal_comma_and_one_column(tmp_path):
+    df0 = _agree_df()
+    p = _write(tmp_path, "euro.csv", df0, sep=";", decimal=",")
+    df, note = B.read_paired(p, "euro.csv")
+    assert "semicolon-separated" in note and "decimal commas" in note
+    s = B.compute(df, *B.guess_columns(df))
+    assert s["n"] == 40 and s["bias"] == pytest.approx(ag.full_stats(list(df0.toolkit_mm), list(df0.manual_mm))["bias"])
+    with pytest.raises(ValueError, match="ONE column"):
+        B.read_paired(_write(tmp_path, "one.csv", text="toolkit_mm\n1.0\n2.0\n"), "one.csv")
+
+
+def test_b_f6_diameters_preferred_and_area_labelled(tmp_path):
+    d = pd.DataFrame({"plaque_id": range(1, 11), "area_tool_mm2": np.linspace(1, 3, 10),
+                      "area_fiji_mm2": np.linspace(1.1, 3.05, 10), "diam_tool_mm": np.linspace(1, 2, 10),
+                      "diam_fiji_mm": np.linspace(1.02, 2.01, 10)})
+    assert B.guess_columns(d) == ("diam_tool_mm", "diam_fiji_mm")
+    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", False) == ("mm²", "plaque area")
+    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", True) == ("mm", "plaque diameter")
+    assert B.effective_unit(True, "µm") == "mm" and B.effective_unit(False, "µm") == "µm"
+
+
+def test_b_f16_f17_plain_refusals():
+    d = _agree_df()
+    with pytest.raises(ValueError, match="same column"):
+        B.compute(d, "toolkit_mm", "toolkit_mm")
+    with pytest.raises(ValueError, match="at least 3 complete pairs; found 2|found 2 of 2"):
+        B.compute(d.head(2), "toolkit_mm", "manual_mm")
+    same = d.assign(manual_mm=d.toolkit_mm)
+    with pytest.raises(ValueError, match="identical"):
+        B.compute(same, "toolkit_mm", "manual_mm")
+    assert B.id_like("plaque_id") and B.id_like("x", pd.Series(range(1, 30)))
+    assert "plaque_id" not in B.guess_columns(d)
+    d2 = d.copy(); d2.loc[:4, "manual_mm"] = np.nan
+    s = B.compute(d2, "toolkit_mm", "manual_mm")
+    assert (s["n"], s["_dropped"]) == (35, 5)
+    assert "5 dropped" in B.stats_rows(s, "mm").iloc[0, 1]
+
+
+def test_b_f17_icc_interval_cell_below_5_pairs():
+    t, m = _pairs(4)
+    s = ag.full_stats(t, m)
+    assert "n/a (needs 5 pairs)" in B.icc_cell(s) and "nan" not in B.icc_cell(s)
+    assert "nan" not in " ".join(B.stats_rows(s, "mm")["value"])
+
+
+def test_b_f16_f22_f23_zip_is_the_screen(tmp_path):
+    d = _agree_df()
+    d.loc[0, "manual_mm"] = np.nan
+    opts = {"label_tool": "Tool $x$ \\alpha $", "label_manual": "Fiji", "title": "Cost $5 vs $6",
+            "unit": "mm", "what": "plaque diameter", "show_key": True, "show_stats": True,
+            "convert_area": False}
+    s = B.compute(d, "toolkit_mm", "manual_mm")
+    z = zipfile.ZipFile(io.BytesIO(B.zip_bytes(d, "toolkit_mm", "manual_mm", opts, "mine.csv", b"raw")))
+    names = z.namelist()
+    assert "input_mine.csv" in names
+    st = pd.read_csv(io.BytesIO(z.read("agreement_stats_plaque_diameter.csv")))
+    assert int(st["n"][0]) == s["n"] == 39 and st["bias"][0] == pytest.approx(s["bias"])
+    rep = z.read("agreement_report_plaque_diameter.md").decode()
+    assert "proportional bias" in rep and "95% CI of each limit" in rep and "Tool $x$ \\alpha $" in rep
+    import json as _json
+    assert _json.loads(z.read("run_config_plaque_diameter.json"))["data"] == "mine.csv"
+    with pytest.raises(ValueError, match="same column"):
+        B.zip_bytes(d, "toolkit_mm", "toolkit_mm", opts)
+    # a $ title / label never breaks the figure (F22)
+    sf = B.labels(opts)
+    fig = B.make_fig(s, "both", "mm", sf["label_tool"], sf["label_manual"], sf["title"])
+    assert len(B.png_bytes(fig)) > 1000
+    plt.close(fig)
+
+
+def test_b_browser_preview_equals_download_area_and_failed_upload(browser_page, tmp_path):
+    """F7 (preview = PNG bytes, no sideways scroll), F6 (area labels, Unit disabled while
+    converting), F19 (failed upload clears and stays), F24 (downloads disabled)."""
+    import base64
+    page, srv = browser_page(os.path.join(AG_DIR, "app_py.py"), tmp_path, width=390)
+    page.click("#load_example"); _idle(page, 3)
+    src = page.get_attribute("#fig img", "src")
+    assert base64.b64decode(src.split(",", 1)[1]) == _download(page, srv.port, "dl_png")
+    assert page.evaluate("() => document.documentElement.scrollWidth") <= 390
+    d = pd.DataFrame({"plaque_id": range(1, 21), "area_tool_mm2": np.linspace(1, 3, 20) + 0.01 * np.sin(range(20)),
+                      "area_fiji_mm2": np.linspace(1.1, 3.05, 20)})
+    page.set_input_files("#file", _write(tmp_path, "areas.csv", d)); _idle(page, 3)
+    assert page.input_value("#unit") == "mm²" and page.input_value("#what") == "plaque area"
+    page.set_checked("#convert_area", True); _idle(page, 2)
+    assert page.input_value("#unit") == "mm" and page.is_disabled("#unit")
+    page.set_input_files("#file", _write(tmp_path, "bad.csv", text="only\n1\n2\n")); _idle(page, 2)
+    assert "Could not use bad.csv" in page.inner_text("#messages")
+    assert page.query_selector("#fig img") is None
+    assert page.evaluate("() => [...document.querySelectorAll('a.shiny-download-link.ct-off')].length") == 13
