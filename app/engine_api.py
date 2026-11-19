@@ -99,18 +99,9 @@ def overlap_flags(plaques, margin=1.0):
     another's (centre distance < (r_i + r_j) * margin). Uniform for circles and contours,
     O(n^2) over the (few) plaques. Overlapping plaques can't be sized reliably, so callers
     can flag/exclude them."""
-    import math
-    n = len(plaques)
-    flags = [False] * n
-    g = [(float(p["center"][0]), float(p["center"][1]), _eff_radius(p)) for p in plaques]
-    for i in range(n):
-        xi, yi, ri = g[i]
-        for j in range(i + 1, n):
-            xj, yj, rj = g[j]
-            if math.hypot(xi - xj, yi - yj) < (ri + rj) * margin:
-                flags[i] = True
-                flags[j] = True
-    return flags
+    # CT-R1 F9: the test lives in plaque_gui so the exported figure (which cannot import this
+    # module) marks exactly the plaques the canvas and the OVERLAP column mark.
+    return pgui.overlap_flags(plaques, margin=margin)
 
 
 def _circularity(p):
@@ -129,10 +120,13 @@ def _circularity(p):
     return round(min(1.0, 4.0 * math.pi * area / (per * per)), 3)
 
 
-def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None):
+def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None, with_reason=False):
     """Per-plaque DataFrame mirroring what save_results writes, but WITHOUT writing files
     (for live display of the editable plaque set). Adds CIRCULARITY (shape) and OVERLAP
-    (touches another plaque) so irregular / confluent plaques are visible and filterable."""
+    (touches another plaque) so irregular / confluent plaques are visible and filterable.
+
+    ``with_reason=True`` appends a QC_REASON column (why each QC_FLAG was raised; CT-R1 F24).
+    It is off by default so the 11 columns every caller and CSV relies on stay as they are."""
     import cv2
     import pandas as pd
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
@@ -154,14 +148,17 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None)
                      "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
                      "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""),
                      "CIRCULARITY": circs[i - 1], "OVERLAP": ("yes" if ov else "no"),
-                     "SOURCE": p["source"], "QC_FLAG": qc[i - 1][0]})
-    return pd.DataFrame(rows, columns=["INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-                                       "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL",
-                                       "CIRCULARITY", "OVERLAP", "SOURCE", "QC_FLAG"])
+                     "SOURCE": p["source"], "QC_FLAG": qc[i - 1][0], "QC_REASON": qc[i - 1][1]})
+    cols = ["INDEX", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM", "MEAN_GRAY",
+            "TURBIDITY_REL", "CIRCULARITY", "OVERLAP", "SOURCE", "QC_FLAG"]
+    return pd.DataFrame(rows, columns=cols + (["QC_REASON"] if with_reason else []))
 
 
-def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=None):
-    return pgui.save_results(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=published)
+def save_single(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray, published=None, **kw):
+    """Write one plate's standard outputs. Extra keywords (the engine flags that produced the
+    plaques, dish mm, edited, ...) go straight to plaque_gui.save_results (CT-R1 F6)."""
+    return pgui.save_results(plaques, orig_bgr, image_path, out_dir, ppm, lawn_gray,
+                             published=published, **kw)
 
 
 def detect_region(orig_bgr, roi, sensitive=True, small=True, published=False):
