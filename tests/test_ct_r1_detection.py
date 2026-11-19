@@ -519,3 +519,70 @@ def test_d5_cli_qc_flags_merged_from_the_raw_contour(tmp_path, mixed_plate):
     df = pd.read_csv(tmp_path / "q" / "data-green-mixed_plate.csv")
     # the 6 mm disc is 29x the median area here (LARGE?, not MERGED?: its outline is one blob)
     assert df["QC_FLAG"].tolist() == ["LARGE?"] + ["TINY"] * 5
+
+
+# --------------------------------------------------------------------------- #
+#  D6: Precise reporting only (F20, F22) -- no numeric change
+# --------------------------------------------------------------------------- #
+def test_d6_precise_summary_counts_detections_outside_the_lawn_roi(tmp_path):
+    from precise import combine
+    bgr = np.full((1000, 1000, 3), 150, np.uint8)
+    pst = {"image": "x.png", "plate_mm": 90.0, "img_w": 1000, "img_h": 1000, "mm_per_px": 0.1,
+           "plate": {"center": [500.0, 500.0], "radius": 400.0, "diam_px": 800.0},
+           "n_pst_normal": 0, "n_pst_sensitive": 0, "pst_normal": [], "pst_sensitive": []}
+
+    def det(x, y):
+        return {"x": x, "y": y, "area_pxl": 314.0, "diam_px": 20.0, "diam_mm": 2.0, "conf": 0.9}
+    # inside the 0.80 R lawn ROI (2), on the dish beyond it (2: 0.85 R, 0.95 R), off the dish (1)
+    ps_all = [det(500, 500), det(600, 500), det(500, 840), det(880, 500), det(960, 960)]
+    s = combine.combine_detections(pst, ps_all, str(tmp_path), "t", blob_enabled=False, bgr=bgr,
+                                   clf_enabled=False)
+    assert s["n_plaqseg"] == 2 and s["n_final"] == 2          # which plaques are kept: unchanged
+    assert s["n_outside_roi"] == 2
+    assert json.load(open(tmp_path / "summary_t.json"))["n_outside_roi"] == 2
+
+
+def test_d6_yolo_block_is_shared_and_records_max_det(tmp_path, monkeypatch):
+    from precise.yolo_meta import yolo_block
+    w = tmp_path / "w.pt"
+    w.write_bytes(b"weights")
+    b = yolo_block(str(w), 0.1, 0.5, 1280)
+    assert b["max_det"] == 1000 and b["imgsz"] == 1280 and b["weights"] == "w.pt"
+    assert len(b["weights_sha256_16"]) == 16 and b["tile_edge_fragments_dropped"] is True
+    monkeypatch.setenv("PLAQSEG_MAX_DET", "2500")
+    assert yolo_block(str(w), 0.1, 0.5, 640)["max_det"] == 2500
+    src = open(os.path.join(REPO_ROOT, "precise", "pipeline.py")).read()
+    assert "yolo_block(weights, conf, iou, _YOLO_IMGSZ)" in src
+
+
+def test_d6_two_env_runner_honours_weights_and_imgsz_overrides(tmp_path, monkeypatch):
+    """run_precise.py: PLAQSEG_WEIGHTS / PLAQSEG_IMGSZ reach PlaqSeg, and the yolo block is
+    written. The three stages are stubbed (no plaqseg env here)."""
+    import importlib
+    import sys
+    monkeypatch.setenv("PLAQSEG_WEIGHTS", str(tmp_path / "alt.pt"))
+    monkeypatch.setenv("PLAQSEG_IMGSZ", "640")
+    (tmp_path / "alt.pt").write_bytes(b"alt")
+    sys.modules.pop("precise.run_precise", None)
+    rp = importlib.import_module("precise.run_precise")
+    calls = []
+    out = tmp_path / "out"
+
+    def fake_run(cmd, cwd=None, env=None):
+        calls.append(list(cmd))
+        if cmd[1].endswith("pst_front.py"):
+            json.dump({"mm_per_px": 0.05}, open(cmd[3], "w"))
+        if cmd[1].endswith("combine.py"):
+            json.dump({"n_final": 3}, open(os.path.join(cmd[4], "summary_%s.json" % cmd[5]), "w"))
+        return ""
+    monkeypatch.setattr(rp, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["run_precise.py", "--image", str(tmp_path / "i.png"),
+                                      "--out", str(out), "--tag", "t", "--plaqseg-py", "py"])
+    rp.main()
+    plaqseg_cmd = calls[1]
+    assert plaqseg_cmd[2] == str(tmp_path / "alt.pt")
+    assert plaqseg_cmd[plaqseg_cmd.index("--imgsz") + 1] == "640"
+    summ = json.load(open(out / "summary_t.json"))
+    assert summ["n_final"] == 3
+    assert summ["yolo"]["weights"] == "alt.pt" and summ["yolo"]["imgsz"] == 640
+    assert summ["yolo"]["max_det"] == 1000 and summ["yolo"]["conf"] == 0.1
