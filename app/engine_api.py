@@ -98,6 +98,9 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         "n_outside_dish": int(info.get("n_outside_dish") or 0),
         "n_small_added": int(info.get("n_small_added") or 0),
         "dish_warnings": list(info.get("dish_warnings") or []),
+        # Auto only (CT-R1 detection D8): plaques by edge source and how clusters were resolved
+        "sources": info.get("sources"),
+        "halo_resolution": info.get("halo_resolution"),
         "sensitive": bool(sensitive) and not bool(published),
         "orig_bgr": orig_bgr,
         "proc_gray": proc_gray,

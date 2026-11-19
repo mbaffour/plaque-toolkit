@@ -29,6 +29,10 @@ Flags (several may apply, joined with `|`; `OK` when none):
 * ``BRIGHT``   the plaque interior is brighter than a ring around it by more than
                ``bright_margin`` grey levels: a bubble or glare, not a clearing (CT-R1 F19). Only
                when the brightness is known and the engine expects dark plaques.
+* ``SPLIT``    Auto only (CT-R1 detection D8): separated from a touching neighbour by the
+               cluster split (SOURCE "split"); its size is less certain. Never also MERGED?.
+* ``CORE?``    Auto only: the outline is a dark centre whose paler halo could not be separated
+               from its neighbours or the lawn edge, so its size is the core's, not the halo's.
 * ``OVERLAP``  its disk overlaps another plaque's disk (sizes of both are unreliable).
 * ``LOW_CONF`` the Precise classifier scored it below ``low_conf`` (only when a score exists).
 
@@ -120,7 +124,8 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         circ = p.get("circularity")
         if circ is not None and circ == circ and float(circ) < min_circularity:
             shape_why.append("circularity %.2f" % float(circ))
-        if shape_why:
+        split = p.get("source") == "split"
+        if shape_why and not split:          # a split piece's shape is the cut, not a merge
             why_m = "; ".join(shape_why)
             if big:
                 why_m = "area %.1fx the plate median; " % (a / median_area) + why_m
@@ -129,6 +134,12 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
             flags.append("LARGE?"); why.append("area %.1fx the plate median" % (a / median_area))
         if nested[i]:
             flags.append("NESTED"); why.append("its centre lies inside a larger plaque")
+        # CT-R1 detection D8 (Auto): how the plaque's edge was found
+        if split:
+            flags.append("SPLIT"); why.append("separated from a touching neighbour; size is less certain")
+        if p.get("core_only"):
+            flags.append("CORE?")
+            why.append("outline is the dark centre only; its halo could not be separated")
         ed = p.get("encl_diam_px")
         if p.get("source") == "small":
             flags.append("TINY"); why.append("found only by the small-scale pass")
@@ -299,7 +310,8 @@ def flags_for_plaque_dicts(plaques, image_shape, plate=None, circularities=None,
         rec = {"x": float(cx), "y": float(cy), "area_px": a,
                "circularity": (circularities[i] if circularities is not None else None),
                "p_plaque": p.get("p_plaque"), "source": p.get("source"),
-               "solidity": p.get("solidity"), "encl_diam_px": p.get("encl_diam_px")}
+               "solidity": p.get("solidity"), "encl_diam_px": p.get("encl_diam_px"),
+               "core_only": bool(p.get("core_only"))}
         # the size-gate TINY rule is about the classic detector's gate: only its own outlines
         # are judged by it, not circles drawn by hand or Precise's model plaques
         classic = p.get("kind") != "circle" and p.get("source") not in ("manual", "freehand")

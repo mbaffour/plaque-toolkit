@@ -109,7 +109,8 @@ def test_d1_auto_contains_every_standard_plaque_on_a_bundled_plate():
     assert {key(p) for p in std["plaques"]} == auto_keys
     assert std["pxl_per_mm"] == auto["pxl_per_mm"]
     assert std["n_plaques"] == 19 and auto["n_plaques"] == 27
-    assert sum(p["source"] == "small" for p in auto["plaques"]) == 8
+    # 8 added: since D8 one is a split halo, 4 are cores whose halo could not be separated
+    assert sum(p["source"] != "auto" for p in auto["plaques"]) == 8
     meds = [float(np.median([2 * math.sqrt(p["area_pxl"] / math.pi) * d["pxl_per_mm"]
                              for p in d["plaques"] if p["source"] == "auto"]))
             for d in (std, auto)]
@@ -631,3 +632,131 @@ def test_d4_bundled_sample_opens_without_dish_warnings():
     from app import engine_api
     d = engine_api.detect_single(SAMPLE_TIF, plate_mm=100, scale="auto")
     assert d["dish_warnings"] == [] and d["n_outside_dish"] == 0
+
+
+# --------------------------------------------------------------------------- #
+#  D8: Auto uses one definition of the plaque edge per plate (the standard halo edge)
+# --------------------------------------------------------------------------- #
+HALO_R, CORE_R = 60, 22          # 120 px halo (6 mm at 20 px/mm) around a 44 px dark core
+
+
+def _halo_plate(path, centres, single=((1400, 1400),)):
+    """Plaques with a dark core (70) and a paler halo (110) on a 150 lawn; ``single`` is one
+    isolated plaque the standard pass accepts, as the reference halo size."""
+    import cv2
+    img = np.zeros((2000, 2000, 3), np.uint8)
+    cv2.circle(img, (1000, 1000), 900, (150, 150, 150), -1)
+    for c in list(centres) + list(single):
+        cv2.circle(img, c, HALO_R, (110, 110, 110), -1)
+    for c in list(centres) + list(single):
+        cv2.circle(img, c, CORE_R, (70, 70, 70), -1)
+    cv2.imwrite(path, cv2.GaussianBlur(img, (7, 7), 0))
+    return path
+
+
+def _dpx(p):
+    return 2 * math.sqrt(p["area_pxl"] / math.pi)
+
+
+def test_d8_two_overlapping_haloed_discs_come_out_as_two_halo_plaques(tmp_path):
+    from app import engine_api
+    gap = int(0.8 * 2 * HALO_R)                      # centres 0.8 halo diameters apart
+    path = _halo_plate(str(tmp_path / "pair.png"), [(800, 800), (800 + gap, 800)])
+    std = engine_api.detect_single(path, plate_mm=90, scale="standard")
+    assert std["n_plaques"] == 1                     # the touching pair is rejected by the gates
+    d = engine_api.detect_single(path, plate_mm=90, scale="auto")
+    split = [p for p in d["plaques"] if p["source"] == "split"]
+    assert d["n_plaques"] == 3 and len(split) == 2
+    for p in split:
+        assert abs(_dpx(p) - 2 * HALO_R) / (2 * HALO_R) < 0.10 and not p.get("core_only")
+    assert d["sources"] == {"standard": 1, "split": 2, "standard-relaxed": 0, "small": 0,
+                            "other": 0, "core": 0}
+    df = engine_api.measure_table(d["plaques"], d["orig_bgr"], d["pxl_per_mm"], d["lawn_gray"],
+                                  plate=d["plate"], with_reason=True)
+    for f in df.loc[df["SOURCE"] == "split", "QC_FLAG"]:
+        assert "SPLIT" in f.split("|") and "MERGED?" not in f.split("|")
+
+
+def test_d8_four_disc_cluster_comes_out_as_four(tmp_path):
+    from app import engine_api
+    g = int(0.8 * 2 * HALO_R)
+    path = _halo_plate(str(tmp_path / "quad.png"),
+                       [(700, 1200), (700 + g, 1200), (700, 1200 + g), (700 + g, 1200 + g)])
+    d = engine_api.detect_single(path, plate_mm=90, scale="auto")
+    split = [p for p in d["plaques"] if p["source"] == "split"]
+    assert len(split) == 4 and d["n_plaques"] == 5           # + the isolated reference plaque
+    # the standard pass's outline of the lawn hole between the four halos is not a plaque
+    assert d["halo_resolution"]["standard_dropped_inside_cluster"] == 1
+    for p in split:                                  # each piece is a disc cut twice: ~ -16 %
+        assert 0.8 * 2 * HALO_R < _dpx(p) < 2 * HALO_R
+
+
+def test_d8_sharp_small_plaques_are_unchanged(mixed_plate):
+    from app import engine_api
+    d = engine_api.detect_single(mixed_plate, plate_mm=90, scale="auto")
+    sml = engine_api.detect_single(mixed_plate, plate_mm=90, scale="small")
+    small_auto = sorted((round(p["area_pxl"], 2), round(p["center"][0], 3)) for p in d["plaques"]
+                        if p["source"] == "small")
+    small_only = sorted((round(p["area_pxl"], 2), round(p["center"][0], 3)) for p in sml["plaques"]
+                        if not _near(p, BIG_C))
+    assert small_auto == small_only and len(small_auto) == 5
+    assert d["sources"]["core"] == 0 and d["sources"]["split"] == 0
+
+
+def test_d8_plate11_sizes_unchanged():
+    """small/Plate_11: sharp, non-haloed plaques -- every plaque keeps its size and centre."""
+    from app import engine_api
+    path = _plate_path("small/Plate_11")
+    auto = engine_api.detect_single(path, plate_mm=55, scale="auto")
+    sml = engine_api.detect_single(path, plate_mm=55, scale="small")
+    key = lambda p: (round(p["area_pxl"], 2), round(p["center"][0], 3), round(p["center"][1], 3))
+    assert sorted(map(key, auto["plaques"])) == sorted(map(key, sml["plaques"]))
+    assert auto["n_plaques"] == 38 and auto["sources"]["small"] == 37
+    assert auto["sources"]["core"] == 1              # one core reads haloed (ratio 0.50); size kept
+
+
+@pytest.mark.parametrize("name,mm,n,median,shares,outside", [
+    ("sample", 100, 41, 5.35, {"standard": 15, "split": 12, "small": 4, "core": 10}, (1, 1)),
+    ("large/Plate_6", 90, 89, 2.57, {"standard": 48, "split": 2, "small": 13, "core": 26}, (0, 0)),
+    ("large/Plate_8", 90, 27, 5.17, {"standard": 19, "split": 1, "small": 3, "core": 4}, (0, 0)),
+])
+def test_d8_bundled_plates_pinned(name, mm, n, median, shares, outside):
+    from app import engine_api
+    d = engine_api.detect_single(_plate_path(name), plate_mm=mm, scale="auto")
+    dm = [_dpx(p) * d["pxl_per_mm"] for p in d["plaques"]]
+    assert d["n_plaques"] == n and round(float(np.median(dm)), 2) == median
+    s = d["sources"]
+    assert {k: s[k] for k in shares} == shares
+    assert s["small"] + s["core"] == sum(p["source"] == "small" for p in d["plaques"])
+    # resolved halos sit in the plate's standard (halo) size range, with known exceptions on
+    # sample.tif: one piece of the 4-plaque cluster at 4.18 mm (smallest standard plaque 4.64
+    # mm), cut short by its neighbours, and one top-cluster piece at 6.76 mm (largest 6.43 mm);
+    # both carry SPLIT ("size is less certain")
+    std = [_dpx(p) * d["pxl_per_mm"] for p in d["plaques"] if p["source"] == "auto"]
+    sp = [_dpx(p) * d["pxl_per_mm"] for p in d["plaques"] if p["source"] == "split"]
+    assert (sum(v < min(std) for v in sp), sum(v > max(std) for v in sp)) == outside
+
+
+def test_d8_flag_line_and_run_metadata_report_edge_sources(qtbot, tmp_path):
+    import plaque_gui as pgui
+    from app import engine_api
+    gap = int(0.8 * 2 * HALO_R)
+    path = _halo_plate(str(tmp_path / "pair.png"), [(800, 800), (800 + gap, 800)])
+    appui = _gui()
+    win = appui.MainWindow()
+    qtbot.addWidget(win)
+    tab = win.measure_tab
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    tab.plate.setValue(90)
+    tab.image_path = path
+    tab._detect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
+    assert "Edges: 1 standard, 2 split from clusters, 0 small." in tab.flag_label.text()
+    det = engine_api.detect_single(path, plate_mm=90, scale="auto")
+    pgui.save_results(det["plaques"], det["orig_bgr"], path, str(tmp_path / "o"), det["pxl_per_mm"],
+                      det["lawn_gray"], plate=det["plate"], published=False, sensitive=False,
+                      small=False, watershed=False, plate_mm=90,
+                      detection={k: det[k] for k in ("scale", "sources")})
+    meta = json.load(open(tmp_path / "o" / "run_metadata.json"))
+    assert meta["images"][0]["sources"]["split"] == 2 and meta["images"][0]["sources"]["core"] == 0
+    assert meta["images"][0]["n_manual_or_edited"] == 0            # split plaques are detector results

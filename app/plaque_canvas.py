@@ -592,7 +592,8 @@ class PlaqueCanvas(QWidget):
                 # plaque-size scale and dish provenance (CT-R1 detection D1-D4)
                 "scale": d.get("scale"),
                 "detection": {k: d[k] for k in ("scale", "dish_source", "dish_reason",
-                                                "n_outside_dish", "dish_warnings") if k in d}}
+                                                "n_outside_dish", "dish_warnings", "sources")
+                              if k in d}}
 
     def _pub(self):
         """The result's own Published flag (None only for a result that carries none)."""
