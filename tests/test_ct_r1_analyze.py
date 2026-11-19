@@ -48,7 +48,9 @@ def dialogs(monkeypatch):
     for name in ("warning", "information", "critical"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(
             lambda *a, _n=name, **k: q["seen"].append((_n, a[2] if len(a) > 2 else "")) or QMessageBox.Ok))
-    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: pop("item", ("", False))))
+    q["offered"] = []
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(
+        lambda *a, **k: q["offered"].append(list(a[3])) or pop("item", ("", False))))
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: pop("text", ("", False))))
     return q
 
@@ -135,6 +137,8 @@ def test_zip_grouped_equals_screen(st, dialogs, tmp_path, tags, control):
     assert lk.from_figure(st._last_fig)["title"] == "2nd factor"
     cfg = json.loads(z.read("run_config_diameter_mm.json"))
     assert cfg["subgroups"] == st._last[1]["sub_order"] and cfg["control"] == control
+    assert "plaque_zip_" not in json.dumps(cfg) and "in-memory" in cfg["data"]
+    assert st.err.text() == ""
 
 
 def test_engine_exit_is_a_message_not_a_dead_app(st, dialogs, tmp_path, monkeypatch):
@@ -251,6 +255,7 @@ def test_add_csv_needs_a_diameter_in_mm_column_and_sane_values(st, dialogs, tmp_
     files = {
         "area_only.csv": "INDEX_COL,AREA_MM2\n1,2.5\n2,3.1\n",
         "microns.csv": "id,Diameter (µm)\n1,1500\n2,1700\n",
+        "plain.csv": "id,size\n1,1.3\n2,1.5\n",
         "semicolon.csv": "INDEX_COL;DIAMETER_MM;AREA_MM2\n1;2,34;4,30\n2;1,90;2,84\n",
         "data.json": '{"DIAMETER_MM": [1, 2]}\n',
         "binary.csv": b"\x89PNG\r\n\x1a\n\x00\x00\x00",
@@ -259,24 +264,26 @@ def test_add_csv_needs_a_diameter_in_mm_column_and_sane_values(st, dialogs, tmp_
     }
     paths = [_plate_csv(tmp_path, n, t) for n, t in files.items()]
     dialogs["openN"].append((paths, ""))
-    dialogs["item"] += [("", False), ("", False)]           # area_only, microns: user cancels
+    dialogs["item"] += [("", False), ("", False), ("", False)]   # area_only, microns, plain: cancel
     dialogs["question"].append(QMessageBox.No)              # header_only: not a 0-plaque plate
     st.add_csv_btn.click()
     plates = st._plates_of(st._samples[0])
     assert [p["diam"] for p in plates] == [[2.34, 1.90]]    # only the semicolon file
     assert plates[0]["area"] == [4.30, 2.84] and plates[0]["source"] == "semicolon.csv"
     err = st.err.text()
-    for name in ("area_only.csv", "microns.csv", "data.json", "binary.csv", "negative.csv",
+    assert all("Diameter (µm)" not in o for o in dialogs["offered"])   # never offered as mm
+    for name in ("area_only.csv", "microns.csv", "plain.csv", "data.json", "binary.csv", "negative.csv",
                  "header_only.csv"):
         assert name in err, (name, err)
     assert "JSON" in err and "binary" in err and "zero or negative" in err
     # the user CAN name the column, and confirm an empty plate
-    dialogs["openN"].append(([paths[1], paths[-1]], ""))
-    dialogs["item"].append(("Diameter (µm)", True))
+    dialogs["openN"].append(([paths[2], paths[-1]], ""))
+    dialogs["item"].append(("size", True))
     dialogs["question"].append(QMessageBox.Yes)
     st.add_csv_btn.click()
     plates = st._plates_of(st._samples[0])
-    assert [p["diam"] for p in plates] == [[2.34, 1.90], [1500.0, 1700.0], []]
+    assert [p["diam"] for p in plates] == [[2.34, 1.90], [1.3, 1.5], []]
+    assert st.err.text() == ""
 
 
 # --------------------------------------------------------------------------- F17 plate ids
@@ -584,3 +591,24 @@ def test_figure_is_not_squeezed_into_a_second_scroll_area(win, st, dialogs, qtbo
     assert st.findChildren(QScrollArea) == []
     assert st.fig_holder.minimumHeight() >= st.canvas.height()
     assert st.fig_holder.height() >= st.canvas.height()
+
+
+def test_screen_text_names_the_tabs_controls_not_command_line_flags(st, dialogs):
+    """Engine notes ('--equal-var', '--annotate letters', '--parametric') are worded with the
+    tab's own controls in the warning line, the caption and the Report."""
+    _fill(st, [("S%d" % i, "", [1.0 + 0.1 * i, 1.05 + 0.1 * i, 0.95 + 0.1 * i]) for i in range(7)])
+    st.analyse_btn.click()
+    assert st.err.text() == ""
+    for text in (st.report.toPlainText(), st.fig_caption.text(), st.warn_lbl.text()):
+        assert "--" not in text and "`" not in text, text
+    assert "Brackets: Letters" in st.fig_caption.text()
+
+
+def test_rows_without_a_value_are_counted_in_the_report(st, dialogs):
+    """Dropped rows appear in the Report: a plate measured without areas, analysed by area."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
+    st._plates[0]["area"] = st._plates[0]["area"][:5]       # 20 of its 25 plaques have no area
+    st.metric_sel.setCurrentIndex(1)
+    st.analyse_btn.click()
+    assert "Data: 20 plaque row(s) have no area value and are left out (plates: WT/plate1)." in \
+        st.report.toPlainText()

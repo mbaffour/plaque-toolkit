@@ -187,9 +187,17 @@ def _stats_message(e):
     msg = str(msg or e or e.__class__.__name__)
     if msg.startswith("[error] "):
         msg = msg[len("[error] "):]
-    for flag, words in _FLAG_WORDS:          # the engine speaks command-line; name the tab's controls
-        msg = msg.replace(flag, words)
-    return msg
+    return _ui_words(msg)
+
+
+def _ui_words(text):
+    """The engine speaks command-line ('--equal-var no'); on screen the tab names its own
+    controls instead (CT-R1 F9, brief rule 6). Not applied to the legend text starter, which must
+    stay identical to the ZIP's legend text file."""
+    text = str(text or "")
+    for flag, words in _FLAG_WORDS:
+        text = text.replace("`%s`" % flag, words).replace(flag, words)
+    return text.replace("`", "")
 
 
 _FLAG_WORDS = [
@@ -201,6 +209,15 @@ _FLAG_WORDS = [
     ("--center median", "Center: Median"), ("--center mean", "Center: Mean"),
     ("--error iqr", "Error bars: IQR"), ("--error ci95", "Error bars: 95% CI"),
     ("--error none", "Error bars: None"), ("--error sd", "Error bars: SD"), ("--error sem", "Error bars: SEM"),
+    ("--parametric parametric", "Test: Parametric"), ("--parametric auto", "Test: Auto"),
+    ("Override with --parametric", "Override with the Test control"),
+    ("--parametric", "the Test control"),
+    ("--equal-var auto", "Variances: Auto"), ("--equal-var yes", "Variances: Equal"),
+    ("--equal-var", "the Variances control"),
+    ("--annotate letters", "Brackets: Letters"), ("--annotate all", "Brackets: All pairs"),
+    ("--annotate adjacent", "Brackets: Adjacent"), ("--annotate", "the Brackets control"),
+    ("--posthoc", "the Compare control"), ("--control", "Compare: vs a sample"),
+    ("--unit replicate", "plates as the unit"), ("--unit plaque", "plaques as the unit"),
 ]
 
 
@@ -374,6 +391,9 @@ class StudyTab(QWidget):
         try:
             return fn(*a)
         except (Exception, SystemExit) as e:                      # noqa: BLE001
+            if not isinstance(e, (ValueError, SystemExit)):    # a bug, not an engine refusal
+                import traceback
+                traceback.print_exc()
             self._warn("That did not work: %s" % _stats_message(e))
             return None
 
@@ -896,7 +916,8 @@ class StudyTab(QWidget):
             return fail("%s — skipped." % e)
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
-            numeric = [c for c in df.columns if _numbers(df[c])[1] == 0 and _numbers(df[c])[0].notna().any()]
+            numeric = [c for c in df.columns if _numbers(df[c])[1] == 0 and _numbers(df[c])[0].notna().any()
+                       and not _NOT_MM_RE.search(str(c).lower())]      # no µm / px / cm columns
             if not numeric:
                 return fail("%s has no diameter-in-mm column (columns: %s) — skipped."
                             % (name, ", ".join(map(str, df.columns))))
@@ -1379,6 +1400,14 @@ class StudyTab(QWidget):
         metric_name = "Diameter (mm)" if metric_key == "diam" else "Area (mm²)"
         tidy = self._tidy_frame()
         df = tidy.rename(columns={vcol: "value"})[["group", "subgroup", "replicate", "value"]].copy()
+        # the rows left out are counted in the Report (as the engine's data notes do in the ZIP)
+        miss = df[df["value"].isna()]
+        self._data_note = ""
+        if len(miss):
+            plates = list(dict.fromkeys("%s/%s" % (g, r) for g, r in zip(miss["group"], miss["replicate"])))
+            self._data_note = ("%d plaque row(s) have no %s value and are left out (plates: %s%s)."
+                               % (len(miss), metric_name.split(" (")[0].lower(), ", ".join(plates[:8]),
+                                  ", …" if len(plates) > 8 else ""))
         df = df.dropna(subset=["value"])
         if df.empty:
             self._invalidate_analysis()
@@ -1463,7 +1492,7 @@ class StudyTab(QWidget):
                 % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
                    "it is" if len(empty) == 1 else "they are"))
         warns = list(omni.get("warnings") or [])
-        self.warn_lbl.setText("\n".join("⚠ " + w for w in warns))
+        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
         self._write_report_single(ps, metric_name, summ, omni, posthoc, unit, have_rep)
         self._status("Analyzed %d samples (%s)." % (len(order), omni.get("test")), 5000)
         return True
@@ -1476,6 +1505,12 @@ class StudyTab(QWidget):
         key = legend_key.from_figure(self._last_fig) or {}
         bits = [key.get("note") or "", getattr(self._last_fig, "annotation_note", "") or ""]
         return " ".join(b for b in bits if b)
+
+    def _set_report(self, lines):
+        lines = list(lines)
+        if getattr(self, "_data_note", ""):
+            lines += ["", "Data: " + self._data_note]
+        self.report.setPlainText(_ui_words("\n".join(lines)))
 
     def _write_report_single(self, ps, metric_name, summ, omni, posthoc, unit, have_rep):
         o = self._opts(self._last[1]["metric_key"])
@@ -1501,7 +1536,7 @@ class StudyTab(QWidget):
             L.append("")
             L += ["⚠ " + w for w in ws]
             L += ["Note: " + n for n in ns]
-        self.report.setPlainText("\n".join(L))
+        self._set_report(L)
 
     # ---- display copies of the result tables (the raw numbers stay in self._last for the CSVs)
     @staticmethod
@@ -1614,8 +1649,8 @@ class StudyTab(QWidget):
             L.append("")
             L += ["⚠ " + w for w in warns]
             L += ["Note: " + n for n in info.get("notes") or []]
-        self.warn_lbl.setText("\n".join("⚠ " + w for w in warns))
-        self.report.setPlainText("\n".join(L))
+        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
+        self._set_report(L)
         self._status("Grouped comparison vs '%s' across %d sample(s)." % (control, len(group_order)), 5000)
         return True
 
@@ -1714,7 +1749,7 @@ class StudyTab(QWidget):
                                          + m.top() + m.bottom())
         canvas.draw()
         self._refresh_key_text(fig)
-        self.fig_caption.setText(self._figure_text())
+        self.fig_caption.setText(_ui_words(self._figure_text()))
 
     def _refresh_key_text(self, fig=None):
         """The text starter always comes from the figure on screen (never a stored copy)."""
