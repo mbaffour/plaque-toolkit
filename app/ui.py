@@ -97,6 +97,24 @@ class FlowLayout(QLayout):
             line_h = max(line_h, sz.height())
         return y + line_h - rect.y() + m.bottom()
 
+class _FitVBox(QVBoxLayout):
+    """A QVBoxLayout that does not ADVERTISE height-for-width to its parent scroll area.
+
+    The Measure tab contains wrapping toolbars (FlowLayout), which makes an ordinary box
+    layout report hasHeightForWidth(). A QScrollArea with widgetResizable then sizes the tab
+    to heightForWidth(width) -- its PREFERRED height (971 px here) -- in every window, so the
+    canvas and the feedback line ended up below the fold (CT-R1 F11). Internally the box still
+    gives each wrapping toolbar the height it needs for the current width; only the report to
+    the scroll area changes, so the tab is fitted to the viewport and the canvas takes the
+    height that is left. MeasureTab.resizeEvent publishes the true minimum height."""
+
+    def hasHeightForWidth(self):
+        return False
+
+    def heightForWidth(self, w):
+        return -1
+
+
 # Engine/mode catalogue: label -> (kwargs/flag, helper text).
 MODES = [
     ("Published (validated)", "published",
@@ -179,16 +197,23 @@ class MeasureTab(QWidget):
                               "Tip: measure the AGAR base (often ~85 mm), not the printed lid size.")
         self.plate_85 = QPushButton("85 mm")
         self.plate_85.setToolTip("Quick-set 85 mm — a common agar-base diameter.")
-        self.plate_85.clicked.connect(lambda: self.plate.setValue(85))
+        self.plate_85.clicked.connect(lambda: self._quick_dish(85))
         self.plate_100 = QPushButton("100 mm")
         self.plate_100.setToolTip("Quick-set 100 mm — the nominal lid diameter.")
-        self.plate_100.clicked.connect(lambda: self.plate.setValue(100))
+        self.plate_100.clicked.connect(lambda: self._quick_dish(100))
         # changing the dish size (typing OR the 85/100 buttons) live-re-scales the current image
         self.plate.valueChanged.connect(self._on_dish_value_changed)
 
         # image orientation — rotate / flip the plate (e.g. to match your Fiji hand-labelling)
         self._cur_img = None       # current (oriented) BGR array
         self._detect_src = None    # path detection runs on (an oriented temp; None => image_path)
+        self._orient_ops = []      # rotate/flip steps applied to the image on screen (metadata)
+        # CT-R1 F15: what a running detection was asked to open. image_path / _detect_src /
+        # _cur_img / _orient_ops only change when that detection SUCCEEDS (on_detected), so a
+        # failed open leaves the tab pointing at the image that is still on screen.
+        self._pending = None
+        self._det_settings = None  # (engine key, watershed) the result on screen was made with
+        self._dish_msg = None      # why a Dish action could not rescale (shown under the card)
         self.orient_btn = QPushButton("Orient ▾")
         self.orient_btn.setToolTip("Rotate or flip the plate to match your reference orientation "
                                    "(e.g. your Fiji hand-labelling). Re-runs detection on the new view.")
@@ -214,12 +239,18 @@ class MeasureTab(QWidget):
         self.mode.setCurrentIndex(self._def_mode)
         # flag the recommended engine right in the dropdown (label stays clean for status text)
         self.mode.setItemText(self._def_mode, MODES[self._def_mode][0] + "   ★ recommended")
+        if not _precise_ok:
+            # CT-R1 F15: say so in the list, instead of only after the user has picked it
+            self.mode.setItemText(3, MODES[3][0] + "   (not installed)")
+            self.mode.setItemData(3, "The Precise engine needs PyTorch + the PlaqSeg model, which "
+                                     "are not installed on this computer.", Qt.ToolTipRole)
         self.mode.setToolTip("Detection engine / mode. Hover an option or read the line below.")
         self.mode.currentIndexChanged.connect(self._mode_changed)
 
         self.watershed = QCheckBox("Split touching plaques")
         self.watershed.setToolTip("Watershed segmentation to separate plaques whose edges touch. "
                                   "Helpful on crowded plates; ignored under Published mode.")
+        self.watershed.stateChanged.connect(lambda _=0: self._update_stale())
 
         self.exclude_overlaps = QCheckBox("Exclude overlaps from stats")
         self.exclude_overlaps.setToolTip("Leave overlapping/touching plaques (OVERLAP=yes, shown "
@@ -264,8 +295,12 @@ class MeasureTab(QWidget):
         self.progress = QProgressBar(); self.progress.setRange(0, 0)   # indeterminate
         self.progress.setVisible(False); self.progress.setMaximumWidth(220)
         self.busy_label = QLabel(""); self.busy_label.setObjectName("ModeHelp")
+        # CT-R1 F25: Engine / Split-touching changed but the result on screen is the old one
+        self.stale_label = QLabel(""); self.stale_label.setVisible(False)
+        self.stale_label.setStyleSheet(f"font-weight:700; color:{style.LIGHT['warn']};")
         strip = QHBoxLayout(); strip.setContentsMargins(2, 0, 2, 0)
         strip.addWidget(self.mode_help, 1)
+        strip.addWidget(self.stale_label)
         strip.addWidget(self.busy_label); strip.addWidget(self.progress)
 
         # ---- canvas (left) ------------------------------------------------- #
@@ -351,12 +386,39 @@ class MeasureTab(QWidget):
         split.addWidget(self.canvas_holder); split.addWidget(right)
         split.setSizes([720, 470]); split.setChildrenCollapsible(False)
 
-        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
+        # CT-R1 F11: _FitVBox, not QVBoxLayout -- see its docstring (the tab was laid out
+        # 971 px tall in every window, with the canvas and its feedback line below the fold).
+        lay = _FitVBox(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(params_box)
         lay.addLayout(strip)
         lay.addWidget(split, 1)
+        self._split = split
+        split.splitterMoved.connect(lambda *_a: self._sync_min_height())
 
         self._apply_a11y()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        # The tab's real minimum height depends on its width (the toolbars wrap). Publish it,
+        # so the outer scroll area scrolls only when the window is too small for that minimum
+        # and otherwise hands the canvas all the height that is left (CT-R1 F11).
+        self._sync_min_height()
+
+    def _sync_min_height(self):
+        lay = self.layout()
+        if lay is None or self.width() <= 0:
+            return
+        # the base-class calls: _FitVBox answers -1 on purpose, QVBoxLayout knows the real figure
+        QVBoxLayout.heightForWidth(lay, self.width())
+        need = QVBoxLayout.minimumHeightForWidth(lay, self.width())
+        ed = self.editor
+        if ed is not None and ed.layout() is not None and ed.width() > 0:
+            # the editor sits inside the splitter, which does not pass on that its toolbar
+            # needs more rows when it is narrow: add what the plain minimum leaves out
+            el = ed.layout()
+            need += max(0, el.minimumHeightForWidth(ed.width()) - el.minimumSize().height())
+        if need > 0 and need != self.minimumHeight():
+            self.setMinimumHeight(need)
 
     # -- accessibility ------------------------------------------------------ #
     def _apply_a11y(self):
@@ -398,8 +460,10 @@ class MeasureTab(QWidget):
             grid.addWidget(cap, 0, col)
             grid.addWidget(val, 1, col)
             self._metrics[key] = val
+            self._metric_caps[key] = cap
 
         self._metrics = {}
+        self._metric_caps = {}
         metric(0, "count", "PLAQUES")
         metric(1, "median", "MEDIAN Ø (mm)")
         metric(2, "mean", "MEAN Ø (mm)")
@@ -410,10 +474,15 @@ class MeasureTab(QWidget):
         grid.addWidget(self.flag_label, 2, 0, 1, 4)
         return card
 
-    def _set_summary(self, n=None, median=None, mean=None, cal=None, flag=None, mode=None):
+    def _set_summary(self, n=None, median=None, mean=None, cal=None, flag=None, mode=None, unit="mm"):
+        """`unit` = "mm", or "px" when there is no mm scale: the card then shows PIXEL
+        diameters under headings that say so, instead of 0.00 "mm" (CT-R1 F14)."""
         self._metrics["count"].setText("—" if n is None else str(n))
-        self._metrics["median"].setText("—" if median is None else f"{median:.2f}")
-        self._metrics["mean"].setText("—" if mean is None else f"{mean:.2f}")
+        self._metric_caps["median"].setText("MEDIAN Ø (%s)" % unit)
+        self._metric_caps["mean"].setText("MEAN Ø (%s)" % unit)
+        fmt = "%.2f" if unit == "mm" else "%.1f"
+        self._metrics["median"].setText("—" if median is None else fmt % median)
+        self._metrics["mean"].setText("—" if mean is None else fmt % mean)
         cal_lbl = self._metrics["cal"]
         if cal:
             cal_lbl.setText(f"{cal:.4f} mm/px  ✓")
@@ -440,7 +509,54 @@ class MeasureTab(QWidget):
     def _mode_changed(self, idx):
         self.mode_help.setText(MODES[idx][2])
         key = MODES[idx][1]
+        if key == "published" and self.watershed.isChecked():
+            # CT-R1 F25: the box was greyed out but stayed ticked, as if it still applied
+            self.watershed.setChecked(False)
         self.watershed.setEnabled(key not in ("published",))
+        self._update_stale()
+
+    def _engine_key_of(self, det):
+        """The engine that PRODUCED a result, from its own flags (not the dropdown, which the
+        user may have changed since)."""
+        if det.get("precise"):
+            return "precise"
+        if det.get("published"):
+            return "published"
+        return "sensitive" if det.get("sensitive") else "current"
+
+    def _engine_label_of(self, det):
+        key = self._engine_key_of(det)
+        return next(label for label, k, _h in MODES if k == key)
+
+    def _update_stale(self):
+        """Show 'settings changed: press Re-detect' while the Engine / Split-touching controls
+        no longer describe the result on screen (CT-R1 F25: nothing marked it as stale)."""
+        stale = False
+        if self.det is not None and self.editor is not None and self._det_settings is not None:
+            key, ws = self._det_settings
+            now_key = self._mode_key()
+            now_ws = self.watershed.isChecked() and now_key not in ("published", "precise")
+            stale = (now_key != key) or (bool(now_ws) != bool(ws))
+        if stale:
+            self.stale_label.setText("⚠ settings changed: press Re-detect  (on screen: %s)"
+                                     % self._engine_label_of(self.det))
+        self.stale_label.setVisible(stale)
+
+    def _dish_note(self, text=None):
+        """A one-line explanation under the summary numbers for a Dish action that could not
+        do anything (CT-R1 F14: the 85 / 100 buttons did nothing, silently)."""
+        self._dish_msg = text
+        if text:
+            self.window().statusBar().showMessage(text, 8000)
+        self.refresh_table()
+
+    def _quick_dish(self, mm):
+        """The 85 / 100 buttons: set the Dish box and, if that cannot rescale the plate on
+        screen, say why."""
+        same = abs(self.plate.value() - mm) < 1e-9
+        self.plate.setValue(mm)
+        if same and self.editor is not None and not self.busy:
+            self._on_dish_value_changed(mm)      # the box did not change, so nothing fired
 
     def _on_dish_value_changed(self, val):
         """Live-recalibrate the current image when the dish size changes (typing or the 85/100
@@ -448,7 +564,41 @@ class MeasureTab(QWidget):
         update immediately. Before an image is loaded it's a no-op (the value applies at detect)."""
         if self.busy or self.editor is None:
             return
-        self.editor.set_plate_mm(val)
+        if self.editor.set_plate_mm(val):
+            self._dish_note(None)
+        else:
+            self._dish_note("No dish outline was found on this image, so the Dish size has nothing "
+                            "to rescale. Use “Set plate” (click 3 points on the rim) or the "
+                            "“Ruler” to calibrate.")
+
+    def _on_calibration_changed(self, plate_mm):
+        """Set plate / Ruler / an undo of either changed the scale in the editor: show the dish
+        size it now stands for in the Dish box. Signals blocked, so this does not come back
+        as a rescale (CT-R1 F20: the box kept saying 90 after Set plate 85)."""
+        if plate_mm is None or plate_mm <= 0:
+            return
+        self.plate.blockSignals(True)
+        try:
+            self.plate.setValue(float(plate_mm))
+        finally:
+            self.plate.blockSignals(False)
+
+    def _confirm_discard(self, action):
+        """Ask ONCE before an action that throws away unsaved hand edits (CT-R1 F8: Orient and
+        Re-detect discarded erased plaques, drawn shapes and a hand calibration without a
+        word). True = go ahead."""
+        ed = self.editor
+        if ed is None or not getattr(ed, "dirty", False):
+            return True
+        ans = QMessageBox.question(
+            self, "Unsaved edits",
+            "You have unsaved edits on this plate (plaques added or removed, a hand "
+            "calibration or a scale-bar change).\n\n%s replaces them with a fresh detection. "
+            "Save results or Export all first if you want to keep them.\n\n"
+            "Discard the edits and continue?" % action,
+            QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
+        # Yes is accepted too: scripted callers that answer every question with Yes mean "go on"
+        return ans in (QMessageBox.Discard, QMessageBox.Yes)
 
     # -- drag and drop ------------------------------------------------------ #
     def dragEnterEvent(self, e):
@@ -465,26 +615,33 @@ class MeasureTab(QWidget):
         for u in e.mimeData().urls():
             p = u.toLocalFile()
             if p.lower().endswith(IMG_EXTS):
-                self.image_path = p
-                self._cur_img = None; self._detect_src = None
-                self._detect()               # loads/replaces the current image
+                if not self._confirm_discard("Opening another image"):
+                    e.ignore(); return
+                self._detect(self._new_image_request(p))   # loads/replaces the current image
                 e.acceptProposedAction()
                 return
         e.ignore()
 
     # -- actions ------------------------------------------------------------ #
+    @staticmethod
+    def _new_image_request(path):
+        """A detection request for a freshly opened file (identity orientation)."""
+        return {"image_path": path, "detect_src": None, "cur_img": None, "orient_ops": []}
+
     def open_image(self):
         if self.busy:
             return
         path, _ = QFileDialog.getOpenFileName(self, "Select a plaque image", "", IMG_FILTER)
         if not path:
             return
-        self.image_path = path
-        self._cur_img = None; self._detect_src = None   # fresh image → identity orientation
-        self._detect()
+        if not self._confirm_discard("Opening another image"):
+            return
+        self._detect(self._new_image_request(path))
 
     def redetect(self):
         if self.image_path and not self.busy:
+            if not self._confirm_discard("Re-detect"):
+                return
             self._detect()
 
     def _orient(self, op):
@@ -493,17 +650,13 @@ class MeasureTab(QWidget):
         stay named/saved next to the original image."""
         if self.busy or self.image_path is None:
             return
-        if self.editor is not None and any(p.get("source") == "manual" for p in self.editor.plaques):
-            if QMessageBox.question(
-                    self, "Re-orient plate",
-                    "Rotating/flipping re-runs detection and discards your manual edits.\n"
-                    "Best to orient the plate first, then label. Continue?",
-                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-                return
+        if not self._confirm_discard("Rotating or flipping the plate"):
+            return
         try:
-            if self._cur_img is None:
-                self._cur_img = engine_api.read_image(self.image_path)
-            self._cur_img = engine_api.rotate_flip(self._cur_img, op)
+            cur = self._cur_img
+            if cur is None:
+                cur = engine_api.read_image(self.image_path)
+            cur = engine_api.rotate_flip(cur, op)
             stem = os.path.splitext(os.path.basename(self.image_path))[0]
             # Keep the oriented copy next to the outputs, not in the temp folder, and open
             # the editor ON that copy: exported labels then point at an image that exists
@@ -512,12 +665,12 @@ class MeasureTab(QWidget):
             out_dir = os.path.join(os.path.dirname(self.image_path), "out")
             os.makedirs(out_dir, exist_ok=True)
             tmp = os.path.join(out_dir, stem + "_oriented.png")
-            engine_api.write_image(tmp, self._cur_img)
-            self._detect_src = tmp
+            engine_api.write_image(tmp, cur)
         except Exception as e:
             QMessageBox.warning(self, "Orientation failed", str(e))
             return
-        self._detect()
+        self._detect({"image_path": self.image_path, "detect_src": tmp, "cur_img": cur,
+                      "orient_ops": list(self._orient_ops) + [op]})
 
     def _set_busy(self, on, message=""):
         self.busy = on
@@ -557,12 +710,21 @@ class MeasureTab(QWidget):
         except (RuntimeError, AttributeError):
             pass
 
-    def _detect(self):
+    def _detect(self, req=None):
+        """Run a detection. `req` says WHAT to open ({image_path, detect_src, cur_img,
+        orient_ops}); None = the image already on the tab, as it is. Nothing on the tab changes
+        until the detection succeeds (on_detected commits the request; CT-R1 F15)."""
+        if req is None:
+            req = {"image_path": self.image_path, "detect_src": self._detect_src,
+                   "cur_img": self._cur_img, "orient_ops": list(self._orient_ops)}
         key = self._mode_key()
-        name = os.path.basename(self.image_path)
+        src = req["detect_src"] or req["image_path"]
+        req["settings"] = {"key": key, "plate_mm": self.plate.value(),
+                           "watershed": bool(self.watershed.isChecked()) and key not in ("published", "precise")}
         if key == "precise":
-            self._detect_precise(name)
+            self._detect_precise(req, src)
             return
+        self._pending = req
         self._start_busy(_BUSY_STD)
         self.window().statusBar().showMessage(f"Detecting ({MODES[self.mode.currentIndex()][0]})…")
         kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked())
@@ -572,12 +734,12 @@ class MeasureTab(QWidget):
             kw["small"] = True; kw["sensitive"] = True
         else:  # current
             kw["small"] = True
-        w = Worker(engine_api.detect_single, self._detect_src or self.image_path, **kw)
+        w = Worker(engine_api.detect_single, src, **kw)
         w.signals.finished.connect(self.on_detected)
         w.signals.error.connect(self.on_error)
         self.pool.start(w)
 
-    def _detect_precise(self, name):
+    def _detect_precise(self, req, src):
         ok, reason = engine_api.precise_available()
         if not ok:
             QMessageBox.information(
@@ -585,15 +747,43 @@ class MeasureTab(QWidget):
                 "Precise mode needs a second environment (PlaqSeg / PyTorch) and the model "
                 "weights, which are not installed on this machine:\n\n" + reason +
                 "\n\nFalling back is easy — pick Published, Current or Sensitive above.")
-            self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+            self.window().statusBar().showMessage(self._not_opened_message(
+                req, "Precise is not installed — pick another engine"))
             return
+        self._pending = req
         self._start_busy(_BUSY_PRECISE)
         self.window().statusBar().showMessage("Precise pipeline running (this can take a minute)…")
-        w = Worker(engine_api.detect_precise, self._detect_src or self.image_path,
-                   plate_mm=self.plate.value())
+        w = Worker(engine_api.detect_precise, src, plate_mm=self.plate.value())
         w.signals.finished.connect(self.on_precise_detected)
         w.signals.error.connect(self.on_precise_error)
         self.pool.start(w)
+
+    def _not_opened_message(self, req, why):
+        """Status text for a detection that did not happen / failed: say which image is still
+        the one on screen when the request was for a different file."""
+        new = (req or {}).get("image_path")
+        if self.editor is not None and self.image_path and new and new != self.image_path:
+            return "%s. %s was NOT opened; still showing %s." % (
+                why, os.path.basename(new), os.path.basename(self.image_path))
+        return why + "."
+
+    def _commit_request(self, det):
+        """A detection succeeded: NOW the tab points at what it opened, and the result is
+        stamped with what produced it (watershed, requested dish mm, the source file and any
+        rotate/flip steps) so every export can say so without reading the widgets later."""
+        req, self._pending = self._pending, None
+        if req is None:                 # a result handed in directly (self-test, tests)
+            return
+        self.image_path = req["image_path"]
+        self._detect_src = req["detect_src"]
+        self._cur_img = req["cur_img"]
+        self._orient_ops = list(req["orient_ops"])
+        s = req.get("settings") or {}
+        self._det_settings = (s.get("key"), bool(s.get("watershed")))
+        det.setdefault("watershed", bool(s.get("watershed")))
+        det.setdefault("plate_mm_requested", s.get("plate_mm"))
+        det["source_image"] = self.image_path
+        det["orientation"] = list(self._orient_ops)
 
     def _mount_editor(self):
         if self.editor is not None:
@@ -605,28 +795,55 @@ class MeasureTab(QWidget):
                                    on_change=self.refresh_table,
                                    face=style.LIGHT["surface"])
         self.editor.selection_changed.connect(self._on_canvas_selection)
-        self.canvas_layout.addWidget(self.editor)
+        self.editor.calibration_changed.connect(self._on_calibration_changed)
+        self.editor.dirty_changed.connect(lambda _on=True: self._show_status())
+        self.canvas_layout.addWidget(self.editor, 1)
+        QTimer.singleShot(0, self._sync_min_height)     # once the editor has its width
+
+    def _status_text(self):
+        """'19 detected + 14 detect-area · Published (validated) (edited)': what is on screen,
+        by how it got there, the engine that PRODUCED it, and whether it has unsaved edits
+        (CT-R1 F20: a Published result with 14 detect-area plaques still read 'Published')."""
+        if self.editor is None or self.det is None:
+            return ""
+        c = self.editor.counts()
+        parts = ["%d detected" % c["detected"]]
+        if c["detect_area"]:
+            parts.append("%d detect-area" % c["detect_area"])
+        if c["by_hand"]:
+            parts.append("%d added by hand" % c["by_hand"])
+        return "%s · %s%s" % (" + ".join(parts), self._engine_label_of(self.det),
+                              " (edited)" if self.editor.dirty else "")
+
+    def _show_status(self):
+        txt = self._status_text()
+        if txt:
+            self.window().statusBar().showMessage(txt)
 
     def on_detected(self, det):
+        self._commit_request(det)
         self.det = det
+        self._dish_msg = None
         try:
             self._mount_editor()
         finally:
             self._set_busy(False)      # an editor error must not leave the tab locked
         self.refresh_table()
         self._set_image_info()
-        label = MODES[self.mode.currentIndex()][0]
-        self.window().statusBar().showMessage(f"{det['n_plaques']} plaques detected · {label}")
+        self._update_stale()
 
     def on_precise_detected(self, det):
+        self._commit_request(det)
         self.det = det
-        self._mount_editor()
-        self._set_busy(False)
+        self._dish_msg = None
+        try:
+            self._mount_editor()
+        finally:
+            self._set_busy(False)
         # plaques are now the editable Precise detections -> normal table path
         self.refresh_table()
         self._set_image_info()
-        n = det["n_plaques"]
-        self.window().statusBar().showMessage(f"{n} plaques (Precise · PST+PlaqSeg)")
+        self._update_stale()
 
     def _set_image_info(self):
         """Show the loaded photo's name + pixel size + camera/date + file size above the canvas."""
@@ -688,10 +905,14 @@ class MeasureTab(QWidget):
         if summ.get("uncertainty_flag"):
             extra = "⚠ Detectors disagree on count — verify by eye."
             flag = (flag + "  " + extra) if flag else extra
-        df = engine_api.measure_table(self.editor.plaques, det["orig_bgr"],
-                                      det["pxl_per_mm"], det["lawn_gray"],
-                                      published=det.get("published"), plate=det.get("plate"))
-        self._set_table_df(df)
+        # The table comes from the EDITOR (its plaques, its current plate and calibration, the
+        # result's own engine flag) -- the same call every export makes, so the screen and the
+        # files cannot disagree (CT-R1 F7).
+        full = self.editor.table(with_reason=True)
+        reasons = [str(r) if r else "" for r in full["QC_REASON"].tolist()]
+        df = full.drop(columns=["QC_REASON"])
+        cal = self.editor.ppm
+        self._set_table_df(df, reasons=reasons, calibrated=bool(cal))
         n = len(df)
         stats_df = df
         if self.exclude_overlaps.isChecked() and "OVERLAP" in df.columns:
@@ -700,21 +921,51 @@ class MeasureTab(QWidget):
         if n_excl:
             ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."
             flag = (flag + "  " + ov_msg) if flag else ov_msg
-        dm = pd.to_numeric(stats_df["DIAMETER_MM"], errors="coerce").dropna()
-        cal = det["pxl_per_mm"]
+        if not cal:
+            # CT-R1 F14: no mm scale. The card switches to pixel diameters and says why, in
+            # place of "0.00 mm" that looked like a measurement.
+            if self.editor.plate and self.plate.value() <= 0:
+                why = ("⚠ Dish size is 0: sizes are in pixels. Type the dish diameter in the Dish "
+                       "box, or use Set plate or the Ruler to calibrate.")
+            else:
+                why = ("⚠ No dish found: sizes are in pixels. Use Set plate or the Ruler to "
+                       "calibrate.")
+            if self._dish_msg:      # the user just tried the Dish box / 85 / 100 buttons
+                why += "  The Dish size has no dish outline to rescale on this image."
+            flag = (why + "  " + flag) if flag else why
+        elif self._dish_msg:
+            flag = (flag + "  " + self._dish_msg) if flag else self._dish_msg
+        dm =pd.to_numeric(stats_df["DIAMETER_MM" if cal else "DIAMETER_PXL"], errors="coerce").dropna()
         self._set_summary(
             n=n,
             median=(dm.median() if len(dm) else None),
             mean=(dm.mean() if len(dm) else None),
-            cal=cal, flag=flag)
+            cal=cal, flag=flag, unit=("mm" if cal else "px"))
+        self._show_status()
 
     # -- canvas <-> table selection link ------------------------------------ #
-    def _set_table_df(self, df):
+    _MM_COLUMNS = ("AREA_MM2", "DIAMETER_MM")
+
+    def _set_table_df(self, df, reasons=None, calibrated=True):
         """Refresh the table without letting the model-reset wipe the canvas selection,
-        then re-mirror the canvas selection into the fresh rows."""
+        then re-mirror the canvas selection into the fresh rows.
+
+        Display only (the model keeps the measure_table frame as it is, in CSV column order):
+        mm cells read "—" when there is no mm scale (CT-R1 F14); a flagged row is tinted, its
+        QC_FLAG cell explains itself on hover, and the QC_FLAG column is SHOWN second, where it
+        can be seen without scrolling (F24)."""
         self._syncing = True
         try:
-            self.model.set_dataframe(df)
+            has_qc = df is not None and "QC_FLAG" in df.columns
+            self.model.set_dataframe(
+                df, dash_columns=(() if calibrated else self._MM_COLUMNS),
+                cell_tooltips=({"QC_FLAG": reasons} if (has_qc and reasons is not None) else None),
+                flag_column=("QC_FLAG" if has_qc else None))
+            if has_qc:
+                hdr = self.table.horizontalHeader()
+                vis = hdr.visualIndex(list(df.columns).index("QC_FLAG"))
+                if vis != 1 and hdr.count() > 1:
+                    hdr.moveSection(vis, 1)
         finally:
             self._syncing = False
         if self.editor is not None:
@@ -773,8 +1024,12 @@ class MeasureTab(QWidget):
                 row = self.model.dataframe().iloc[i]
                 turb = row["TURBIDITY_REL"]
                 turb = "—" if turb in ("", None) else turb
+                if self.editor.ppm:
+                    size = f"Ø {row['DIAMETER_MM']} mm  ·  area {row['AREA_MM2']} mm²"
+                else:               # no mm scale: pixels, not "0.0 mm" (CT-R1 F14)
+                    size = f"Ø {row['DIAMETER_PXL']} px  ·  area {row['AREA_PXL']} px²"
                 self.sel_readout.setText(
-                    f"Selected  #{row['INDEX']}  ·  Ø {row['DIAMETER_MM']} mm  ·  area {row['AREA_MM2']} mm²"
+                    f"Selected  #{row['INDEX']}  ·  {size}"
                     f"  ·  gray {row['MEAN_GRAY']}  ·  turbidity {turb}  —  Ctrl+C to copy this row")
                 return
             except (StopIteration, IndexError, KeyError):
@@ -788,7 +1043,8 @@ class MeasureTab(QWidget):
             return
         from app import fiji_export, fiji_dialog
         app_df = fiji_export.app_match_frame(self.editor.plaques, self.editor.orig_bgr,
-                                             self.editor.plate, self.editor.ppm)
+                                             self.editor.plate, self.editor.ppm,
+                                             published=self.editor._pub())
         dlg = fiji_dialog.FijiCompareDialog(app_df, calibrated=bool(self.editor.ppm), parent=self)
         dlg.exec()
 
@@ -797,22 +1053,35 @@ class MeasureTab(QWidget):
             return
         try:
             self.editor.save()
-            out_dir = os.path.join(os.path.dirname(self.image_path), "out")
+            # the folder the editor actually wrote to (it belongs to the image ON SCREEN; the
+            # tab used to rebuild the path from a file name that could be another image, F15)
+            out_dir = self.editor.out_dir
+            self.editor._update_hint("✓ saved the results (CSV, annotated image, legend key) → 'out' folder")
             self.window().statusBar().showMessage(f"Saved to {out_dir}")
             QMessageBox.information(self, "Saved", f"Results written to:\n{out_dir}")
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
 
+    def _set_placeholder(self, text):
+        try:
+            if self.editor is None:
+                self.placeholder.setText(text)
+        except (RuntimeError, AttributeError):
+            pass
+
     def on_error(self, msg):
+        req, self._pending = self._pending, None     # nothing was opened: the tab is unchanged
         self._set_busy(False)
-        self.placeholder.setText("Detection failed. Try another image or mode.")
-        self.window().statusBar().showMessage("Detection failed.")
+        self._set_placeholder("Detection failed. Try another image or mode.")
+        self.window().statusBar().showMessage(self._not_opened_message(req, "Detection failed"))
         QMessageBox.critical(self, "Detection failed", msg[:1000])
 
     def on_precise_error(self, msg):
+        req, self._pending = self._pending, None
         self._set_busy(False)
-        self.placeholder.setText("Precise detection unavailable.")
-        self.window().statusBar().showMessage("Precise unavailable — pick another mode.")
+        self._set_placeholder("Precise detection unavailable.")
+        self.window().statusBar().showMessage(self._not_opened_message(
+            req, "Precise unavailable — pick another engine"))
         QMessageBox.information(self, "Precise engine unavailable", msg[:1200])
 
 
