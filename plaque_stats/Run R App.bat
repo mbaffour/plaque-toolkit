@@ -50,7 +50,7 @@ echo *** R was not found on this PC. ***
 
 echo To use the R app, install R from https://cran.r-project.org/ then, in R, run:
 
-echo     install.packages(c("shiny","ggplot2","dplyr","tidyr","readr","DT","rstatix","ggpubr","scales","svglite"))
+echo     install.packages(c("shiny","ggplot2","dplyr","tidyr","readr","DT","ggpubr","scales","svglite","jsonlite","zip"))
 
 echo Or just use the Python app instead:  "Run Analysis App.bat"
 
