@@ -181,12 +181,27 @@ def _stats_message(e):
     """The user-facing text of an engine refusal: StatsError.message, a bare SystemExit's code,
     or the exception text (CT-R1 F1: a SystemExit used to kill the whole app)."""
     msg = getattr(e, "message", None)
-    if msg:
-        return str(msg)
-    if isinstance(e, SystemExit):
+    if not msg and isinstance(e, SystemExit):
         code = e.code
-        return str(code) if code not in (None, 0) else "the statistics engine stopped."
-    return str(e) or e.__class__.__name__
+        msg = str(code) if code not in (None, 0) else "the statistics engine stopped."
+    msg = str(msg or e or e.__class__.__name__)
+    if msg.startswith("[error] "):
+        msg = msg[len("[error] "):]
+    for flag, words in _FLAG_WORDS:          # the engine speaks command-line; name the tab's controls
+        msg = msg.replace(flag, words)
+    return msg
+
+
+_FLAG_WORDS = [
+    ("pass --log-y-drop-nonpositive", "tick 'hide ≤ 0'"),
+    ("--log-y-drop-nonpositive", "'hide ≤ 0'"),
+    ("--parametric nonparametric", "Test: Non-parametric"),
+    ("--posthoc dunnett", "Compare: vs a sample (Dunnett)"),
+    ("--equal-var no", "Variances: Unequal (Welch)"),
+    ("--center median", "Center: Median"), ("--center mean", "Center: Mean"),
+    ("--error iqr", "Error bars: IQR"), ("--error ci95", "Error bars: 95% CI"),
+    ("--error none", "Error bars: None"), ("--error sd", "Error bars: SD"), ("--error sem", "Error bars: SEM"),
+]
 
 
 class _MsgLabel(QLabel):

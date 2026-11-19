@@ -435,6 +435,7 @@ def test_variances_and_compare_to_options_reach_the_engine_and_the_zip(st, dialo
     # an engine refusal (Dunnett is parametric) is shown, not a traceback
     st.param_sel.setCurrentIndex(st.param_sel.findData("nonparametric"))
     assert "Dunnett" in st.err.text() and st._last is None
+    assert "Test: Non-parametric" in st.err.text() and "--parametric" not in st.err.text()
 
 
 def test_grouped_mode_hides_the_one_factor_options(st, dialogs):
@@ -474,6 +475,7 @@ def test_log_y_with_values_at_or_below_zero(st, dialogs):
     assert not st.logy_drop_cb.isEnabled()
     st.logy_cb.setChecked(True)
     assert "zero or negative" in st.err.text()
+    assert "tick 'hide ≤ 0'" in st.err.text() and "--" not in st.err.text()   # the tab's words
     assert st._last_fig is None and not st.savefig_btn.isEnabled() and not st.key_btn.isEnabled()
     assert st.logy_drop_cb.isEnabled()
     st.logy_drop_cb.setChecked(True)
