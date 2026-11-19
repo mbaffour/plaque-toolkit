@@ -1095,8 +1095,11 @@ ui <- fluidPage(
           br(),
           conditionalPanel("output.has_figure",
             downloadButton("dl_png", "PNG"), downloadButton("dl_svg", "SVG (editable)"),
-            downloadButton("dl_pdf", "PDF (editable)"),
-            downloadButton("dl_key", "Legend key (PNG + SVG + PDF)")),
+            downloadButton("dl_pdf", "PDF (editable)")),
+          # CT-R1 F20: no key to download -> the button is replaced by a sentence, not a failed download
+          conditionalPanel("output.has_figure && output.has_key", downloadButton("dl_key", "Legend key (PNG + SVG + PDF)")),
+          conditionalPanel("output.has_figure && !output.has_key",
+                           tags$small("No sample or plate colours to key in this view (neutral violins, no plates, no points).")),
           checkboxInput("place_key", "Place key on figure", TRUE),
           h5("Legend text starter"), copy_box("key_text", 3)),
         tabPanel("Statistics",
@@ -1638,8 +1641,12 @@ server <- function(input, output, session) {
     list(src = f, width = round(wpx), height = round(wpx * fs$h / fs$w), contentType = "image/png",
          alt = "Violin plot of the loaded data")
   }, deleteFile = TRUE)
-  output$has_figure <- reactive(!is.null(tryCatch(dat(), error = function(e) NULL)))
+  has_figure <- reactive(!is.null(tryCatch(dat(), error = function(e) NULL)))
+  output$has_figure <- has_figure
   try(outputOptions(output, "has_figure", suspendWhenHidden = FALSE), silent = TRUE)
+  has_key <- reactive(nrow(tryCatch(key(), error = function(e) NULL) %||% data.frame()) > 0)
+  output$has_key <- has_key
+  try(outputOptions(output, "has_key", suspendWhenHidden = FALSE), silent = TRUE)
   output$key_text <- renderText({ s <- text_starter(key()); if (nzchar(s)) s else "(no sample colours to key)" })
 
   # everything the user should know about this figure, in one visible place under it
