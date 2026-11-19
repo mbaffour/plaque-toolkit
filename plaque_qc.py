@@ -16,16 +16,17 @@ Flags (several may apply, joined with `|`; `OK` when none):
 * ``LARGE?``   area is more than ``merged_factor`` x the plate's median plaque area while the
                shape is normal -- a big plaque, worth a look, not necessarily two.
 * ``MERGED?``  the outline is not one convex blob: solidity (raw contour area / convex-hull
-               area) below ``min_solidity`` (0.9), or a fitted ellipse longer than
+               area) below ``min_solidity`` (0.9) for outlines at least 25 px across (smaller
+               ones are jagged from pixelation alone), or a fitted ellipse longer than
                ``max_axis_ratio`` (1.5) x its width -- likely two plaques, or an outline that
                did not close. (The old circularity test could never fire; CT-R1 F12.) A
                ``circularity`` below ``min_circularity`` still counts when it is given.
 * ``NESTED``   its centre lies inside a LARGER plaque's outline (a core and its halo, or a plaque
                counted inside another; CT-R1 F14).
-* ``TINY``     the plaque exists only because of the small-scale / sensitive gates: found only by
-               the small pass of the Auto plaque size (``source`` "small"), or its enclosing
-               diameter is at or below the standard gate (30 px; the reason gives it in mm when a
-               scale is known). The app now passes the enclosing diameter (it never did: F13).
+* ``TINY``     the outline is too few pixels for a reliable size: area-equivalent diameter below
+               ``tiny_diam_px`` (12 px), where one pixel of edge error is more than 15 % of the
+               area; the reason gives px and mm. Pixel outlines only (not circles). Being found
+               only by the small pass is not a flag: SOURCE says so (CT-R1 detection D9).
 * ``BRIGHT``   the plaque interior is brighter than a ring around it by more than
                ``bright_margin`` grey levels: a bubble or glare, not a clearing (CT-R1 F19). Only
                when the brightness is known and the engine expects dark plaques.
@@ -45,6 +46,8 @@ import math
 
 STANDARD_ENCL_DIAM_MIN = 30      # plaque_size_tool.filter_contours: green_diam_min without -small
 LAWN_EDGE_FRAC = 0.93            # where the lawn ends, as a fraction of the dish radius (F11)
+TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9)
+MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from this diameter (D9)
 
 
 def _point_in_poly(x, y, poly):
@@ -64,7 +67,8 @@ def _point_in_poly(x, y, poly):
 def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circularity=0.6,
                  low_conf=0.6, rim_frac=LAWN_EDGE_FRAC, standard_encl_diam_min=STANDARD_ENCL_DIAM_MIN,
                  min_solidity=0.9, max_axis_ratio=1.5, bright_margin=5.0, mm_per_px=None,
-                 expect_dark=True):
+                 expect_dark=True, tiny_diam_px=TINY_DIAM_PX,
+                 min_solidity_diam_px=MIN_SOLIDITY_DIAM_PX):
     """Return a list of (QC_FLAG, QC_REASON) strings, one per plaque, in input order."""
     n = len(plaques)
     if n == 0:
@@ -116,7 +120,10 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         big = median_area > 0 and n >= 4 and a > merged_factor * median_area
         shape_why = []
         sol = p.get("solidity")
-        if sol is not None and sol == sol and float(sol) < min_solidity:
+        # CT-R1 detection D9: solidity only for outlines >= 25 px across; smaller ones are
+        # jagged from pixelation alone (Plate_6: 20 of 89 small outlines at 0.85-0.90)
+        if (sol is not None and sol == sol and float(sol) < min_solidity
+                and 2.0 * r >= min_solidity_diam_px):
             shape_why.append("solidity %.2f" % float(sol))
         ar = p.get("axis_ratio")
         if ar is not None and ar == ar and float(ar) > max_axis_ratio:
@@ -140,16 +147,15 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         if p.get("core_only"):
             flags.append("CORE?")
             why.append("outline is the dark centre only; its halo could not be separated")
-        ed = p.get("encl_diam_px")
-        if p.get("source") == "small":
-            flags.append("TINY"); why.append("found only by the small-scale pass")
-        elif ed is not None and float(ed) <= standard_encl_diam_min:
+        # TINY (CT-R1 detection D9): the outline is too few pixels for a reliable size -- below
+        # tiny_diam_px (12) across, one pixel of edge error is > 15 % of the area. Being found
+        # only by the small pass is not a flag (SOURCE says so); 389 of 767 rows were TINY.
+        if p.get("pixel_outline", True) and a > 0 and 2.0 * r < tiny_diam_px:
             if mm_per_px:
-                why.append("enclosing diameter %.2f mm is at/below the standard gate (%.2f mm)"
-                           % (float(ed) * mm_per_px, standard_encl_diam_min * mm_per_px))
+                why.append("only %.1f px (%.2f mm) across: too few pixels for a reliable size"
+                           % (2.0 * r, 2.0 * r * mm_per_px))
             else:
-                why.append("enclosing diameter %.0f px is at/below the standard gate (%d px)"
-                           % (float(ed), standard_encl_diam_min))
+                why.append("only %.1f px across: too few pixels for a reliable size" % (2.0 * r))
             flags.append("TINY")
         im, rm = p.get("inside_mean"), p.get("ring_mean")
         if expect_dark and im is not None and rm is not None and float(im) - float(rm) > bright_margin:
@@ -311,7 +317,8 @@ def flags_for_plaque_dicts(plaques, image_shape, plate=None, circularities=None,
                "circularity": (circularities[i] if circularities is not None else None),
                "p_plaque": p.get("p_plaque"), "source": p.get("source"),
                "solidity": p.get("solidity"), "encl_diam_px": p.get("encl_diam_px"),
-               "core_only": bool(p.get("core_only"))}
+               "core_only": bool(p.get("core_only")),
+               "pixel_outline": p.get("kind") != "circle"}
         # the size-gate TINY rule is about the classic detector's gate: only its own outlines
         # are judged by it, not circles drawn by hand or Precise's model plaques
         classic = p.get("kind") != "circle" and p.get("source") not in ("manual", "freehand")

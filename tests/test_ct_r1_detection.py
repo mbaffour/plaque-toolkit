@@ -487,7 +487,7 @@ def test_d5_merged_nested_bright_tiny_in_the_app_dicts():
     long_["contour"] = _poly_disc(400, 600, 25, sx=2.0, sy=0.8)  # axis ratio 2.5
     halo = _dict(800, 300, 40)
     core = _dict(806, 300, 12)                                # centre inside the halo
-    tiny = _dict(200, 800, 6)                                 # enclosing diameter ~12 px
+    tiny = _dict(200, 800, 5)                                 # 10 px across (D9: < 12 px)
     small_src = _dict(600, 400, 20, source="small")
     plaques = [normal, bubble, lumpy, long_, halo, core, tiny, small_src]
     res = plaque_qc.flags_for_plaque_dicts(plaques, gray.shape, gray=gray, mm_per_px=0.05)
@@ -497,26 +497,42 @@ def test_d5_merged_nested_bright_tiny_in_the_app_dicts():
     assert "MERGED?" in f[2] and "solidity 0.62" in res[2][1]
     assert "MERGED?" in f[3] and "axis ratio 2.5" in res[3][1]
     assert "NESTED" in f[5] and "NESTED" not in f[4]
-    assert "TINY" in f[6] and "mm is at/below the standard gate (1.50 mm)" in res[6][1]
-    assert "TINY" in f[7] and "small-scale pass" in res[7][1]
+    assert "TINY" in f[6] and "only 10.0 px (0.50 mm) across" in res[6][1]
+    assert "TINY" not in f[7]                # D9: found only by the small pass is not a flag
     # Precise's model plaques are not judged on polarity
     bubble_p = dict(bubble, p_plaque=0.95)
     assert "BRIGHT" not in plaque_qc.flags_for_plaque_dicts([bubble_p], gray.shape, gray=gray)[0][0]
 
 
-def test_d5_app_table_flags_tiny_for_the_small_pass_plaques(mixed_plate):
+def test_d9_small_pass_plaques_are_not_tiny_unless_few_pixels(mixed_plate, tmp_path):
+    """D9: the five 1 mm discs (~22 px across) are SOURCE small but not TINY; a 4 px-radius
+    speck (outlined ~11.7 px across by Sensitive + Small) is TINY, with px and mm."""
+    import cv2
     from app import engine_api
     det = engine_api.detect_single(mixed_plate, plate_mm=90, scale="auto")
     df = engine_api.measure_table(det["plaques"], det["orig_bgr"], det["pxl_per_mm"], det["lawn_gray"],
                                   plate=det["plate"], with_reason=True)
-    tiny = df["QC_FLAG"].str.contains("TINY")
-    assert (tiny == (df["SOURCE"] == "small")).all() and int(tiny.sum()) == 5
-    # the old -small path: TINY now fires from the enclosing diameter (it never did in the app)
-    sml = engine_api.detect_single(mixed_plate, plate_mm=90, small=True, legacy=True)
-    df2 = engine_api.measure_table(sml["plaques"], sml["orig_bgr"], sml["pxl_per_mm"], sml["lawn_gray"],
-                                   plate=sml["plate"], with_reason=True)
-    assert int(df2["QC_FLAG"].str.contains("TINY").sum()) == 5
-    assert df2.loc[df2["QC_FLAG"].str.contains("TINY"), "QC_REASON"].str.contains(" mm is at/below").all()
+    assert int((df["SOURCE"] == "small").sum()) == 5 and not df["QC_FLAG"].str.contains("TINY").any()
+    img = cv2.imread(mixed_plate)
+    cv2.circle(img, (1500, 700), 4, (40, 40, 40), -1)
+    path = str(tmp_path / "speck.png")
+    cv2.imwrite(path, img)
+    det = engine_api.detect_single(path, plate_mm=90, scale="small", sensitive=True)
+    df = engine_api.measure_table(det["plaques"], det["orig_bgr"], det["pxl_per_mm"], det["lawn_gray"],
+                                  plate=det["plate"], with_reason=True)
+    t = df[df["QC_FLAG"].str.contains("TINY")]
+    assert len(t) == 1 and float(t["DIAMETER_PXL"].iloc[0]) < 12
+    assert t["QC_REASON"].iloc[0].startswith("only ") and " mm) across" in t["QC_REASON"].iloc[0]
+
+
+def test_d9_merged_solidity_needs_25_px_axis_ratio_any_size():
+    import plaque_qc
+    small_lumpy = {"x": 100, "y": 100, "area_px": math.pi * 10 ** 2, "solidity": 0.6}
+    big_lumpy = {"x": 300, "y": 100, "area_px": math.pi * 20 ** 2, "solidity": 0.6}
+    small_long = {"x": 500, "y": 100, "area_px": math.pi * 10 ** 2, "axis_ratio": 2.0}
+    split = {"x": 700, "y": 100, "area_px": math.pi * 30 ** 2, "solidity": 0.6, "source": "split"}
+    f = [r[0] for r in plaque_qc.flag_plaques([small_lumpy, big_lumpy, small_long, split], (1000, 1000))]
+    assert f == ["OK", "MERGED?", "MERGED?", "SPLIT"]
 
 
 def test_d5_cli_qc_flags_merged_from_the_raw_contour(tmp_path, mixed_plate):
@@ -525,7 +541,7 @@ def test_d5_cli_qc_flags_merged_from_the_raw_contour(tmp_path, mixed_plate):
     assert r.returncode == 0
     df = pd.read_csv(tmp_path / "q" / "data-green-mixed_plate.csv")
     # the 6 mm disc is 29x the median area here (LARGE?, not MERGED?: its outline is one blob)
-    assert df["QC_FLAG"].tolist() == ["LARGE?"] + ["TINY"] * 5
+    assert df["QC_FLAG"].tolist() == ["LARGE?"] + ["OK"] * 5     # D9: small pass is not TINY
 
 
 # --------------------------------------------------------------------------- #
@@ -597,14 +613,16 @@ def test_d6_two_env_runner_honours_weights_and_imgsz_overrides(tmp_path, monkeyp
 
 def test_d5_tiny_size_rule_is_for_detector_outlines_only():
     import plaque_qc
-    hand = {"source": "manual", "kind": "circle", "radius": 8.0, "area_pxl": math.pi * 64,
+    # D9: TINY is about pixel outlines (< 12 px across); circles are exact shapes
+    hand = {"source": "manual", "kind": "circle", "radius": 5.0, "area_pxl": math.pi * 25,
             "center": (300.0, 300.0)}
-    precise = {"source": "auto", "kind": "circle", "radius": 8.0, "area_pxl": math.pi * 64,
+    precise = {"source": "auto", "kind": "circle", "radius": 5.0, "area_pxl": math.pi * 25,
                "center": (600.0, 300.0), "p_plaque": 0.9}
-    drawn = dict(_dict(300, 600, 8), source="freehand")
-    detector = _dict(600, 600, 8)
-    res = plaque_qc.flags_for_plaque_dicts([hand, precise, drawn, detector], (1000, 1000))
-    assert [r[0] for r in res] == ["OK", "OK", "OK", "TINY"]
+    drawn = dict(_dict(300, 600, 5), source="freehand")
+    detector = _dict(600, 600, 5)
+    big = _dict(800, 800, 8)
+    res = plaque_qc.flags_for_plaque_dicts([hand, precise, drawn, detector, big], (1000, 1000))
+    assert [r[0] for r in res][:4] == ["OK", "OK", "TINY", "TINY"] and "TINY" not in res[4][0]
 
 
 def test_d5_published_app_plaques_carry_solidity_for_merged():
