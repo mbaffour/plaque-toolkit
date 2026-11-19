@@ -9,6 +9,85 @@ the conditions. A release with no such heading changed no number.
 
 ---
 
+## Unreleased — click-through 2026-11 (branch `claude/clickthrough-2026-11`, on top of 1.3.0)
+
+Six testers used the apps the way a user would (desktop Measure/Batch/Compare, desktop Analyze,
+the Python web apps, the R Shiny app, the statistics engine, detection) and reported about 150
+findings; fixers then worked through them one area at a time, each fix with a regression test
+that fails on the old code. This entry grows as each area is merged. `plaque_size_tool.py`
+default and `--published` CSVs and the turbidity `plaques_all.csv` / `per_phage.csv` stay
+byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`).
+
+### Numbers that change
+
+* **Titer 95 % interval (`qc.csv`: `PFU_PER_ML_CI95_LO` / `_HI`; Compare tab).** These columns
+  did not exist in 1.1.0; the unreleased audit build computed them as n ± 1.96·√n. They are now
+  the exact (Garwood) Poisson limits, which are wider and asymmetric at low counts (a plate with
+  0 plaques gets an upper limit instead of 0–0). `PFU_PER_ML` itself is unchanged.
+* **R Shiny app, unequal spread.** With **Variances: auto** (the new default control) the app
+  runs Welch ANOVA + Games-Howell when Levene's test rejects equal variances, as the Python
+  engine does; before, it ran classic ANOVA + Tukey regardless. Choose **equal** to get the old
+  test. Data read with decimal commas (`1,5`) are now read as 1.5, not 15.
+* **R Shiny app, statistical unit.** A file with no plate column, or UPPER-CASE headers, used to
+  be tested per plaque while the report said "per plate". The unit is now detected
+  case-insensitively and the report names the unit that was actually tested.
+* **QC flag names.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is kept
+  for a shape far from round. No measurement column changes.
+
+### Desktop app: Compare and Batch tabs
+
+* Compare no longer crashes the app on macOS (the worker threads get a 16 MB stack; the 512 KB
+  default overflowed under matplotlib), and an engine error or a bad folder shows a message
+  instead of closing or hanging the window. Inputs are checked before a run starts (folder
+  contents, dilution ≥ 1, volume > 0, both titer boxes or none).
+* Compare shows a per-plate table (count, PFU/mL with its 95 % interval, countable 30–300),
+  removes its own stale figures before drawing new ones, and draws histograms on shared bins
+  with plain-language axis labels. Figures and their **legend keys** are written as PNG, SVG and
+  PDF, with **Legend key…**, **Place key on figure** and **Open output folder**.
+* Batch numbers plaques top-to-bottom like the Measure tab, lists images in natural order
+  (`plate2` before `plate10`), shows whole counts and blanks instead of `nan`, reports
+  `file: reason` for every image it could not read, and adds `n_edge` / `n_overlap` /
+  `n_merged` per plate.
+* The turbidity QC overlay labels each plaque with its `PLATE_INDEX` from `plaques_all.csv`.
+
+### Desktop app: Measure tab
+
+* One export path: the CSV, the figure and the provenance record all use the engine flags of the
+  result on screen and the editor's current calibration. Edited results say `(edited)`.
+* One figure style for the canvas and the saved figure, a **Labels** choice (numbers, numbers +
+  mm, none), a **legend key** with **Place key on figure**, and PDF/SVG saves.
+* Leaving unsaved edits asks first; calibration can be undone; redo and Ctrl+Z work; a failed
+  open keeps the previous image; Precise shows "(not installed)" when it is not.
+* Pixel mode works without a mm scale; Add/Draw are guarded at the image edge; the image fits
+  the view after a resize; small windows scroll instead of overlapping.
+* The QC column has tooltips and a tint, and `LARGE?` (see above).
+
+### R Shiny app (`plaque_stats/app.R`)
+
+* **Variances** control (auto / equal / unequal) with Welch ANOVA + Games-Howell; Mann-Whitney,
+  n = 1 groups and star thresholds now match the Python engine.
+* **Spread note.** No warning from the raw SD ratio. When classic ANOVA + Tukey ran with fewer
+  than 5 plates in any group, a neutral note says the equal-spread assumption cannot be checked;
+  a warning appears only when a Bonferroni-adjusted F test on the extreme pair is significant.
+* Files: semicolon and tab delimiters, decimal commas, cp1252, UPPER-CASE headers; empty,
+  header-only, binary and `.xlsx` files give a plain message instead of a blank app; the number
+  of dropped rows is reported.
+* **The default figure changed** (deliberately): the mean/median line is drawn, brackets sit
+  above the data and clear of the n labels, points take their sample's colour when there are no
+  replicates, the jitter is seeded so points do not move between redraws, PNGs have a white
+  background under the key, and a log axis says how many non-positive values it dropped.
+* Paste-ready sentence quotes plate means ± SEM with the test, the post-hoc and exact p;
+  the Statistics tab has formatted p-values and a **Download statistics** button.
+* Paper style: the status line says what was applied and what was ignored; a style that names
+  none of the loaded samples changes nothing.
+* Legend key: plates get unique colour + shape pairs (24 tested); two samples never share a
+  colour. Known limits: a PDF asked for in a font the PDF device lacks falls back to the default
+  sans and says so; a key too large for the figure is not placed and the app says so (the
+  stand-alone key is complete).
+* `Run R App.bat` installs `jsonlite` and `zip`.
+
+---
+
 ## 1.3.0 — unreleased: paper style for the R Shiny app (branch `claude/paper-style`, on top of 1.2.0)
 
 The R Shiny app (`plaque_stats/app.R`) reads the `paper_style.json` that CFU Plot Studio 0.4.0
