@@ -147,6 +147,70 @@ _BUSY_STD = [
 ]
 
 
+class PlaqueSizeBox(QComboBox):
+    """The "Plaque size" choice shared by the Measure and Batch tabs (CT-R1 detection D1).
+
+    Current / Sensitive: Auto (both scales, the default), Standard, Small. Published: Standard
+    (the default, = `plaque_size_tool.py --published`) or Small; it never runs Auto. Precise
+    has its own fixed detection, so the box is disabled. The user's pick is remembered per
+    engine family, so switching engine and back does not lose it."""
+
+    TIPS = {
+        "auto": "Runs the detector at both scales: every plaque the standard scale finds keeps "
+                "its full outline, and plaques too small for it (< ~2.5 mm) are added from the "
+                "small scale (SOURCE = small). Recommended.",
+        "standard": "One pass at the standard scale (the command line's default). Plaques "
+                    "under ~2.5 mm are not found.",
+        "small": "One pass at the small scale (the command line's -small). Finds plaques under "
+                 "~2.5 mm, but outlines only the core of plaques wider than ~50 px, so large "
+                 "plaques come out too small.",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        import plaque_gui as _pg
+        self._labels = dict(_pg.SCALE_LABELS)
+        self._choice = {"published": "standard", "other": "auto"}
+        self._family = None
+        self.currentIndexChanged.connect(self._remember)
+        self.setToolTip("Plaque size: how the detector handles small and large plaques.")
+
+    @staticmethod
+    def _fam(key):
+        return "published" if key == "published" else ("precise" if key == "precise" else "other")
+
+    def set_engine(self, key, busy=False):
+        fam = self._fam(key)
+        self.blockSignals(True)
+        self.clear()
+        if fam == "precise":
+            self.addItem("Fixed by Precise", None)
+            self.setToolTip("Not used by Precise: it runs its own fixed detection.")
+        else:
+            keys = ("standard", "small") if fam == "published" else ("auto", "standard", "small")
+            for k in keys:
+                self.addItem(self._labels[k], k)
+                self.setItemData(self.count() - 1, self.TIPS[k], Qt.ToolTipRole)
+            self.setCurrentIndex(max(0, self.findData(self._choice[fam])))
+            self.setToolTip("Plaque size. " + self.TIPS[self.scale()])
+        self.blockSignals(False)
+        self._family = fam
+        self.setEnabled(fam != "precise" and not busy)
+
+    def _remember(self, _i=None):
+        if self._family in self._choice and self.currentData():
+            self._choice[self._family] = self.currentData()
+            self.setToolTip("Plaque size. " + self.TIPS[self.currentData()])
+
+    def scale(self):
+        return self.currentData()
+
+    def set_scale(self, scale):
+        i = self.findData(scale)
+        if i >= 0:
+            self.setCurrentIndex(i)
+
+
 def _shadow(widget, blur=18, dy=2, alpha=40):
     """Soft drop shadow for cards (purely cosmetic)."""
     try:
@@ -252,6 +316,12 @@ class MeasureTab(QWidget):
                                   "Helpful on crowded plates; ignored under Published mode.")
         self.watershed.stateChanged.connect(lambda _=0: self._update_stale())
 
+        # CT-R1 detection D1: Current / Sensitive used to force the small scale, which outlines
+        # only the core of large plaques; the default is now Auto (both scales merged)
+        self.scale_box = PlaqueSizeBox()
+        self.scale_box.set_engine(MODES[self._def_mode][1])
+        self.scale_box.currentIndexChanged.connect(lambda _=0: self._update_stale())
+
         self.exclude_overlaps = QCheckBox("Exclude overlaps from stats")
         self.exclude_overlaps.setToolTip("Leave overlapping/touching plaques (OVERLAP=yes, shown "
                                          "dashed-pink) OUT of the median/mean diameter — their size "
@@ -285,6 +355,7 @@ class MeasureTab(QWidget):
         pl.addWidget(QLabel("Dish")); pl.addWidget(self.plate)
         pl.addWidget(self.plate_85); pl.addWidget(self.plate_100)
         pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
+        pl.addWidget(QLabel("Plaque size")); pl.addWidget(self.scale_box)
         pl.addWidget(self.watershed); pl.addWidget(self.exclude_overlaps)
         pl.addWidget(self.orient_btn)
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
@@ -444,6 +515,7 @@ class MeasureTab(QWidget):
             (self.plate_100, "Set dish to 100 mm", "Quick-set the lid diameter to 100 mm."),
             (self.mode, "Detection engine", "Choose the plaque-detection engine."),
             (self.watershed, "Split touching plaques", "Separate plaques whose edges touch."),
+            (self.scale_box, "Plaque size", "Auto, Standard or Small plaque-size handling."),
             (self.exclude_overlaps, "Exclude overlapping plaques from statistics",
              "Leave overlapping plaques out of the median and mean diameter."),
             (self.orient_btn, "Orient image", "Rotate or flip the plate to match a reference orientation."),
@@ -454,7 +526,7 @@ class MeasureTab(QWidget):
         for w, name, desc in named:
             w.setAccessibleName(name)
             w.setAccessibleDescription(desc)
-        order = [self.plate, self.plate_85, self.plate_100, self.mode, self.watershed,
+        order = [self.plate, self.plate_85, self.plate_100, self.mode, self.scale_box, self.watershed,
                  self.orient_btn, self.open_btn, self.redetect_btn, self.save_btn,
                  self.table, self.fiji_btn, self.copy_btn]
         for a, b in zip(order, order[1:]):
@@ -527,6 +599,7 @@ class MeasureTab(QWidget):
             # CT-R1 F25: the box was greyed out but stayed ticked, as if it still applied
             self.watershed.setChecked(False)
         self.watershed.setEnabled(key not in ("published",))
+        self.scale_box.set_engine(key, busy=bool(getattr(self, "busy", False)))
         self._update_stale()
 
     def _engine_key_of(self, det):
@@ -547,10 +620,11 @@ class MeasureTab(QWidget):
         no longer describe the result on screen (CT-R1 F25: nothing marked it as stale)."""
         stale = False
         if self.det is not None and self.editor is not None and self._det_settings is not None:
-            key, ws = self._det_settings
+            key, ws, sc = self._det_settings
             now_key = self._mode_key()
             now_ws = self.watershed.isChecked() and now_key not in ("published", "precise")
-            stale = (now_key != key) or (bool(now_ws) != bool(ws))
+            now_sc = self.scale_box.scale() if now_key != "precise" else None
+            stale = (now_key != key) or (bool(now_ws) != bool(ws)) or (now_sc != sc)
         if stale:
             self.stale_label.setText("⚠ settings changed: press Re-detect  (on screen: %s)"
                                      % self._engine_label_of(self.det))
@@ -693,7 +767,8 @@ class MeasureTab(QWidget):
         if not on:
             self._busy_timer.stop()
         for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,
-                  self.watershed, self.exclude_overlaps, self.plate_85, self.plate_100) + self._orient_btns:
+                  self.watershed, self.exclude_overlaps, self.plate_85, self.plate_100,
+                  self.scale_box) + self._orient_btns:
             w.setEnabled(not on)
         if not on:
             self.save_btn.setEnabled(self.editor is not None)
@@ -734,20 +809,22 @@ class MeasureTab(QWidget):
         key = self._mode_key()
         src = req["detect_src"] or req["image_path"]
         req["settings"] = {"key": key, "plate_mm": self.plate.value(),
-                           "watershed": bool(self.watershed.isChecked()) and key not in ("published", "precise")}
+                           "watershed": bool(self.watershed.isChecked()) and key not in ("published", "precise"),
+                           "scale": (self.scale_box.scale() if key != "precise" else None)}
         if key == "precise":
             self._detect_precise(req, src)
             return
         self._pending = req
         self._start_busy(_BUSY_STD)
         self.window().statusBar().showMessage(f"Detecting ({MODES[self.mode.currentIndex()][0]})…")
-        kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked())
+        # CT-R1 detection D1: the "Plaque size" choice (Auto by default for Current/Sensitive;
+        # Published: Standard unless Small is chosen, = the command line)
+        kw = dict(plate_mm=self.plate.value(), watershed=self.watershed.isChecked(),
+                  scale=self.scale_box.scale())
         if key == "published":
             kw["published"] = True
         elif key == "sensitive":
-            kw["small"] = True; kw["sensitive"] = True
-        else:  # current
-            kw["small"] = True
+            kw["sensitive"] = True
         w = Worker(engine_api.detect_single, src, **kw)
         w.signals.finished.connect(self.on_detected)
         w.signals.error.connect(self.on_error)
@@ -793,7 +870,7 @@ class MeasureTab(QWidget):
         self._cur_img = req["cur_img"]
         self._orient_ops = list(req["orient_ops"])
         s = req.get("settings") or {}
-        self._det_settings = (s.get("key"), bool(s.get("watershed")))
+        self._det_settings = (s.get("key"), bool(s.get("watershed")), s.get("scale"))
         det.setdefault("watershed", bool(s.get("watershed")))
         det.setdefault("plate_mm_requested", s.get("plate_mm"))
         det["source_image"] = self.image_path
@@ -2055,15 +2132,16 @@ class BatchTab(QWidget):
         self.mode.setToolTip("Detection engine for the batch. Current is a good fast default; "
                              "Precise is very slow over a whole folder.")
         self.watershed = QCheckBox("Split touching plaques")
-        self.small = QCheckBox("Small plaques (engine -small gates)")
+        # CT-R1 detection D1: "Plaque size" replaces the "Small plaques" box. Current /
+        # Sensitive: Auto (default), Standard or Small; Published: Standard (= the command
+        # line's --published) or Small; Precise: fixed. It remembers the pick per engine.
+        self.scale_box = PlaqueSizeBox()
         # CT-R1 F18: each box is only enabled for the engines that use it, and shows what the
         # run will really do. The user's own choices are remembered here so switching engine
         # and back does not lose them.
         self._busy = False
         self._ws_choice = False            # "Split touching plaques" for Current / Sensitive
-        self._small_choice = False         # "Small plaques" for Published
         self.watershed.toggled.connect(self._option_toggled)
-        self.small.toggled.connect(self._option_toggled)
         self.mode.currentIndexChanged.connect(self._sync_options)
         self.crops = QCheckBox("Also export Fiji-calibrated plate crops")
         self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
@@ -2096,7 +2174,9 @@ class BatchTab(QWidget):
         opt.addWidget(self.watershed); opt.addStretch()
         gl.addLayout(opt, 2, 1)
         gl.addWidget(self.crops, 3, 1)
-        gl.addWidget(self.small, 4, 1)
+        sz = QHBoxLayout(); sz.addWidget(QLabel("Plaque size")); sz.addWidget(self.scale_box)
+        sz.addStretch()
+        gl.addLayout(sz, 4, 1)
 
         runrow = QHBoxLayout(); runrow.addWidget(self.run_btn); runrow.addWidget(self.open_btn)
         runrow.addStretch(); runrow.addWidget(self.progress)
@@ -2137,46 +2217,35 @@ class BatchTab(QWidget):
         return MODES[self.mode.currentIndex()][1]
 
     def _applied_options(self):
-        """(watershed, small) as the run will really use them for the chosen engine."""
+        """(watershed, plaque size) as the run will really use them for the chosen engine
+        (plaque size None for Precise, which has its own fixed detection)."""
         key = self._mode_key()
         return (self._ws_choice and key in ("current", "sensitive"),
-                self._small_choice if key == "published" else True)
+                None if key == "precise" else self.scale_box.scale())
 
     def _option_toggled(self, _checked=None):
         key = self._mode_key()
         if self.sender() is self.watershed and key in ("current", "sensitive"):
             self._ws_choice = self.watershed.isChecked()
-        elif self.sender() is self.small and key == "published":
-            self._small_choice = self.small.isChecked()
         self._sync_options()                 # a box that does not apply snaps back to the truth
 
     def _sync_options(self, *_):
         key = self._mode_key()
         ws_applies = key in ("current", "sensitive")
-        small_is_choice = key == "published"
-        ws, small = self._applied_options()
-        for box, val in ((self.watershed, ws), (self.small, small)):
-            box.blockSignals(True); box.setChecked(bool(val)); box.blockSignals(False)
+        ws, _scale = self._applied_options()
+        self.watershed.blockSignals(True); self.watershed.setChecked(bool(ws))
+        self.watershed.blockSignals(False)
         self.watershed.setEnabled(ws_applies and not self._busy)
-        self.small.setEnabled(small_is_choice and not self._busy)
+        self.scale_box.set_engine(key, busy=self._busy)
         # say it in the label too: a disabled box alone is easy to miss
         self.watershed.setText("Split touching plaques" if ws_applies
                                else "Split touching plaques (not used by this engine)")
-        self.small.setText("Small plaques (engine -small gates)" if small_is_choice
-                           else "Small plaques (always on with this engine)")
         self.watershed.setToolTip(
             "Watershed segmentation to separate plaques whose edges touch."
             if ws_applies else
             "Not available with this engine: Published never splits plaques (it is the "
             "unchanged published algorithm) and Precise does not use this option. Choose "
             "Current or Sensitive to use it.")
-        self.small.setToolTip(
-            "Lower the engine's size gates for plaques under ~2.5 mm. Published runs WITHOUT "
-            "this unless ticked, matching the Measure tab and the command line."
-            if small_is_choice else
-            "Always on with this engine: Current, Sensitive and Precise always use the small "
-            "gates in the app, so there is nothing to choose. Only Published can run without "
-            "them.")
 
     def _run(self):
         folder = self.folder.text().strip()
@@ -2193,7 +2262,7 @@ class BatchTab(QWidget):
                                 "are not searched.")
             return
         key = self._mode_key()
-        watershed, small = self._applied_options()
+        watershed, scale = self._applied_options()
         if key == "precise" and not engine_api.precise_available()[0]:
             QMessageBox.information(self, "Precise unavailable",
                                     "Precise isn't available here; pick another engine."); return
@@ -2204,8 +2273,7 @@ class BatchTab(QWidget):
         self._set_busy(True); self.window().statusBar().showMessage("Batch running…")
         # only what applies to this engine is passed on (and so recorded in run_metadata.json)
         w = Worker(batch_measure.batch_measure, folder, plate_mm=self.plate.value(), mode=key,
-                   watershed=watershed, crops=self.crops.isChecked(),
-                   small=(small if key == "published" else False))
+                   watershed=watershed, crops=self.crops.isChecked(), scale=scale)
         w.kwargs["progress"] = w.signals.progress.emit
         w.signals.progress.connect(self.status.setText)
         w.signals.finished.connect(self._done); w.signals.error.connect(self._err)

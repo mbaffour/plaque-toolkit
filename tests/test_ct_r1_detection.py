@@ -199,3 +199,143 @@ def test_published_app_path_unchanged(name, mode):
     assert (round(det["plate"]["diam_px"], 2) if det["plate"] else None) == exp["dish_px"]
     assert det["pxl_per_mm"] == exp["ppm"]
     assert all(p["source"] == "auto" for p in det["plaques"])
+
+
+# --------------------------------------------------------------------------- #
+#  D1 in the app: the "Plaque size" choice on the Measure and Batch tabs
+# --------------------------------------------------------------------------- #
+def _gui():
+    pytest.importorskip("PySide6")
+    pytest.importorskip("pytestqt")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from app import ui as appui
+    return appui
+
+
+def _mode_index(appui, key):
+    return next(i for i, (_l, k, _h) in enumerate(appui.MODES) if k == key)
+
+
+def test_d1_measure_tab_plaque_size_choice(qtbot, mixed_plate, monkeypatch):
+    appui = _gui()
+    win = appui.MainWindow()
+    qtbot.addWidget(win)
+    tab = win.measure_tab
+    box = tab.scale_box
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    assert [box.itemData(i) for i in range(box.count())] == ["auto", "standard", "small"]
+    assert box.scale() == "auto" and box.isEnabled()
+    tab.mode.setCurrentIndex(_mode_index(appui, "published"))
+    assert [box.itemData(i) for i in range(box.count())] == ["standard", "small"]
+    assert box.scale() == "standard"
+    tab.mode.setCurrentIndex(_mode_index(appui, "precise"))
+    assert not box.isEnabled() and box.scale() is None
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    assert box.scale() == "auto"
+
+    calls = []
+    real = appui.engine_api.detect_single
+    monkeypatch.setattr(appui.engine_api, "detect_single",
+                        lambda *a, **k: calls.append(dict(k)) or real(*a, **k))
+    tab.plate.setValue(90)
+    tab.image_path = mixed_plate
+    tab._detect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
+    assert calls[-1]["scale"] == "auto" and "small" not in calls[-1]
+    assert tab.det["scale"] == "auto" and tab.det["n_plaques"] == 6
+    assert not tab.stale_label.isVisible() if tab.isVisible() else True
+    # changing the plaque size marks the result on screen as stale
+    box.set_scale("small")
+    assert not tab.stale_label.isHidden()
+    box.set_scale("auto")
+    assert tab.stale_label.isHidden()
+    # Published + Small passes the small scale to the one-pass published engine
+    tab.mode.setCurrentIndex(_mode_index(appui, "published"))
+    box.set_scale("small")
+    tab.det = None
+    tab.redetect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
+    assert calls[-1]["scale"] == "small" and calls[-1]["published"] is True
+    assert tab.det["published"] is True and tab.det["small"] is True
+    # the Published pick is remembered separately from Current's
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    assert box.scale() == "auto"
+    tab.mode.setCurrentIndex(_mode_index(appui, "published"))
+    assert box.scale() == "small"
+
+
+def test_d1_batch_records_plaque_size_and_dish(tmp_path, mixed_plate):
+    import shutil
+    from app import batch_measure
+    folder = tmp_path / "f"
+    folder.mkdir()
+    shutil.copy(mixed_plate, folder / "M.png")
+    res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="current")
+    meta = json.load(open(os.path.join(res["out_dir"], "run_metadata.json")))
+    assert meta["settings"]["plaque_size"] == "auto" and meta["settings"]["small"] is False
+    assert meta["images"][0]["dish_source"] == "standard pass"
+    assert int(res["summary_df"]["n_plaques"].iloc[0]) == 6
+    res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="current", scale="standard",
+                                      out_dir=str(tmp_path / "o2"))
+    assert int(res["summary_df"]["n_plaques"].iloc[0]) == 1
+    res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="published", scale="auto",
+                                      out_dir=str(tmp_path / "o3"))
+    meta = json.load(open(os.path.join(res["out_dir"], "run_metadata.json")))
+    assert meta["settings"]["plaque_size"] == "standard"     # Published never runs Auto
+
+
+def test_d1_validate_and_batch_mode_tables_use_auto():
+    from app import batch_measure, validate
+    assert batch_measure.MODE_KWARGS["current"] == {"scale": "auto"}
+    assert batch_measure.MODE_KWARGS["sensitive"] == {"scale": "auto", "sensitive": True}
+    assert validate._MODE_KWARGS["current"] == {"scale": "auto"}
+    assert validate._MODE_KWARGS["published"] == {"published": True}
+
+
+def test_d1_saved_run_metadata_records_plaque_size(tmp_path, mixed_plate):
+    import plaque_gui as pgui
+    from app import engine_api
+    det = engine_api.detect_single(mixed_plate, plate_mm=90, scale="auto")
+    info = {k: det[k] for k in ("scale", "dish_source", "dish_reason", "n_outside_dish", "dish_warnings")}
+    pgui.save_results(det["plaques"], det["orig_bgr"], mixed_plate, str(tmp_path), det["pxl_per_mm"],
+                      det["lawn_gray"], plate=det["plate"], published=False, sensitive=False,
+                      small=False, watershed=False, plate_mm=90, detection=info)
+    meta = json.load(open(tmp_path / "run_metadata.json"))
+    assert meta["settings"]["plaque_size"] == "auto"
+    rec = meta["images"][0]
+    assert rec["dish_source"] == "standard pass" and rec["n_outside_dish"] == 0
+    # the five small-pass plaques are detector results, not hand edits
+    assert rec["n_manual_or_edited"] == 0 and meta["settings"]["edited"] is False
+    import pandas as pd
+    df = pd.read_csv(tmp_path / "data-green-mixed_plate.csv")
+    assert sorted(df["SOURCE"].value_counts().items()) == [("auto", 1), ("small", 5)]
+
+
+def _run_cli(args, cwd):
+    import subprocess
+    import sys
+    return subprocess.run([sys.executable, os.path.join(REPO_ROOT, "plaque_size_tool.py")] + args,
+                          cwd=str(cwd), capture_output=True, text=True, timeout=600)
+
+
+def test_d1_cli_multiscale_is_opt_in_and_keeps_standard_rows(tmp_path, mixed_plate):
+    import pandas as pd
+    a = _run_cli(["-i", mixed_plate, "-p", "90", "-o", "a"], tmp_path)
+    b = _run_cli(["-i", mixed_plate, "-p", "90", "-o", "b", "--multiscale"], tmp_path)
+    c = _run_cli(["-i", mixed_plate, "-p", "90", "-o", "c", "--multiscale", "--published"], tmp_path)
+    assert a.returncode == b.returncode == c.returncode == 0
+    da = pd.read_csv(tmp_path / "a" / "data-green-mixed_plate.csv")
+    db = pd.read_csv(tmp_path / "b" / "data-green-mixed_plate.csv")
+    dc = pd.read_csv(tmp_path / "c" / "data-green-mixed_plate.csv")
+    assert "SOURCE" not in da.columns and len(da) == 1
+    assert db["SOURCE"].tolist() == ["auto"] + ["small"] * 5
+    # the standard row's size is exactly the default run's (TURBIDITY_REL is relative to the
+    # clearest plaque on the plate, so it moves when plaques are added)
+    cols = ["AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM", "MEAN_GRAY"]
+    assert db.loc[db["SOURCE"] == "auto", cols].reset_index(drop=True).equals(da[cols])
+    assert (db.loc[db["SOURCE"] == "small", "DIAMETER_MM"] < 1.3).all()
+    # ignored under --published, with a note
+    assert "SOURCE" not in dc.columns and len(dc) == 1
+    assert "--multiscale is ignored in --published mode" in c.stdout
+    meta = json.load(open(tmp_path / "b" / "run_metadata.json"))
+    assert meta["settings"]["multiscale"] is True

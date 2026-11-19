@@ -20,7 +20,8 @@ COLUMN_TOOLTIPS = {
                    "lower = irregular / comet / elongated. Circles you draw score 1.",
     "OVERLAP": "yes = this plaque touches/overlaps another, so its size is unreliable. "
                "Tick 'Exclude overlapping plaques' to drop these from the stats.",
-    "SOURCE": "How the plaque was found: auto (detector), manual (you added it), "
+    "SOURCE": "How the plaque was found: auto (detector), small (detector, found only at the small "
+              "scale of the Auto plaque size), manual (you added it), "
               "freehand (you drew the outline), region (the Detect-area tool), or watershed "
               "(split from a touching pair).",
     # CT-R1 F24: the one column with no explanation

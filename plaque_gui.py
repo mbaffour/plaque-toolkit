@@ -1147,9 +1147,14 @@ def save_image(img_bgr, out_path):
 def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl_per_mm, *,
                        published, sensitive=False, small=False, watershed=False, precise=False,
                        plate_mm=None, edited=None, edits=None, source_image=None, orientation=None,
-                       engine_label=None, extra_settings=None):
+                       engine_label=None, extra_settings=None, detection=None):
     """run_metadata.json for one plate, from EXPLICIT engine flags. Shared by save_results
-    and the app's Export all, so both describe a result the same way (CT-R1 F6)."""
+    and the app's Export all, so both describe a result the same way (CT-R1 F6).
+
+    ``detection`` (optional dict, CT-R1 detection D1-D4): how the plaques and the dish were
+    found -- ``scale`` (plaque size: auto / standard / small) goes into the settings as
+    ``plaque_size``; ``dish_source``, ``dish_reason``, ``n_outside_dish`` and
+    ``dish_warnings`` into the plate's record."""
     import provenance
     label = engine_label or provenance.engine_name(
         published=bool(published), sensitive=bool(sensitive) and not published, precise=bool(precise))
@@ -1163,6 +1168,9 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
         settings["source_image"] = source_image
     if orientation is not None:
         settings["orientation"] = list(orientation)
+    det_info = dict(detection or {})
+    if det_info.get("scale"):
+        settings["plaque_size"] = det_info["scale"]
     settings.update(extra_settings or {})
     rec = {"file": os.path.basename(image_path), "path": image_path,
            "sha256_16": provenance.file_digest(image_path), "n_plaques": int(n_rows),
@@ -1170,6 +1178,9 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
            "csv": os.path.basename(csv_path)}
     if edits:
         rec["edits"] = dict(edits)
+    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings"):
+        if k in det_info:
+            rec[k] = det_info[k]
     return provenance.write_metadata(out_dir, tool, label, settings, [rec])
 
 
@@ -1178,7 +1189,7 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                  published=None, write_provenance=True, engine_label=None, *,
                  sensitive=None, small=None, watershed=None, precise=False, plate_mm=None,
                  edited=None, edits=None, source_image=None, orientation=None,
-                 labels="numbers", key=False, write_key=False):
+                 labels="numbers", key=False, write_key=False, detection=None):
     """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
     sibling saying which engine and edits produced them (PT-9 never covered the editor or
     the app's Save; AUDIT-2026-10.md, PT-31).
@@ -1253,7 +1264,7 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                                small=small, watershed=watershed, precise=precise,
                                plate_mm=plate_mm, edited=edited, edits=edits,
                                source_image=source_image, orientation=orientation,
-                               engine_label=engine_label)
+                               engine_label=engine_label, detection=detection)
         except Exception:                             # provenance must never break a save
             pass
     return csv_path, img_path, len(rows)

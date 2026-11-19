@@ -588,7 +588,11 @@ class PlaqueCanvas(QWidget):
                 "plate_mm": (round(float(dish_mm), 3) if dish_mm else None),
                 "edited": self.edited, "edits": self.edit_summary(),
                 "source_image": d.get("source_image") or self.image_path,
-                "orientation": list(d.get("orientation") or [])}
+                "orientation": list(d.get("orientation") or []),
+                # plaque-size scale and dish provenance (CT-R1 detection D1-D4)
+                "scale": d.get("scale"),
+                "detection": {k: d[k] for k in ("scale", "dish_source", "dish_reason",
+                                                "n_outside_dish", "dish_warnings") if k in d}}
 
     def _pub(self):
         """The result's own Published flag (None only for a result that carries none)."""
@@ -616,7 +620,7 @@ class PlaqueCanvas(QWidget):
             sensitive=st["sensitive"], small=st["small"], watershed=st["watershed"],
             plate_mm=st["plate_mm"], edited=st["edited"], edits=st["edits"],
             source_image=st["source_image"], orientation=st["orientation"],
-            **self._figure_kwargs())
+            detection=st["detection"], **self._figure_kwargs())
         self.mark_saved()
         return res
 
@@ -1459,7 +1463,9 @@ class PlaqueCanvas(QWidget):
         if st["precise"]:
             kw = dict(sensitive=True, small=True, published=False)
         else:
-            kw = dict(sensitive=st["sensitive"], small=st["small"], published=st["published"])
+            # an Auto result re-scans a box at the small scale too (CT-R1 detection D1)
+            kw = dict(sensitive=st["sensitive"], small=st["small"] or st.get("scale") == "auto",
+                      published=st["published"])
         eng = self._engine_label()
         try:
             found = engine_api.detect_region(self.orig_bgr, roi, **kw)
@@ -1571,7 +1577,8 @@ class PlaqueCanvas(QWidget):
                 small=st["small"], watershed=st["watershed"], precise=st["precise"],
                 plate_mm=st["plate_mm"], edited=st["edited"], edits=st["edits"],
                 source_image=st["source_image"], orientation=st["orientation"],
-                extra_settings={"mm_per_px": self.ppm, "labels": self.label_mode})
+                extra_settings={"mm_per_px": self.ppm, "labels": self.label_mode},
+                detection=st["detection"])
         except Exception:                           # noqa: BLE001 -- never block an export
             pass
         fig_path = os.path.join(self.out_dir, f"figure_{name}.png")
