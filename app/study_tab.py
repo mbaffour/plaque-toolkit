@@ -13,9 +13,14 @@ Two analysis modes, chosen automatically:
   • Grouped control-comparison (sample carries an optional 2nd factor) → each value tested vs a control.
 
 The maths + figures are the SAME validated engine as the standalone Plaque Stats app
-(`plaque_stats/plaque_stats.py`), reused here directly, so results are identical.
+(`plaque_stats/plaque_stats.py`), reused here directly, so results are identical. The ZIP export
+hands the engine the SAME in-memory table and the SAME options as the screen (CT-R1 F1/F2/F14).
 """
+import csv
+import io
+import json
 import os
+import re
 import tempfile
 import zipfile
 
@@ -28,7 +33,7 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QFrame, QTreeWidget, QTreeWidgetItem, QHeaderView, QFileDialog,
     QMessageBox, QPlainTextEdit, QAbstractItemView, QGraphicsDropShadowEffect, QTabWidget,
     QTableView, QDoubleSpinBox, QSpinBox, QDialog, QDialogButtonBox, QToolButton, QMenu,
-    QSizePolicy, QScrollArea, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QInputDialog,
 )
 
 from app import style
@@ -47,6 +52,30 @@ def _stats_available():
         return False
 
 
+def _engine():
+    """The statistics engine module (plaque_stats/plaque_stats.py). When something has already
+    imported the engine FILE under the top-level name 'plaque_stats' (the standalone app's own
+    layout), that module is the engine itself."""
+    import sys
+    try:
+        from plaque_stats import plaque_stats as ps
+        return ps
+    except ImportError:
+        m = sys.modules.get("plaque_stats")
+        if m is not None and hasattr(m, "run_stats"):
+            return m
+        raise
+
+
+def _legend_key():
+    """The legend-key module the engine draws its keys with (see _engine)."""
+    try:
+        from plaque_stats import legend_key
+        return legend_key
+    except ImportError:
+        return _engine()._lk
+
+
 # ------------------------------------------------------------------ small helpers
 def _shadow(widget, blur=18, dy=2, alpha=40):
     try:
@@ -57,21 +86,83 @@ def _shadow(widget, blur=18, dy=2, alpha=40):
         pass
 
 
+# CT-R1 F6: a column is the diameter only when its name says diameter AND millimetres
+# ("DIAMETER_MM", "diameter_mm", "Diameter (mm)"). "Diameter (µm)", "DIAMETER_PXL", an area-only
+# file or a lone "count" column used to be read as diameters in mm.
+_MM_RE = re.compile(r"(^|[^a-z])mm(2|²|\^2)?([^a-z0-9]|$)")
+_NOT_MM_RE = re.compile(r"px|pxl|pix|µm|um\b|micro|nm\b|cm\b")
+
+
 def _diam_col(df):
-    """Find the diameter column in a per-plaque CSV (case-insensitive)."""
+    """The diameter-in-millimetres column of a per-plaque table (case-insensitive), or None."""
     for c in df.columns:
-        cl = str(c).lower()
-        if "diam" in cl and "pxl" not in cl and "pix" not in cl:
+        cl = str(c).strip().lower()
+        if "diam" in cl and _MM_RE.search(cl) and not _NOT_MM_RE.search(cl):
             return c
     return None
 
 
 def _area_col(df):
+    """The area-in-mm² column, or None."""
     for c in df.columns:
-        cl = str(c).lower()
-        if "area" in cl and "pxl" not in cl and "pix" not in cl:
+        cl = str(c).strip().lower()
+        if "area" in cl and _MM_RE.search(cl) and not _NOT_MM_RE.search(cl):
             return c
     return None
+
+
+_DECIMAL_COMMA = re.compile(r"^[+-]?\d+,\d+$")
+
+
+def _numbers(series):
+    """(float Series, number of non-empty cells that are not numbers). Decimal commas ("2,34")
+    are read as decimal points when every non-number cell is one (CT-R1 F6)."""
+    txt = series.astype(str).str.strip()
+    empty = txt.eq("") | series.isna()
+    num = pd.to_numeric(txt.where(~empty), errors="coerce")
+    bad = ~empty & num.isna()
+    if bad.any() and txt[bad].str.match(_DECIMAL_COMMA).all():
+        num = pd.to_numeric(txt.str.replace(",", ".", regex=False).where(~empty), errors="coerce")
+        bad = ~empty & num.isna()
+    return num.astype(float), int(bad.sum())
+
+
+def _read_text_table(path):
+    """Read a CSV / TSV the way it was typed: every cell as text (labels such as None, NA, 007,
+    1.0 stay labels), delimiter , ; or tab sniffed from the header, lines starting with # skipped.
+    Raises ValueError with a plain message for files that are not text tables (binary, JSON,
+    empty). Pandas only, so the Light build (no SciPy, no stats engine) can compile and load
+    studies too (CT-R1 F5/F6)."""
+    name = os.path.basename(str(path))
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if b"\x00" in raw[:4096]:
+        raise ValueError("%s is not a text table (it is a binary file)." % name)
+    text = raw.decode("utf-8-sig", errors="replace")
+    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    if not lines:
+        raise ValueError("%s is empty (no header line)." % name)
+    if lines[0].lstrip()[:1] in ("{", "["):
+        raise ValueError("%s looks like JSON, not a CSV table." % name)
+    counts = {d: 0 for d in (",", ";", "\t")}
+    inq = False
+    for ch in lines[0]:
+        if ch == '"':
+            inq = not inq
+        elif not inq and ch in counts:
+            counts[ch] += 1
+    sep = max(counts, key=lambda d: (counts[d], d == ","))
+    if not counts[sep]:
+        sep = ","
+    try:
+        df = pd.read_csv(io.StringIO("\n".join(lines)), sep=sep, dtype=str, keep_default_na=False,
+                         quoting=csv.QUOTE_MINIMAL, skip_blank_lines=True)
+    except Exception as e:                                        # noqa: BLE001
+        raise ValueError("could not read %s as a table: %s" % (name, e))
+    df.columns = [str(c).strip() for c in df.columns]
+    for c in df.columns:
+        df[c] = df[c].astype(str).str.strip()
+    return df
 
 
 def _round_df(df, n=4):
@@ -84,6 +175,57 @@ def _round_df(df, n=4):
         return out
     except Exception:
         return df
+
+
+def _stats_message(e):
+    """The user-facing text of an engine refusal: StatsError.message, a bare SystemExit's code,
+    or the exception text (CT-R1 F1: a SystemExit used to kill the whole app)."""
+    msg = getattr(e, "message", None)
+    if not msg and isinstance(e, SystemExit):
+        code = e.code
+        msg = str(code) if code not in (None, 0) else "the statistics engine stopped."
+    msg = str(msg or e or e.__class__.__name__)
+    if msg.startswith("[error] "):
+        msg = msg[len("[error] "):]
+    return _ui_words(msg)
+
+
+def _ui_words(text):
+    """The engine speaks command-line ('--equal-var no'); on screen the tab names its own
+    controls instead (CT-R1 F9, brief rule 6). Not applied to the legend text starter, which must
+    stay identical to the ZIP's legend text file."""
+    text = str(text or "")
+    for flag, words in _FLAG_WORDS:
+        text = text.replace("`%s`" % flag, words).replace(flag, words)
+    return text.replace("`", "")
+
+
+_FLAG_WORDS = [
+    ("pass --log-y-drop-nonpositive", "tick 'hide ≤ 0'"),
+    ("--log-y-drop-nonpositive", "'hide ≤ 0'"),
+    ("--parametric nonparametric", "Test: Non-parametric"),
+    ("--posthoc dunnett", "Compare: vs a sample (Dunnett)"),
+    ("--equal-var no", "Variances: Unequal (Welch)"),
+    ("--center median", "Center: Median"), ("--center mean", "Center: Mean"),
+    ("--error iqr", "Error bars: IQR"), ("--error ci95", "Error bars: 95% CI"),
+    ("--error none", "Error bars: None"), ("--error sd", "Error bars: SD"), ("--error sem", "Error bars: SEM"),
+    ("--parametric parametric", "Test: Parametric"), ("--parametric auto", "Test: Auto"),
+    ("Override with --parametric", "Override with the Test control"),
+    ("--parametric", "the Test control"),
+    ("--equal-var auto", "Variances: Auto"), ("--equal-var yes", "Variances: Equal"),
+    ("--equal-var", "the Variances control"),
+    ("--annotate letters", "Brackets: Letters"), ("--annotate all", "Brackets: All pairs"),
+    ("--annotate adjacent", "Brackets: Adjacent"), ("--annotate", "the Brackets control"),
+    ("--posthoc", "the Compare control"), ("--control", "Compare: vs a sample"),
+    ("--unit replicate", "plates as the unit"), ("--unit plaque", "plaques as the unit"),
+]
+
+
+class _MsgLabel(QLabel):
+    """A message line that takes no room while it is empty."""
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
 
 
 class _SampleDialog(QDialog):
@@ -111,17 +253,19 @@ class _SampleDialog(QDialog):
 
 
 def _sample_guess(stem):
-    """Guess the sample name from a plate CSV's filename by stripping a trailing
-    plate/rep/replicate token + number (so 'WT_plate2' → 'WT', 'T65I-3' → 'T65I')."""
-    import re
-    g = re.sub(r"[ _\-]*(plate|rep|replicate|r)?[ _\-]*\d+$", "", str(stem), flags=re.I).strip(" _-")
-    return g or str(stem)
+    """Guess the sample name from a plate CSV's filename: drop the Measure tab's
+    'data-<channel>-' prefix (CT-R1 F17: every file used to be guessed as sample 'data-green'),
+    then a trailing plate/rep/replicate token + number ('WT_plate2' → 'WT', 'T65I-3' → 'T65I')."""
+    s = re.sub(r"^data-[A-Za-z]+-", "", str(stem))
+    g = re.sub(r"[ _\-]*(plate|rep|replicate|r)?[ _\-]*\d+$", "", s, flags=re.I).strip(" _-")
+    return g or s or str(stem)
 
 
 class _AssignDialog(QDialog):
     """Map many per-plaque CSVs to samples — EACH CSV IS ONE REPLICATE PLATE. One row per file:
     pick its sample (reuse an existing name or type a new one), an optional 2nd factor, and the
-    replicate id. This is how you tell the tool which plate belongs to which sample, so replicates
+    plate id (blank = plate1, plate2, … within the sample; the file name is kept as the plate's
+    source). This is how you tell the tool which plate belongs to which sample, so replicates
     are real (no pseudoreplication)."""
     def __init__(self, parent, parsed, existing):
         super().__init__(parent)
@@ -130,12 +274,13 @@ class _AssignDialog(QDialog):
         lay = QVBoxLayout(self)
         info = QLabel("Each CSV is one <b>replicate plate</b>. Assign each to a sample — reuse a name "
                       "to make plates replicates of the same sample, or type a new name. The 2nd "
-                      "factor is optional (for control-comparison).")
+                      "factor is optional (for control-comparison). Leave the plate id blank to "
+                      "number the plates plate1, plate2, … within each sample.")
         info.setWordWrap(True); lay.addWidget(info)
 
         top = QHBoxLayout()
         self.all_sample = QLineEdit(); self.all_sample.setPlaceholderText("set every Sample to…")
-        apply_btn = QPushButton("Apply to all"); apply_btn.clicked.connect(self._apply_all)
+        apply_btn = QPushButton("Apply to all"); apply_btn.clicked.connect(lambda _=False: self._apply_all())
         top.addWidget(QLabel("Quick:")); top.addWidget(self.all_sample); top.addWidget(apply_btn); top.addStretch()
         lay.addLayout(top)
 
@@ -144,12 +289,14 @@ class _AssignDialog(QDialog):
             if s["group"] and s["group"] not in groups:
                 groups.append(s["group"])
         self.table = QTableWidget(len(parsed), 5)
-        self.table.setHorizontalHeaderLabels(["File", "N plaques", "Sample", "2nd factor", "Replicate id"])
+        self.table.setHorizontalHeaderLabels(["File", "N plaques", "Sample", "2nd factor",
+                                              "Plate id (blank = plate1, 2, …)"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for c in (1, 2, 3, 4):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         for i, p in enumerate(parsed):
             f = QTableWidgetItem(p["stem"]); f.setFlags(Qt.ItemIsEnabled)
+            f.setToolTip(p.get("path", p["stem"]))
             self.table.setItem(i, 0, f)
             n = QTableWidgetItem(str(p["n"])); n.setFlags(Qt.ItemIsEnabled); n.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 1, n)
@@ -160,7 +307,10 @@ class _AssignDialog(QDialog):
             cb.setMinimumWidth(140)
             self.table.setCellWidget(i, 2, cb)
             self.table.setItem(i, 3, QTableWidgetItem(""))
-            self.table.setItem(i, 4, QTableWidgetItem(p["stem"]))
+            rep = QTableWidgetItem("")
+            rep.setToolTip("File: %s — leave blank for plate1, plate2, … (the file name is kept as the "
+                           "plate's source)." % p["stem"])
+            self.table.setItem(i, 4, rep)
         lay.addWidget(self.table)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
@@ -180,7 +330,8 @@ class _AssignDialog(QDialog):
             out.append({"sample": self.table.cellWidget(i, 2).currentText().strip(),
                         "subgroup": self.table.item(i, 3).text().strip(),
                         "replicate": self.table.item(i, 4).text().strip(),
-                        "diam": p["diam"], "area": p["area"]})
+                        "diam": p["diam"], "area": p["area"],
+                        "source": os.path.basename(p.get("path") or p["stem"])})
         return out
 
 
@@ -189,12 +340,16 @@ class StudyTab(QWidget):
     METRICS = [("Diameter (mm)", "diam"), ("Area (mm²)", "area")]
     PALETTES_UI = [("Okabe–Ito (default)", "okabe"), ("Set2", "set2"), ("Tab10", "tab10"),
                    ("Warm", "warm"), ("Cool", "cool"), ("Grays", "grays")]
+    _FIG_EXTS = (".png", ".svg", ".pdf", ".tif", ".tiff", ".eps")
+    _EXT_FOR = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
 
     def __init__(self, measure_tab=None):
         super().__init__()
         self.measure_tab = measure_tab
-        self._samples = []        # list of {"group": str, "subgroup": str} — the containers (may be empty)
-        self._plates = []         # list of {group, subgroup, replicate, diam[], area[]}
+        self._samples = []        # list of {"group": str, "subgroup": str} — the containers, in x order
+        self._plates = []         # list of {group, subgroup, replicate, diam[], area[], source}
+        self._dirty = False       # CT-R1 F5/F25: unsaved changes to the compiled study
+        self._ylabels = {}        # CT-R1 F21: Y label the user typed, per metric
         self.canvas = None
         self.toolbar = None
         self._fig_container = None
@@ -222,7 +377,28 @@ class StudyTab(QWidget):
         lay.addWidget(self._build_compile_card())
         lay.addWidget(self._build_analyse_card(), 1)
         self._building = False
-        self._refresh_tree()
+        self._refresh_tree(dirty=False)
+
+    # ---------------------------------------------------------------- actions
+    def _bind(self, button, fn):
+        """Connect a button to an action. clicked(bool) never reaches `fn` (CT-R1 F3: the
+        Legend key button received False as its path), the old error is cleared first (F19) and
+        any engine exit -- StatsError or a bare SystemExit -- becomes a message (F1)."""
+        button.clicked.connect(lambda _=False: self._run_action(fn))
+
+    def _run_action(self, fn, *a):
+        self._clear_err()
+        try:
+            return fn(*a)
+        except (Exception, SystemExit) as e:                      # noqa: BLE001
+            if not isinstance(e, (ValueError, SystemExit)):    # a bug, not an engine refusal
+                import traceback
+                traceback.print_exc()
+            self._warn("That did not work: %s" % _stats_message(e))
+            return None
+
+    def _clear_err(self):
+        self.err.setText("")
 
     # ================================================================ COMPILE
     def _build_compile_card(self):
@@ -232,25 +408,35 @@ class StudyTab(QWidget):
 
         self.new_sample_btn = QPushButton("＋  New sample"); self.new_sample_btn.setObjectName("Primary")
         self.new_sample_btn.setToolTip("Create a sample (a genotype/condition). Then add its plates into it.")
-        self.new_sample_btn.clicked.connect(self._new_sample)
+        self._bind(self.new_sample_btn, self._new_sample)
         self.add_cur_btn = QPushButton("Add current plate")
         self.add_cur_btn.setToolTip("Add the plate you just measured (Measure tab) as a replicate of the "
                                     "selected sample.")
-        self.add_cur_btn.clicked.connect(self._add_current)
+        self._bind(self.add_cur_btn, self._add_current)
         self.add_csv_btn = QPushButton("Add CSV(s)…")
         self.add_csv_btn.setToolTip("Add saved per-plaque CSV(s) as replicate plates of the selected "
-                                    "sample. Each file = one replicate.")
-        self.add_csv_btn.clicked.connect(self._add_csvs)
+                                    "sample. Each file = one replicate; it needs a diameter-in-mm column.")
+        self._bind(self.add_csv_btn, self._add_csvs)
         self.assign_btn = QPushButton("Import & assign…"); self.assign_btn.setObjectName("Primary")
         self.assign_btn.setToolTip("Pick many plate CSVs at once and map each to a sample in one table "
                                    "(each CSV = one replicate plate). No sample needs to be selected first.")
-        self.assign_btn.clicked.connect(self._import_assign)
-        self.edit_btn = QPushButton("Rename / edit…"); self.edit_btn.clicked.connect(self._edit_sample)
-        self.remove_btn = QPushButton("Remove"); self.remove_btn.clicked.connect(self._remove_selected)
+        self._bind(self.assign_btn, self._import_assign)
+        self.edit_btn = QPushButton("Rename / edit…")
+        self.edit_btn.setToolTip("Rename the selected sample (or its 2nd factor), or the selected plate.")
+        self._bind(self.edit_btn, self._edit_sample)
+        self.remove_btn = QPushButton("Remove"); self._bind(self.remove_btn, self._remove_selected)
+        # CT-R1 F25: samples can be reordered (their order is the figure's x order)
+        self.up_btn = QToolButton(); self.up_btn.setText("▲"); self.up_btn.setToolTip("Move the selected sample up (left on the figure)")
+        self.down_btn = QToolButton(); self.down_btn.setText("▼"); self.down_btn.setToolTip("Move the selected sample down (right on the figure)")
+        self._bind(self.up_btn, lambda: self._move_sample(-1))
+        self._bind(self.down_btn, lambda: self._move_sample(+1))
         row = QHBoxLayout()
         for b in (self.new_sample_btn, self.add_cur_btn, self.add_csv_btn, self.assign_btn):
             row.addWidget(b)
-        row.addSpacing(10); row.addWidget(self.edit_btn); row.addWidget(self.remove_btn); row.addStretch()
+        row.addSpacing(10)
+        for b in (self.edit_btn, self.remove_btn, self.up_btn, self.down_btn):
+            row.addWidget(b)
+        row.addStretch()
         v.addLayout(row)
 
         self.tree = QTreeWidget()
@@ -267,9 +453,9 @@ class StudyTab(QWidget):
 
         self.count_lbl = QLabel("No samples yet — click “New sample”, then add its plates.")
         self.count_lbl.setObjectName("Placeholder")
-        self.clear_btn = QPushButton("Clear all"); self.clear_btn.clicked.connect(self._clear_all)
-        self.save_study_btn = QPushButton("Save study…"); self.save_study_btn.clicked.connect(self._save_study)
-        self.load_study_btn = QPushButton("Load study…"); self.load_study_btn.clicked.connect(self._load_study)
+        self.clear_btn = QPushButton("Clear all"); self._bind(self.clear_btn, self._clear_all)
+        self.save_study_btn = QPushButton("Save study…"); self._bind(self.save_study_btn, self._save_study)
+        self.load_study_btn = QPushButton("Load study…"); self._bind(self.load_study_btn, self._load_study)
         brow = QHBoxLayout(); brow.addWidget(self.count_lbl); brow.addStretch()
         for b in (self.clear_btn, self.save_study_btn, self.load_study_btn):
             brow.addWidget(b)
@@ -287,13 +473,13 @@ class StudyTab(QWidget):
         self.mode_lbl.setObjectName("Placeholder"); self.mode_lbl.setWordWrap(True)
         v.addWidget(self.mode_lbl)
 
-        # analyze controls: metric + control + test + Analyze
+        # analyze controls: metric + control + test + variances + compare-to + Analyze
         row = QHBoxLayout()
         self.metric_sel = QComboBox()
         for lab, key in self.METRICS:
             self.metric_sel.addItem(lab, key)
         self.metric_sel.setToolTip("Which measurement to analyze (both are stored per plate).")
-        self.metric_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
+        self.metric_sel.currentIndexChanged.connect(self._on_metric_changed)
         self.ctrl_cap = QLabel("Control:"); self.ctrl_cap.setObjectName("FieldLabel")
         self.control_sel = QComboBox(); self.control_sel.setMinimumWidth(120)
         self.control_sel.setToolTip("Grouped mode: every other 2nd-factor value is compared to THIS one.")
@@ -305,17 +491,40 @@ class StudyTab(QWidget):
         self.param_sel.setToolTip("Auto uses a parametric test on plate means at small n (SuperPlot "
                                   "recommendation); else normality checks decide.")
         self.param_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
+        # CT-R1 new options: one control each, no dialogs
+        self.var_cap = QLabel("Variances:"); self.var_cap.setObjectName("FieldLabel")
+        self.var_sel = QComboBox()
+        self.var_sel.addItem("Auto", "auto")
+        self.var_sel.addItem("Equal (ANOVA + Tukey)", "yes")
+        self.var_sel.addItem("Unequal (Welch)", "no")
+        self.var_sel.setToolTip("3 or more samples: Auto lets Levene's test decide; Equal = one-way ANOVA + "
+                                "Tukey; Unequal = Welch's ANOVA + Games-Howell. With 3 plates per sample "
+                                "Levene's test cannot see a difference in spread.")
+        self.var_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
+        self.cmp_to_cap = QLabel("Compare:"); self.cmp_to_cap.setObjectName("FieldLabel")
+        self.cmp_to_sel = QComboBox(); self.cmp_to_sel.setMinimumWidth(130)
+        self.cmp_to_sel.addItem("All pairs", None)
+        self.cmp_to_sel.setToolTip("All pairs (Tukey / Games-Howell / Dunn), or each sample vs one "
+                                   "reference sample (Dunnett's test).")
+        self.cmp_to_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
         self.analyse_btn = QPushButton("  Analyze  "); self.analyse_btn.setObjectName("Primary")
-        self.analyse_btn.clicked.connect(self._analyse)
+        self._bind(self.analyse_btn, self._analyse)
         row.addWidget(QLabel("Metric:")); row.addWidget(self.metric_sel)
         row.addSpacing(8); row.addWidget(self.ctrl_cap); row.addWidget(self.control_sel)
         row.addSpacing(8); row.addWidget(QLabel("Test:")); row.addWidget(self.param_sel)
+        row.addSpacing(8); row.addWidget(self.var_cap); row.addWidget(self.var_sel)
+        row.addSpacing(8); row.addWidget(self.cmp_to_cap); row.addWidget(self.cmp_to_sel)
         row.addStretch(); row.addWidget(self.analyse_btn)
         v.addLayout(row)
 
-        self.err = QLabel(""); self.err.setWordWrap(True)
-        self.err.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["warn"])
+        # CT-R1 F19: errors of the last action (cleared by every action) ...
+        self.err = _MsgLabel(""); self.err.setWordWrap(True); self.err.setVisible(False)
+        self.err.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["danger"])
         v.addWidget(self.err)
+        # ... and the statistics' own warnings (CT-R1 F9), which belong to the result on screen
+        self.warn_lbl = _MsgLabel(""); self.warn_lbl.setWordWrap(True); self.warn_lbl.setVisible(False)
+        self.warn_lbl.setStyleSheet("color:%s;font-weight:600" % style.LIGHT["warn"])
+        v.addWidget(self.warn_lbl)
 
         # stat chips
         self.stat_card = QFrame(); self.stat_card.setObjectName("SummaryCard"); _shadow(self.stat_card)
@@ -340,18 +549,20 @@ class StudyTab(QWidget):
         v.addWidget(self.results, 1)
 
         # export bar
-        self.savefig_btn = QPushButton("Save figure…"); self.savefig_btn.clicked.connect(self._save_fig)
-        self.savesum_btn = QPushButton("Save summary CSV…"); self.savesum_btn.clicked.connect(self._save_summary)
+        self.savefig_btn = QPushButton("Save figure…"); self._bind(self.savefig_btn, self._save_fig)
+        self.savesum_btn = QPushButton("Save summary CSV…"); self._bind(self.savesum_btn, self._save_summary)
         self.savedata_btn = QToolButton(); self.savedata_btn.setText("Save compiled data ▾")
         self.savedata_btn.setPopupMode(QToolButton.InstantPopup)
         dmenu = QMenu(self.savedata_btn)
-        dmenu.addAction("Wide — one row per plaque", self._save_data_wide)
-        dmenu.addAction("Long — group/replicate/metric/value (standalone-ready)", self._save_data_long)
+        dmenu.addAction("Wide — one row per plaque", lambda: self._run_action(self._save_data_wide))
+        dmenu.addAction("Long — group/replicate/metric/value (standalone-ready)",
+                        lambda: self._run_action(self._save_data_long))
         self.savedata_btn.setMenu(dmenu)
-        self.zip_btn = QPushButton("Export everything (ZIP)…"); self.zip_btn.clicked.connect(self._export_zip)
-        self.zip_btn.setToolTip("Figure in every format + summaries + pairwise + report + provenance, "
-                                "the same bundle as the standalone app.")
-        self.key_btn = QPushButton("Legend key…"); self.key_btn.clicked.connect(self._save_key)
+        self.zip_btn = QPushButton("Export everything (ZIP)…"); self._bind(self.zip_btn, self._export_zip)
+        self.zip_btn.setToolTip("Figure in every format + its legend key + summaries + pairwise + report + "
+                                "provenance, the same bundle as the standalone app.")
+        # CT-R1 F3: clicked(bool) used to arrive in _save_key as its path (False) -> TypeError
+        self.key_btn = QPushButton("Legend key…"); self._bind(self.key_btn, self._save_key)
         self.key_btn.setToolTip("Save the figure's legend key: every sample/plate with its exact "
                                 "colour and marker, in the figure's font and format.")
         s = QHBoxLayout()
@@ -366,7 +577,7 @@ class StudyTab(QWidget):
         # legend text starter: read-only, follows the figure on screen, one Copy button
         self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
         self.key_text.setPlaceholderText("Analyze to get a sentence listing every sample with its colour.")
-        self.key_copy_btn = QPushButton("Copy"); self.key_copy_btn.clicked.connect(self._copy_key_text)
+        self.key_copy_btn = QPushButton("Copy"); self._bind(self.key_copy_btn, self._copy_key_text)
         kt = QHBoxLayout()
         kcap = QLabel("Legend text starter"); kcap.setObjectName("FieldLabel")
         kt.addWidget(kcap); kt.addWidget(self.key_text, 1); kt.addWidget(self.key_copy_btn)
@@ -374,6 +585,7 @@ class StudyTab(QWidget):
         self._fig_ext = ".png"        # the format last chosen in "Save figure…" (the key follows it)
         self._export_buttons = [self.savefig_btn, self.key_btn, self.key_copy_btn, self.savesum_btn,
                                 self.savedata_btn, self.zip_btn]
+        self._figure_buttons = [self.savefig_btn, self.key_btn, self.key_copy_btn, self.zip_btn]
         for b in self._export_buttons:
             b.setEnabled(False)
 
@@ -389,9 +601,8 @@ class StudyTab(QWidget):
     def _build_plot_tab(self):
         w = QWidget(); outer = QVBoxLayout(w); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(6)
         outer.addWidget(self._build_customize_panel())
-        # figure area, in its own scroll so the pinned-size canvas scrolls instead of stretching
-        self.fig_scroll = QScrollArea(); self.fig_scroll.setWidgetResizable(True)
-        self.fig_scroll.setFrameShape(QFrame.NoFrame)
+        # CT-R1 F24: no second scroll area. The figure area is as tall as the canvas, so the tab's
+        # own scroll bar scrolls the figure (it used to sit squeezed in a 365 px inner scroll box).
         self.fig_holder = QWidget()
         self.fig_layout = QVBoxLayout(self.fig_holder)
         self.fig_layout.setContentsMargins(4, 4, 4, 4); self.fig_layout.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
@@ -399,8 +610,12 @@ class StudyTab(QWidget):
         self.fig_placeholder.setObjectName("Placeholder"); self.fig_placeholder.setAlignment(Qt.AlignCenter)
         self.fig_placeholder.setMinimumHeight(360)
         self.fig_layout.addWidget(self.fig_placeholder)
-        self.fig_scroll.setWidget(self.fig_holder)
-        outer.addWidget(self.fig_scroll, 1)
+        outer.addWidget(self.fig_holder, 1)
+        # CT-R1 F12: what the marks are, under the figure (the same sentence ends the text starter)
+        self.fig_caption = QLabel(""); self.fig_caption.setWordWrap(True)
+        self.fig_caption.setObjectName("Placeholder")
+        self.fig_caption.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        outer.addWidget(self.fig_caption)
         return w
 
     def _build_customize_panel(self):
@@ -410,6 +625,7 @@ class StudyTab(QWidget):
         def add(r, c, label, widget):
             cap = QLabel(label); cap.setObjectName("FieldLabel")
             g.addWidget(cap, r, c * 2); g.addWidget(widget, r, c * 2 + 1)
+            return cap
 
         # combos
         self.palette_sel = QComboBox()
@@ -417,9 +633,13 @@ class StudyTab(QWidget):
             self.palette_sel.addItem(lab, key)
         self.palette_custom = QLineEdit(); self.palette_custom.setPlaceholderText("or #hex,#hex,…")
         self.palette_custom.setMaximumWidth(150)
+        self.palette_custom.setToolTip("Your own colours, comma-separated hex codes. It needs one colour per "
+                                       "coloured item (sample, plate or 2nd-factor value).")
         self.fill_sel = QComboBox()
         for lab, key in [("Auto", "auto"), ("Neutral (grey)", "neutral"), ("Colored", "group")]:
             self.fill_sel.addItem(lab, key)
+        self.fill_sel.setToolTip("Auto: grey violins when the plates carry the colours, coloured violins "
+                                 "otherwise. The palette colours whatever is coloured.")
         self.center_sel = QComboBox()
         for lab, key in [("Mean", "mean"), ("Median", "median")]:
             self.center_sel.addItem(lab, key)
@@ -429,8 +649,11 @@ class StudyTab(QWidget):
             self.error_sel.addItem(lab, key)
         self.annot_sel = QComboBox()
         for lab, key in [("Auto brackets", "auto"), ("All pairs", "all"), ("Adjacent", "adjacent"),
-                         ("None", "none")]:
+                         ("None", "none"), ("Letters", "letters")]:
             self.annot_sel.addItem(lab, key)
+        self.annot_sel.setToolTip("Letters: a compact letter display (samples sharing a letter are not "
+                                  "significantly different). Auto with more than 5 samples shows only the "
+                                  "significant comparisons against the reference sample.")
         self.theme_sel = QComboBox()
         for lab, key in [("Clean", "clean"), ("Grid", "grid")]:
             self.theme_sel.addItem(lab, key)
@@ -444,9 +667,11 @@ class StudyTab(QWidget):
         self.point_size = QDoubleSpinBox(); self.point_size.setRange(2, 40); self.point_size.setValue(16); self.point_size.setSingleStep(1)
         self.jitter = QDoubleSpinBox(); self.jitter.setRange(0, 0.30); self.jitter.setValue(0.08); self.jitter.setSingleStep(0.01); self.jitter.setDecimals(2)
         self.alpha = QDoubleSpinBox(); self.alpha.setRange(0.05, 1.0); self.alpha.setValue(0.55); self.alpha.setSingleStep(0.05); self.alpha.setDecimals(2)
+        self.alpha.setToolTip("Violin opacity: higher = more solid (0.55 is the default look).")
         self.width_in = QDoubleSpinBox(); self.width_in.setRange(4, 16); self.width_in.setValue(8.4); self.width_in.setSingleStep(0.2); self.width_in.setDecimals(1)
         self.height_in = QDoubleSpinBox(); self.height_in.setRange(3, 12); self.height_in.setValue(5.4); self.height_in.setSingleStep(0.2); self.height_in.setDecimals(1)
         self.dpi_in = QSpinBox(); self.dpi_in.setRange(72, 600); self.dpi_in.setValue(300); self.dpi_in.setSingleStep(50)
+        self.dpi_in.setToolTip("Resolution of every raster export (Save figure, legend key, ZIP), TIFF included.")
         self.seed_in = QSpinBox(); self.seed_in.setRange(0, 9999); self.seed_in.setValue(7)
 
         # checkboxes
@@ -459,30 +684,42 @@ class StudyTab(QWidget):
         self.legend_cb.setToolTip("Draw the legend key on the figure itself (the same entries as the "
                                   "stand-alone key from “Legend key…”).")
         self.logy_cb = QCheckBox("log Y"); self.logy_cb.setChecked(False)
+        # CT-R1 F15: values <= 0 cannot be drawn on a log axis -- the engine refuses unless asked
+        self.logy_drop_cb = QCheckBox("hide ≤ 0"); self.logy_drop_cb.setChecked(False)
+        self.logy_drop_cb.setToolTip("With log Y: leave values that are zero or negative off the figure "
+                                     "(they stay in the statistics, and the figure says how many).")
         self.frame_cb = QCheckBox("full frame"); self.frame_cb.setChecked(False)
 
-        # layout: 4 rows × 3 label/widget pairs
-        add(0, 0, "Palette", self.palette_sel); add(0, 1, "Custom", self.palette_custom); add(0, 2, "Violin fill", self.fill_sel)
+        # layout: 6 rows × 3 label/widget pairs
+        add(0, 0, "Palette", self.palette_sel); add(0, 1, "Custom", self.palette_custom)
+        self.fill_cap = add(0, 2, "Violin fill", self.fill_sel)
         add(1, 0, "Center", self.center_sel); add(1, 1, "Error bars", self.error_sel); add(1, 2, "Brackets", self.annot_sel)
         add(2, 0, "Title", self.title_in); add(2, 1, "Y label", self.ylabel_in); add(2, 2, "X label", self.xlabel_in)
-        add(3, 0, "Point size", self.point_size); add(3, 1, "Jitter", self.jitter); add(3, 2, "Transparency", self.alpha)
+        # CT-R1 F13: "Transparency" 1.0 was opaque -- it is an opacity
+        add(3, 0, "Point size", self.point_size); add(3, 1, "Jitter", self.jitter); add(3, 2, "Opacity", self.alpha)
         add(4, 0, "Width (in)", self.width_in); add(4, 1, "Height (in)", self.height_in); add(4, 2, "Export DPI", self.dpi_in)
         add(5, 0, "Theme", self.theme_sel); add(5, 1, "Seed", self.seed_in)
         cbrow = QHBoxLayout()
-        for cb in (self.show_points, self.show_n, self.show_value, self.logy_cb, self.frame_cb):
+        for cb in (self.show_points, self.show_n, self.show_value, self.logy_cb, self.logy_drop_cb, self.frame_cb):
             cbrow.addWidget(cb)
         cbrow.addStretch()
         g.addLayout(cbrow, 5, 4, 1, 2)
 
         # wire every cosmetic control to a live redraw
+        self.center_sel.currentIndexChanged.connect(self._sync_controls)
+        self.show_points.toggled.connect(self._sync_controls)
+        self.logy_cb.toggled.connect(self._sync_controls)
         for c in (self.palette_sel, self.fill_sel, self.center_sel, self.error_sel, self.annot_sel, self.theme_sel):
             c.currentIndexChanged.connect(self._on_cosmetic)
+        self.ylabel_in.editingFinished.connect(self._remember_ylabel)
         for e in (self.palette_custom, self.title_in, self.ylabel_in, self.xlabel_in):
             e.editingFinished.connect(self._on_cosmetic)
         for sp in (self.point_size, self.jitter, self.alpha, self.width_in, self.height_in, self.dpi_in, self.seed_in):
             sp.valueChanged.connect(self._on_cosmetic)
-        for cb in (self.show_points, self.show_n, self.show_value, self.legend_cb, self.logy_cb, self.frame_cb):
+        for cb in (self.show_points, self.show_n, self.show_value, self.legend_cb, self.logy_cb,
+                   self.logy_drop_cb, self.frame_cb):
             cb.toggled.connect(self._on_cosmetic)
+        self._sync_controls()
         return box
 
     def _table_view(self):
@@ -495,7 +732,7 @@ class StudyTab(QWidget):
 
     def _build_summary_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(4, 6, 4, 4); v.setSpacing(4)
-        v.addWidget(self._heading("Per sample"))
+        v.addWidget(self._heading("Per sample — plate level (the statistical unit) and per plaque"))
         self.tbl_group = self._table_view(); v.addWidget(self.tbl_group, 1)
         v.addWidget(self._heading("Per replicate plate (the experimental unit)"))
         self.tbl_rep = self._table_view(); v.addWidget(self.tbl_rep, 1)
@@ -514,7 +751,7 @@ class StudyTab(QWidget):
         self.report.setStyleSheet("QPlainTextEdit{background:#ffffff;color:#1f2430;"
                                   "border:1px solid #c7ccd6;border-radius:8px;padding:8px;}")
         v.addWidget(self.report, 1)
-        self.copy_btn = QPushButton("Copy report"); self.copy_btn.clicked.connect(self._copy_report)
+        self.copy_btn = QPushButton("Copy report"); self._bind(self.copy_btn, self._copy_report)
         r = QHBoxLayout(); r.addWidget(self.copy_btn); r.addStretch()
         v.addLayout(r)
         return w
@@ -536,12 +773,16 @@ class StudyTab(QWidget):
         self._samples.append({"group": name, "subgroup": sub})
         self._refresh_tree()
         self._select_sample(len(self._samples) - 1)
-        self.window().statusBar().showMessage("Sample '%s' created — now add its plates." % name, 5000)
+        self._status("Sample '%s' created — now add its plates." % name, 5000)
 
     def _edit_sample(self):
+        it = self.tree.currentItem()
+        data = it.data(0, Qt.UserRole) if it is not None else None
+        if data and data[0] == "plate":                     # CT-R1 F17: a plate can be renamed
+            return self._rename_plate(data[1])
         idx = self._selected_sample_index()
         if idx is None:
-            self._warn("Select a sample to edit."); return
+            self._warn("Select a sample (or a plate) to edit."); return
         s = self._samples[idx]
         dlg = _SampleDialog(self, s["group"], s.get("subgroup", ""))
         if dlg.exec() != QDialog.Accepted:
@@ -558,6 +799,36 @@ class StudyTab(QWidget):
             if p["group"] == old_g and p.get("subgroup", "") == old_s:
                 p["group"], p["subgroup"] = name, sub
         self._refresh_tree()
+        self._select_sample(idx)
+
+    def _rename_plate(self, pid):
+        p = next((x for x in self._plates if id(x) == pid), None)
+        if p is None:
+            return
+        text, ok = QInputDialog.getText(self, "Rename plate",
+                                        "Plate id (unique within sample '%s'):" % p["group"],
+                                        QLineEdit.Normal, p["replicate"])
+        if not ok:
+            return
+        new = (text or "").strip()
+        if not new:
+            self._warn("A plate needs an id."); return
+        if any(q is not p and q["group"] == p["group"] and q.get("subgroup", "") == p.get("subgroup", "")
+               and q["replicate"] == new for q in self._plates):
+            self._warn("Sample '%s' already has a plate '%s'." % (p["group"], new)); return
+        p["replicate"] = new
+        self._refresh_tree()
+
+    def _move_sample(self, step):
+        idx = self._selected_sample_index()
+        if idx is None:
+            self._warn("Select a sample to move."); return
+        j = idx + step
+        if not 0 <= j < len(self._samples):
+            return
+        self._samples[idx], self._samples[j] = self._samples[j], self._samples[idx]
+        self._refresh_tree()
+        self._select_sample(j)
 
     def _target_sample_index(self):
         """Where new plates go: the selected sample (or the sample of a selected plate), else the
@@ -581,64 +852,117 @@ class StudyTab(QWidget):
             self._warn("No measured plaques on the Measure tab. Open an image and detect first."); return
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
-            self._warn("Couldn't find a diameter column on the current measurement."); return
+            self._warn("Couldn't find a diameter-in-mm column on the current measurement."); return
         diam = pd.to_numeric(df[dc], errors="coerce").dropna().tolist()
         area = pd.to_numeric(df[ac], errors="coerce").dropna().tolist() if ac else []
-        self._add_plate(idx, diam, area)
+        # CT-R1 F25: clicking twice used to add the same plate twice (pseudo-replicates)
+        twin = next((p for p in self._plates if p.get("diam") == diam and diam), None)
+        if twin is not None:
+            q = QMessageBox.question(
+                self, "Plate already added",
+                "This measurement (%d plaques) is already in the study as plate '%s' of sample '%s'.\n\n"
+                "Add it again as another plate? Only do this if it really is a different plate."
+                % (len(diam), twin["replicate"], twin["group"]),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if q != QMessageBox.Yes:
+                self._status("Not added: that plate is already in the study.", 5000)
+                return
+        src = os.path.basename(str(getattr(mt, "image_path", "") or "")) or "Measure tab"
+        self._add_plate(idx, diam, area, source=src)
         self._refresh_tree(); self._select_sample(idx)
         s = self._samples[idx]
-        self.window().statusBar().showMessage(
-            "Added a plate to '%s' (%d plaques)." % (s["group"], len(diam)), 5000)
+        self._status("Added a plate to '%s' (%d plaques)." % (s["group"], len(diam)), 5000)
 
     def _add_csvs(self):
         idx = self._target_sample_index()
         if idx is None:
             self._warn("Create or select a sample first, then add CSV(s) to it."); return
         paths, _ = QFileDialog.getOpenFileNames(self, "Add per-plaque CSV(s) as replicate plates", "",
-                                                "CSV files (*.csv);;All files (*.*)")
+                                                "CSV files (*.csv *.tsv *.txt);;All files (*.*)")
         if not paths:
             return
-        added = 0
+        added, problems = 0, []
         for p in paths:
-            r = self._parse_csv(p)
+            r = self._parse_csv(p, problems)
             if r is None:
                 continue
-            self._add_plate(idx, r[0], r[1], rep=os.path.splitext(os.path.basename(p))[0])
+            # CT-R1 F17: plate ids are plate1..n within the sample; the file name is the source
+            self._add_plate(idx, r[0], r[1], source=os.path.basename(p))
             added += 1
         if added:
             self._refresh_tree(); self._select_sample(idx)
-            self.window().statusBar().showMessage("Added %d replicate plate(s)." % added, 5000)
+            self._status("Added %d replicate plate(s)." % added, 5000)
+        if problems:
+            self._warn(" ".join(problems))
 
-    def _parse_csv(self, path):
-        """Read a per-plaque CSV → (diam list, area list), or None with a warning."""
+    def _parse_csv(self, path, problems=None):
+        """Read a per-plaque CSV → (diam list, area list), or None (the reason is appended to
+        `problems`, or shown). CT-R1 F6: the diameter must be a diameter-in-mm column (or the
+        column the user names when asked); ';' tables and decimal commas are read; binary/JSON
+        files, non-numbers and values <= 0 are refused; a file without plaques becomes a
+        zero-plaque plate only after the user confirms."""
+        name = os.path.basename(path)
+
+        def fail(msg):
+            if problems is None:
+                self._warn(msg)
+            else:
+                problems.append(msg)
+            return None
+
         try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            self._warn("Could not read %s: %s" % (os.path.basename(path), e)); return None
+            df = _read_text_table(path)
+        except (ValueError, OSError) as e:
+            return fail("%s — skipped." % e)
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
-            num = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-            if len(num) == 1:
-                dc = num[0]
-            else:
-                self._warn("No diameter column in %s — skipped." % os.path.basename(path)); return None
-        diam = pd.to_numeric(df[dc], errors="coerce").dropna().tolist()
-        area = pd.to_numeric(df[ac], errors="coerce").dropna().tolist() if ac else []
+            numeric = [c for c in df.columns if _numbers(df[c])[1] == 0 and _numbers(df[c])[0].notna().any()
+                       and not _NOT_MM_RE.search(str(c).lower())]      # no µm / px / cm columns
+            if not numeric:
+                return fail("%s has no diameter-in-mm column (columns: %s) — skipped."
+                            % (name, ", ".join(map(str, df.columns))))
+            item, ok = QInputDialog.getItem(
+                self, "Which column is the diameter?",
+                "%s has no column named like 'diameter_mm'.\nWhich column holds the plaque DIAMETER "
+                "in millimetres? (Cancel skips the file.)" % name, [str(c) for c in numeric], 0, False)
+            if not ok or not item:
+                return fail("%s skipped: no diameter-in-mm column chosen." % name)
+            dc = item
+        d, nbad = _numbers(df[dc])
+        if nbad:
+            return fail("%s: %d cell(s) of '%s' are not numbers — skipped." % (name, nbad, dc))
+        diam = d.dropna().tolist()
+        if any(x <= 0 for x in diam):
+            return fail("%s: %d diameter(s) are zero or negative, which is not a plaque diameter in mm "
+                        "— skipped." % (name, sum(1 for x in diam if x <= 0)))
+        area = []
+        if ac is not None:
+            a, abad = _numbers(df[ac])
+            area = a.dropna().tolist() if not abad else []
+        if not diam:
+            q = QMessageBox.question(
+                self, "No plaques in the file",
+                "%s has no plaque rows. Add it as a plate with ZERO plaques?" % name,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if q != QMessageBox.Yes:
+                return fail("%s skipped: it has no plaques." % name)
         return diam, area
 
     def _import_assign(self):
         """Pick many plate CSVs and map each (one plate) to a sample in one dialog → real replicates."""
         paths, _ = QFileDialog.getOpenFileNames(self, "Import plate CSVs and assign to samples", "",
-                                                "CSV files (*.csv);;All files (*.*)")
+                                                "CSV files (*.csv *.tsv *.txt);;All files (*.*)")
         if not paths:
             return
-        parsed = []
+        parsed, problems = [], []
         for p in paths:
-            r = self._parse_csv(p)
+            r = self._parse_csv(p, problems)
             if r is None:
                 continue
             parsed.append({"path": p, "stem": os.path.splitext(os.path.basename(p))[0],
                            "n": len(r[0]), "diam": r[0], "area": r[1]})
+        if problems:
+            self._warn(" ".join(problems))
         if not parsed:
             return
         dlg = _AssignDialog(self, parsed, self._samples)
@@ -647,8 +971,8 @@ class StudyTab(QWidget):
         self._apply_assignments(dlg.rows())
 
     def _apply_assignments(self, rows):
-        """rows: [{sample, subgroup, replicate, diam, area}] — each becomes ONE plate under its sample
-        (created if new). The many-CSVs → real-replicates flow (each CSV is a plate)."""
+        """rows: [{sample, subgroup, replicate, diam, area, source}] — each becomes ONE plate under
+        its sample (created if new). The many-CSVs → real-replicates flow (each CSV is a plate)."""
         added = 0
         for r in rows:
             g = (r.get("sample") or "").strip()
@@ -659,12 +983,12 @@ class StudyTab(QWidget):
                        if s["group"] == g and s.get("subgroup", "") == sub), None)
             if si is None:
                 self._samples.append({"group": g, "subgroup": sub}); si = len(self._samples) - 1
-            self._add_plate(si, r["diam"], r.get("area") or [], rep=(r.get("replicate") or "").strip() or None)
+            self._add_plate(si, r["diam"], r.get("area") or [],
+                            rep=(r.get("replicate") or "").strip() or None, source=r.get("source", ""))
             added += 1
         if added:
             self._refresh_tree()
-            self.window().statusBar().showMessage(
-                "Imported %d plate(s) across %d sample(s)." % (added, len(self._samples)), 6000)
+            self._status("Imported %d plate(s) across %d sample(s)." % (added, len(self._samples)), 6000)
         return added
 
     def _next_auto_rep(self, group, subgroup=""):
@@ -677,21 +1001,32 @@ class StudyTab(QWidget):
             i += 1
         return "plate%d" % i
 
-    def _add_plate(self, s_idx, diam, area, rep=None):
+    def _add_plate(self, s_idx, diam, area, rep=None, source=""):
         s = self._samples[s_idx]
         g, sub = s["group"], s.get("subgroup", "")
         if not rep or any(p["group"] == g and p.get("subgroup", "") == sub and p["replicate"] == rep
                           for p in self._plates):
             rep = self._next_auto_rep(g, sub)        # blank or clashing id → next free one
         self._plates.append({"group": g, "subgroup": sub, "replicate": rep,
-                             "diam": list(diam), "area": list(area)})
+                             "diam": list(diam), "area": list(area), "source": source or ""})
 
     def _plates_of(self, s):
         return [p for p in self._plates
                 if p["group"] == s["group"] and p.get("subgroup", "") == s.get("subgroup", "")]
 
+    def _plates_in_order(self):
+        """Every plate, sample by sample in the samples' order (the figure's x order)."""
+        out = []
+        for s in self._samples:
+            out.extend(self._plates_of(s))
+        return out
+
     # ---------------------------------------------------------------- tree view
-    def _refresh_tree(self):
+    def _refresh_tree(self, dirty=True):
+        """Redraw the sample tree. Every caller changed the compiled study, so the study becomes
+        unsaved (dirty) unless told otherwise (Load / Save / Clear)."""
+        if dirty and not self._building:
+            self._dirty = True
         self._invalidate_analysis()
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -716,6 +1051,8 @@ class StudyTab(QWidget):
                 child = QTreeWidgetItem(["    " + p["replicate"], "",
                                          str(len(d)), ("%.3f" % np.mean(d)) if d else "—"])
                 child.setData(0, Qt.UserRole, ("plate", id(p)))
+                if p.get("source"):
+                    child.setToolTip(0, "Source: %s" % p["source"])
                 top.addChild(child)
             top.setExpanded(True)
         self.tree.blockSignals(False)
@@ -771,25 +1108,68 @@ class StudyTab(QWidget):
         if QMessageBox.question(self, "Clear all",
                                 "Remove all samples and plates?") == QMessageBox.Yes:
             self._samples = []; self._plates = []
-            self._refresh_tree()
+            self._refresh_tree(dirty=False)
+            self._dirty = False
+            self.warn_lbl.setText("")
+
+    # ---------------------------------------------------------------- unsaved study on close
+    def confirm_close(self):
+        """CT-R1 F25: True when the app may close. An unsaved study asks first (MainWindow's
+        closeEvent calls this). A hidden window (tests, teardown) never asks."""
+        w = self.window()
+        if not (self._dirty and self._samples) or w is None or not w.isVisible():
+            return True
+        q = QMessageBox.question(
+            self, "Unsaved study",
+            "The Analyze tab holds a study that is not saved (%d sample(s), %d plate(s)).\n\n"
+            "Close anyway and lose it? Choose No, then Save study…, to keep it."
+            % (len(self._samples), len(self._plates)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return q == QMessageBox.Yes
 
     # ================================================================ PERSISTENCE
     def _tidy_frame(self):
+        """One row per plaque, sample by sample in the samples' order (what is analysed)."""
         rows = []
-        for pl in self._plates:
+        for pl in self._plates_in_order():
             diam = pl.get("diam") or []
             area = pl.get("area") or []
             for i in range(max(len(diam), len(area))):
                 rows.append({"group": pl["group"], "subgroup": pl.get("subgroup", ""),
                              "replicate": pl["replicate"],
                              "diameter_mm": diam[i] if i < len(diam) else np.nan,
-                             "area_mm2": area[i] if i < len(area) else np.nan})
-        return pd.DataFrame(rows, columns=["group", "subgroup", "replicate", "diameter_mm", "area_mm2"])
+                             "area_mm2": area[i] if i < len(area) else np.nan,
+                             "source": pl.get("source", "")})
+        return pd.DataFrame(rows, columns=["group", "subgroup", "replicate", "diameter_mm",
+                                           "area_mm2", "source"])
+
+    def _study_frame(self):
+        """The study file (CT-R1 F5): the per-plaque rows in sample order, plus one row with blank
+        values for every plate without plaques and one row with a blank plate for every sample
+        without plates, so Load study gets back exactly the samples, order and plates."""
+        rows = []
+        for s in self._samples:
+            plates = self._plates_of(s)
+            if not plates:
+                rows.append({"group": s["group"], "subgroup": s.get("subgroup", ""), "replicate": "",
+                             "diameter_mm": np.nan, "area_mm2": np.nan, "source": ""})
+            for pl in plates:
+                diam = pl.get("diam") or []
+                area = pl.get("area") or []
+                n = max(len(diam), len(area))
+                for i in range(max(n, 1)):
+                    rows.append({"group": pl["group"], "subgroup": pl.get("subgroup", ""),
+                                 "replicate": pl["replicate"],
+                                 "diameter_mm": diam[i] if i < len(diam) else np.nan,
+                                 "area_mm2": area[i] if i < len(area) else np.nan,
+                                 "source": pl.get("source", "")})
+        return pd.DataFrame(rows, columns=["group", "subgroup", "replicate", "diameter_mm",
+                                           "area_mm2", "source"])
 
     def _long_frame(self):
         """Standalone-ready LONG format: one row per (plaque, metric)."""
         rows = []
-        for pl in self._plates:
+        for pl in self._plates_in_order():
             for metric, key in (("diameter_mm", "diam"), ("area_mm2", "area")):
                 for val in (pl.get(key) or []):
                     rows.append({"group": pl["group"], "subgroup": pl.get("subgroup", ""),
@@ -797,62 +1177,105 @@ class StudyTab(QWidget):
         return pd.DataFrame(rows, columns=["group", "subgroup", "replicate", "metric", "value"])
 
     def _save_study(self):
-        if not self._plates:
+        if not self._samples:
             self._warn("Nothing to save yet."); return
         path, _ = QFileDialog.getSaveFileName(self, "Save study", "plaque_study.csv", "CSV (*.csv)")
         if not path:
             return
-        self._tidy_frame().to_csv(path, index=False)
-        self.window().statusBar().showMessage("Study saved: %s" % path, 5000)
+        if not os.path.splitext(path)[1]:
+            path += ".csv"
+        self._study_frame().to_csv(path, index=False)
+        self._dirty = False
+        self._status("Study saved: %s" % path, 5000)
 
     def _load_study(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load study", "", "CSV (*.csv);;All files (*.*)")
+        if self._dirty and self._samples:                      # CT-R1 F5: ask before replacing
+            q = QMessageBox.question(
+                self, "Replace the current study?",
+                "The current study (%d sample(s)) has changes that are not saved. Load another study "
+                "and replace it?" % len(self._samples), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if q != QMessageBox.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(self, "Load study", "", "CSV (*.csv *.tsv *.txt);;All files (*.*)")
         if not path:
             return
         try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            self._warn("Could not read study: %s" % e); return
+            df = _read_text_table(path)
+        except (ValueError, OSError) as e:
+            self._warn("Could not read the study: %s" % e); return
         self._load_frame(df, os.path.basename(path))
 
     def _load_frame(self, df, source="study"):
+        """Rebuild samples and plates from a study table: the tab's own Save study file (with its
+        empty-plate / empty-sample rows), the Wide or Long compiled-data export, or any table with
+        a group column and a diameter-in-mm (or area) column. Labels stay exactly as typed
+        (CT-R1 F5: None / NA / 007 / 1.0 used to become nan / 7.0 / 1.0)."""
         df = df.copy()
         df.columns = [str(c).strip().lower() for c in df.columns]
         if "group" not in df.columns:
             self._warn("The study file needs a 'group' column."); return
+        for c in df.columns:
+            if df[c].dtype == object or str(df[c].dtype) == "string":
+                df[c] = df[c].fillna("").astype(str).str.strip()
         scol = "subgroup" if "subgroup" in df.columns else None
         rcol = "replicate" if "replicate" in df.columns else None
-        dcol = _diam_col(df); acol = _area_col(df)
-        if dcol is None and acol is None:
-            self._warn("The study file needs a diameter or area column."); return
-        self._plates = []; self._samples = []
-        has_rep = rcol is not None
-        keys = ["group"] + ([scol] if scol else []) + ([rcol] if has_rep else [])
-        # sort=False preserves the saved sample/plate order (drives x-axis + the default control)
-        for key, sub in df.groupby(keys, dropna=False, sort=False):
-            key = key if isinstance(key, tuple) else (key,)
-            kd = dict(zip(keys, key))
-            g = str(kd.get("group", ""))
-            sg = "" if not scol or pd.isna(kd.get(scol)) else str(kd.get(scol))
-            diam = pd.to_numeric(sub[dcol], errors="coerce").dropna().tolist() if dcol else []
-            area = pd.to_numeric(sub[acol], errors="coerce").dropna().tolist() if acol else []
-            # NO replicate column → all plaques of a sample are ONE pooled plate, so the stats fall
-            # back to the plaque unit + the pseudoreplication warning. Never fabricate a fake plate
-            # per plaque (that would report per-plaque stats as if they were valid plate-level stats).
-            rep = str(kd.get(rcol, "")) if has_rep else "plate1"
-            self._plates.append({"group": g, "subgroup": sg, "replicate": rep, "diam": diam, "area": area})
-            if not any(x["group"] == g and x["subgroup"] == sg for x in self._samples):
-                self._samples.append({"group": g, "subgroup": sg})
-        self._refresh_tree()
-        self.window().statusBar().showMessage(
-            "Loaded %d sample(s) · %d plate(s) from %s"
-            % (len(self._samples), len(self._plates), source), 5000)
+        long_mode = "metric" in df.columns and "value" in df.columns
+        if long_mode:
+            # CT-R1 F25: the tab's own "Long" export loads too
+            met = df["metric"].astype(str).str.strip().str.lower()
+            is_d = met.map(lambda m: "diam" in m and not _NOT_MM_RE.search(m))
+            is_a = met.map(lambda m: "area" in m and not _NOT_MM_RE.search(m))
+            if not (is_d.any() or is_a.any()):
+                self._warn("The long-format file has no diameter or area metric."); return
+            vals, nbad = _numbers(df["value"])
+            df = df.assign(_d=vals.where(is_d), _a=vals.where(is_a))
+            dcol, acol = "_d", "_a"
+        else:
+            dcol, acol = _diam_col(df), _area_col(df)
+            if dcol is None and acol is None:
+                self._warn("The study file needs a diameter_mm (or area_mm2) column."); return
+            for c in (dcol, acol):
+                if c is not None:
+                    num, nbad = _numbers(df[c])
+                    if nbad:
+                        self._warn("%d cell(s) of '%s' are not numbers." % (nbad, c)); return
+                    df[c] = num
+        samples, plates, index = [], [], {}
+        for _, r in df.iterrows():
+            g = str(r["group"]).strip()
+            if not g:
+                continue
+            sg = str(r[scol]).strip() if scol else ""
+            rep = str(r[rcol]).strip() if rcol else "plate1"
+            d = r[dcol] if dcol else np.nan
+            a = r[acol] if acol else np.nan
+            if not any(x["group"] == g and x["subgroup"] == sg for x in samples):
+                samples.append({"group": g, "subgroup": sg})
+            if rcol and not rep:
+                if d == d or a == a:
+                    rep = "plate1"                  # values with a blank plate id: one pooled plate
+                else:
+                    continue                         # an empty-sample placeholder row
+            key = (g, sg, rep)
+            if key not in index:
+                index[key] = {"group": g, "subgroup": sg, "replicate": rep, "diam": [], "area": [],
+                              "source": str(r["source"]).strip() if "source" in df.columns else ""}
+                plates.append(index[key])
+            if d == d:
+                index[key]["diam"].append(float(d))
+            if a == a:
+                index[key]["area"].append(float(a))
+        self._samples, self._plates = samples, plates
+        self._refresh_tree(dirty=False)
+        self._dirty = False
+        self._status("Loaded %d sample(s) · %d plate(s) from %s"
+                     % (len(self._samples), len(self._plates), source), 5000)
 
     # ================================================================ ANALYSIS
     @staticmethod
     def _is_tagged(sub):
-        s = str(sub).strip()
-        return bool(s) and s.lower() != "nan"
+        # CT-R1 F2: a 2nd-factor tag is any non-blank text ('None', 'NA', 'nan' are tags)
+        return bool(str(sub if sub is not None else "").strip())
 
     def _ordered_groups(self, present=None):
         out = []
@@ -871,11 +1294,11 @@ class StudyTab(QWidget):
         return out
 
     def _opts(self, metric_key):
-        from plaque_stats import plaque_stats as ps
+        ps = _engine()
         o = dict(ps.DEFAULTS)
-        # palette: custom hex wins, else named
+        # palette: custom hex wins, else named (the engine checks the colours and their number)
         custom = self.palette_custom.text().strip()
-        cols = [c.strip() for c in custom.split(",") if c.strip()] if custom else []
+        cols = [c.strip() for c in re.split(r"[,;\s]+", custom) if c.strip()] if custom else []
         o["palette"] = cols if cols else ps.PALETTES.get(self.palette_sel.currentData(), ps.OKABE_ITO)
         o["violin_fill"] = self.fill_sel.currentData()
         o["center"] = self.center_sel.currentData()
@@ -887,6 +1310,7 @@ class StudyTab(QWidget):
         o["show_value"] = self.show_value.isChecked()
         o["legend"] = self.legend_cb.isChecked()
         o["log_y"] = self.logy_cb.isChecked()
+        o["log_y_drop_nonpositive"] = self.logy_cb.isChecked() and self.logy_drop_cb.isChecked()
         o["frame"] = self.frame_cb.isChecked()
         o["point_size"] = float(self.point_size.value())
         o["jitter"] = float(self.jitter.value())
@@ -899,27 +1323,94 @@ class StudyTab(QWidget):
         o["ylabel"] = self.ylabel_in.text().strip() or default_y
         o["title"] = self.title_in.text().strip() or None
         o["xlabel"] = self.xlabel_in.text().strip()
+        # the reference sample of "Compare: vs X" (Dunnett) is also the figure's bracket reference
+        grouped = any(self._is_tagged(p.get("subgroup", "")) for p in self._plates)
+        o["control"] = None if grouped else self.cmp_to_sel.currentData()
         return o
+
+    def _stat_choices(self):
+        """The statistics options on screen -> engine arguments. ONE place, used by Analyze and
+        by the ZIP, so the two can never disagree again (CT-R1 F2/F14)."""
+        ctrl = self.cmp_to_sel.currentData()
+        return {"parametric": self.param_sel.currentData(),
+                "equal_var": self.var_sel.currentData(),
+                "posthoc": "dunnett" if ctrl else "auto",
+                "control": ctrl}
 
     def _reanalyse_if_ready(self, *_):
         if not self._building and self._last is not None:
-            self._analyse()
+            self._run_action(self._analyse)
+
+    def _on_metric_changed(self, *_):
+        # CT-R1 F21: a typed Y label belongs to the metric it was typed for
+        self.ylabel_in.blockSignals(True)
+        self.ylabel_in.setText(self._ylabels.get(self.metric_sel.currentData(), ""))
+        self.ylabel_in.blockSignals(False)
+        self._reanalyse_if_ready()
+
+    def _remember_ylabel(self):
+        self._ylabels[self.metric_sel.currentData()] = self.ylabel_in.text().strip()
 
     def _on_cosmetic(self, *_):
         if not self._building and self._last is not None:
+            self._clear_err()
             self._redraw()
 
+    def _sync_controls(self, *_):
+        """Offer only combinations that mean something (CT-R1 F13/F15/F16): around a median only
+        IQR / 95 % CI / none; Jitter only with raw plaques; 'hide ≤ 0' only with log Y; in
+        grouped mode the violins are always grey and brackets are always vs the control."""
+        median = self.center_sel.currentData() == "median"
+        m = self.error_sel.model()
+        for i in range(self.error_sel.count()):
+            if self.error_sel.itemData(i) in ("sem", "sd"):
+                m.item(i).setEnabled(not median)
+        if median and self.error_sel.currentData() in ("sem", "sd"):
+            self.error_sel.blockSignals(True)
+            self.error_sel.setCurrentIndex(self.error_sel.findData("iqr"))
+            self.error_sel.blockSignals(False)
+            if not self._building:
+                self._status("Median: error bars switched to IQR (SD and SEM describe a mean).", 6000)
+        self.error_sel.setToolTip("Around a median: IQR, a bootstrap 95 % CI of the median, or none." if median
+                                  else "Around a mean: SEM, 95 % CI, SD, IQR or none (Auto = SEM).")
+        self.jitter.setEnabled(self.show_points.isChecked())
+        self.logy_drop_cb.setEnabled(self.logy_cb.isChecked())
+        grouped = any(self._is_tagged(p.get("subgroup", "")) for p in self._plates)
+        self.fill_sel.setEnabled(not grouped)
+        self.fill_sel.setToolTip("Grouped mode: the violins are always grey; the palette colours the "
+                                 "2nd-factor values." if grouped else
+                                 "Auto: grey violins when the plates carry the colours, coloured violins "
+                                 "otherwise. The palette colours whatever is coloured.")
+        am = self.annot_sel.model()
+        for i in range(self.annot_sel.count()):
+            if self.annot_sel.itemData(i) in ("all", "adjacent", "letters"):
+                am.item(i).setEnabled(not grouped)
+        if grouped and self.annot_sel.currentData() in ("all", "adjacent", "letters"):
+            self.annot_sel.blockSignals(True)
+            self.annot_sel.setCurrentIndex(self.annot_sel.findData("auto"))
+            self.annot_sel.blockSignals(False)
+
     def _analyse(self):
-        self.err.setText("")
+        self._clear_err()
         if len(self._plates) < 2:
+            self._invalidate_analysis()
             self._warn("Add at least two plates (ideally ≥2 samples) before analyzing."); return
         metric_key = self.metric_sel.currentData()
         vcol = "diameter_mm" if metric_key == "diam" else "area_mm2"
         metric_name = "Diameter (mm)" if metric_key == "diam" else "Area (mm²)"
         tidy = self._tidy_frame()
         df = tidy.rename(columns={vcol: "value"})[["group", "subgroup", "replicate", "value"]].copy()
+        # the rows left out are counted in the Report (as the engine's data notes do in the ZIP)
+        miss = df[df["value"].isna()]
+        self._data_note = ""
+        if len(miss):
+            plates = list(dict.fromkeys("%s/%s" % (g, r) for g, r in zip(miss["group"], miss["replicate"])))
+            self._data_note = ("%d plaque row(s) have no %s value and are left out (plates: %s%s)."
+                               % (len(miss), metric_name.split(" (")[0].lower(), ", ".join(plates[:8]),
+                                  ", …" if len(plates) > 8 else ""))
         df = df.dropna(subset=["value"])
         if df.empty:
+            self._invalidate_analysis()
             self._warn("No %s values found — did you measure that metric?" % metric_name); return
         # decide the mode from the SAMPLE tags, not from the (metric-filtered) rows — so switching
         # metric can't silently flip grouped↔single just because some tagged plates lack that metric
@@ -927,65 +1418,178 @@ class StudyTab(QWidget):
         try:
             ok = (self._analyse_grouped(df, metric_name, metric_key) if has_sub
                   else self._analyse_single(df.drop(columns=["subgroup"]), metric_name, metric_key))
-        except Exception as e:
-            self._warn("Analysis failed: %s" % e); return
+        except (Exception, SystemExit) as e:                      # noqa: BLE001 -- CT-R1 F1
+            ok = False
+            msg = _stats_message(e)
+        else:
+            msg = None
+        if not ok:
+            # CT-R1 F19: a failed compute removes the old results and disables every export
+            keep = self.err.text()
+            self._invalidate_analysis()
+            self._warn(("Analysis failed: %s" % msg) if msg else (keep or "Analysis failed."))
+            return
         for b in self._export_buttons:
-            b.setEnabled(bool(ok))
+            b.setEnabled(True)
+        if self._last_fig is None:                                # the figure itself failed
+            for b in self._figure_buttons:
+                b.setEnabled(False)
+
+    @staticmethod
+    def _effect_text(eff):
+        """'Cohen's d = 8.20', 'η² = 0.85' or 'n/a' (CT-R1 F25: was 'cohens=8.20' / 'cohens=nan')."""
+        names = {"cohens_d": "Cohen's d", "hedges_g": "Hedges' g", "eta_squared": "η²",
+                 "epsilon_squared": "ε²"}
+        ek = next(iter(eff or {}), None)
+        if ek is None:
+            return "n/a"
+        v = eff[ek]
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        if v != v or np.isinf(v):
+            return "n/a"
+        return "%s = %.2f" % (names.get(ek, ek.replace("_", " ")), v)
 
     def _analyse_single(self, df, metric_name, metric_key):
-        from plaque_stats import plaque_stats as ps
+        ps = _engine()
         present = set(df["group"])
         order = self._ordered_groups(present) or list(dict.fromkeys(df["group"].tolist()))
-        parametric = self.param_sel.currentData()
-        omni, posthoc, unit, have_rep = ps.run_stats(df, order, "auto", parametric)
-        summ = ps.group_summary(df, order)
+        sc = self._stat_choices()
+        omni, posthoc, unit, have_rep = ps.run_stats(
+            df, order, "auto", sc["parametric"], equal_var=sc["equal_var"], posthoc=sc["posthoc"],
+            control=sc["control"])
+        summ = ps.group_summary(df, order, unit=unit)
         rep = ps.replicate_means(df)
-        src = rep if (unit == "replicate" and rep is not None) else df
-        unit_means = src.groupby("group")["value"].mean().to_dict()
-        pairwise = pd.DataFrame([{"group_a": a, "group_b": b,
-                                  "mean_a": round(unit_means.get(a, float("nan")), 4),
-                                  "mean_b": round(unit_means.get(b, float("nan")), 4),
-                                  "diff": round(unit_means.get(a, float("nan")) - unit_means.get(b, float("nan")), 4),
-                                  "p_adj": p, "signif": ps.stars(p)}
-                                 for (a, b), p in posthoc.items()])
-        self._last = ("single", {"df": df, "order": order, "posthoc": posthoc,
+        pairwise = pd.DataFrame(omni.get("pairwise") or [])
+        self._last = ("single", {"df": df, "order": order, "posthoc": posthoc, "omni": omni,
+                                  "unit": unit, "have_rep": have_rep,
                                   "metric_name": metric_name, "metric_key": metric_key,
                                   "summary": summ, "replicates": rep, "pairwise": pairwise})
         self._redraw()
 
+        n_plates = int(df.dropna(subset=["replicate"]).drop_duplicates(["group", "replicate"]).shape[0])
         self._chips["groups"].setText(str(len(order)))
-        self._chips["plates"].setText(str(len(self._plates)))
+        self._chips["plates"].setText(str(n_plates))         # CT-R1 F25: plates WITH plaques
         self._chips["unit"].setText("plate" if unit == "replicate" else "plaque")
         self._chips["test"].setText(str(omni.get("test", "—")))
-        self._chips["p"].setText(self._pfmt(omni.get("p")))
-        eff = omni.get("effect", {}) or {}
-        ek = next(iter(eff), None)
-        self._chips["effect"].setText(("%s=%.2f" % (ek.split("_")[0], eff[ek])) if ek else "—")
+        self._chips["p"].setText(ps.fmt_p(omni.get("p")))
+        self._chips["effect"].setText(self._effect_text(omni.get("effect")))
 
-        self._set_table(self.tbl_group, _round_df(summ))
-        self._set_table(self.tbl_rep, _round_df(rep) if rep is not None else pd.DataFrame())
-        self.cmp_cap.setText("Pairwise comparisons")
-        self._set_table(self.tbl_cmp, pairwise)
+        self._set_table(self.tbl_group, self._summary_display(summ))
+        self._set_table(self.tbl_rep, self._replicate_display(rep))
+        post = omni.get("posthoc") or omni.get("test") or ""
+        if omni.get("control"):
+            post = "%s, each sample vs %s" % (post, omni["control"])
+        self.cmp_cap.setText("Pairwise comparisons (%s; on the %s)" % (post, ps._unit_word(unit)))
+        self._set_table(self.tbl_cmp, self._pairwise_display(pairwise))
 
-        lines = []
-        unit_note = ("plate means (the plate is the experimental unit; avoids pseudoreplication)"
-                     if unit == "replicate" else
-                     "per-plaque values (NO replicate structure — add plate ids for defensible stats)")
-        lines.append("%s across %d samples, on %s." % (metric_name, len(order), unit_note))
-        lines.append("Omnibus: %s, p = %s%s." % (omni.get("test", "—"), self._pfmt(omni.get("p")),
-                     ("; %s = %.3f" % (ek.replace("_", " "), eff[ek])) if ek else ""))
-        if posthoc:
-            lines.append("Post-hoc — " + "; ".join(
-                "%s vs %s: p = %s (%s)" % (a, b, self._pfmt(p), ps.stars(p))
-                for (a, b), p in posthoc.items()) + ".")
-        for w in omni.get("warnings", []):
-            lines.append("⚠ " + w)
-        self.report.setPlainText("\n".join(lines))
-        self.window().statusBar().showMessage("Analyzed %d samples (%s)." % (len(order), omni.get("test")), 5000)
+        empty = [s["group"] for s in self._samples if s["group"] not in present]
+        if empty:          # a sample without plaques (of this metric) cannot be drawn or tested
+            omni.setdefault("warnings", []).append(
+                "%s %s no %s values, so %s left out of the figure and the test."
+                % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
+                   "it is" if len(empty) == 1 else "they are"))
+        warns = list(omni.get("warnings") or [])
+        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
+        self._write_report_single(ps, metric_name, summ, omni, posthoc, unit, have_rep)
+        self._status("Analyzed %d samples (%s)." % (len(order), omni.get("test")), 5000)
         return True
 
+    def _figure_text(self):
+        """The figure sentence (+ which comparisons are annotated) of the figure on screen."""
+        legend_key = _legend_key()
+        if self._last_fig is None:
+            return ""
+        key = legend_key.from_figure(self._last_fig) or {}
+        bits = [key.get("note") or "", getattr(self._last_fig, "annotation_note", "") or ""]
+        return " ".join(b for b in bits if b)
+
+    def _set_report(self, lines):
+        lines = list(lines)
+        if getattr(self, "_data_note", ""):
+            lines += ["", "Data: " + self._data_note]
+        self.report.setPlainText(_ui_words("\n".join(lines)))
+
+    def _write_report_single(self, ps, metric_name, summ, omni, posthoc, unit, have_rep):
+        o = self._opts(self._last[1]["metric_key"])
+        try:
+            centers = ps.center_table(self._last[1]["df"], self._last[1]["order"], o)
+        except (Exception, SystemExit):                            # noqa: BLE001
+            centers = None
+        L = [ps.paste_sentence(metric_name, summ, omni, unit, have_rep, o, centers=centers), ""]
+        L.append("Test choice: %s, followed by %s. %s %s" % (
+            omni.get("test"), omni.get("posthoc") or "no post-hoc test",
+            omni.get("choice_note") or "", omni.get("variance_rule") or ""))
+        ft = self._figure_text()
+        if ft:
+            L += ["", "Figure: " + ft]
+        L += ["", ps.power_sentence(omni.get("power"), unit).replace("**", "")]
+        icc = omni.get("icc")
+        if icc and icc.get("icc") == icc.get("icc"):
+            L.append("Plate-to-plate variation: %.0f %% of the variance within a sample lies between "
+                     "plates (ICC = %.2f; %d plates, %d plaques)."
+                     % (100 * icc["icc"], icc["icc"], icc["n_plates"], icc["n_plaques"]))
+        ws, ns = list(omni.get("warnings") or []), list(omni.get("notes") or [])
+        if ws or ns:
+            L.append("")
+            L += ["⚠ " + w for w in ws]
+            L += ["Note: " + n for n in ns]
+        self._set_report(L)
+
+    # ---- display copies of the result tables (the raw numbers stay in self._last for the CSVs)
+    @staticmethod
+    def _summary_display(summ):
+        """CT-R1 F12: the plate-level numbers (what the test and the bar use) beside the per-plaque
+        ones -- they used to be three different 'means' with nothing saying which is which."""
+        if summ is None or not len(summ):
+            return pd.DataFrame()
+        per_plate = "unit" in summ.columns and (summ["unit"] == "plate").any()
+        out = pd.DataFrame({"sample": summ["group"].astype(str)})
+        if per_plate:
+            out["N plates"] = summ["n_units"].astype(int)
+            out["plate mean"] = summ["unit_mean"]
+            out["plate SD"] = summ["unit_sd"]
+            out["plate SEM"] = summ["unit_sem"]
+        out["n plaques"] = summ["n"].astype(int)
+        out["plaque mean"] = summ["mean"]
+        out["plaque SD"] = summ["sd"]
+        out["plaque SEM"] = summ["sem"]
+        out["median"] = summ["median"]
+        out["IQR"] = summ["iqr"]
+        return _round_df(out)
+
+    @staticmethod
+    def _replicate_display(rep):
+        if rep is None or not len(rep):
+            return pd.DataFrame()
+        cols = [c for c in ("group", "subgroup", "replicate") if c in rep.columns]
+        out = rep[cols].copy().rename(columns={"group": "sample", "subgroup": "2nd factor",
+                                               "replicate": "plate"})
+        out["plate mean"] = rep["value"].values
+        out["n plaques"] = rep["n_plaques"].astype(int).values
+        return _round_df(out)
+
+    @staticmethod
+    def _pairwise_display(pw):
+        """p via the engine's fmt_p; a comparison that could not be run reads n/a (CT-R1 F9)."""
+        ps = _engine()
+        if pw is None or not len(pw):
+            return pd.DataFrame()
+        out = pd.DataFrame({"sample A": pw["group_a"].astype(str), "sample B": pw["group_b"].astype(str),
+                            "mean A": pw["mean_a"], "mean B": pw["mean_b"], "difference": pw["mean_diff"]})
+        if "diff_ci95_lo" in pw.columns:
+            out["95% CI"] = ["[%.3g, %.3g]" % (lo, hi) if lo == lo and hi == hi else "n/a"
+                             for lo, hi in zip(pw["diff_ci95_lo"], pw["diff_ci95_hi"])]
+        if "hedges_g" in pw.columns:
+            out["Hedges' g"] = pw["hedges_g"]
+        out["p (adjusted)"] = [ps.fmt_p(p) for p in pw["p_adj"]]
+        out["signif"] = pw["signif"].astype(str)
+        return _round_df(out)
+
     def _analyse_grouped(self, df, metric_name, metric_key):
-        from plaque_stats import plaque_stats as ps
+        ps = _engine()
         df = df.copy(); df["subgroup"] = df["subgroup"].astype(str).str.strip()
         df = df[df["subgroup"].map(self._is_tagged)]
         analyzed = int(df.drop_duplicates(["group", "subgroup", "replicate"]).shape[0])
@@ -1002,12 +1606,13 @@ class StudyTab(QWidget):
                        "compare against the control. Clear the 2nd-factor tags to analyze these as "
                        "single-factor samples instead." % control); return False
         parametric = self.param_sel.currentData()
-        summ, comp, unit = ps.grouped_stats(df, group_order, sub_order, control, parametric)
+        summ, comp, unit, info = ps.grouped_stats(df, group_order, sub_order, control, parametric,
+                                                  return_info=True)
         pm = ps._plate_means_gs(df)
         self._last = ("grouped", {"df": df, "group_order": group_order, "sub_order": sub_order,
-                                  "control": control, "comparisons": comp,
+                                  "control": control, "comparisons": comp, "unit": unit,
                                   "metric_name": metric_name, "metric_key": metric_key,
-                                  "summary": summ, "replicates": pm})
+                                  "summary": summ, "replicates": pm, "info": info})
         self._redraw()
 
         self._chips["groups"].setText("%d×%d" % (len(group_order), len(sub_order)))
@@ -1018,32 +1623,40 @@ class StudyTab(QWidget):
         self._chips["effect"].setText("vs %s" % control)
 
         self._set_table(self.tbl_group, _round_df(summ))
-        self._set_table(self.tbl_rep, _round_df(pm) if pm is not None else pd.DataFrame())
-        self.cmp_cap.setText("Control comparisons (vs %s)" % control)
-        self._set_table(self.tbl_cmp, _round_df(comp))
+        self._set_table(self.tbl_rep, self._replicate_display(pm))
+        self.cmp_cap.setText("Control comparisons (vs %s; Holm-adjusted within each sample)" % control)
+        disp = comp.copy()
+        if len(disp):
+            disp["p"] = [ps.fmt_p(p) for p in disp["p"]]
+            if "p_raw" in disp.columns:
+                disp["p_raw"] = [ps.fmt_p(p) for p in disp["p_raw"]]
+        self._set_table(self.tbl_cmp, _round_df(disp))
 
-        lines = ["%s — each 2nd-factor value vs the control '%s', within each sample, on %s." % (
-            metric_name, control,
-            "plate means (plate = unit)" if unit == "replicate" else "per-plaque values (no replicates)")]
-        for _, r in comp.iterrows():
-            lines.append("%s · %s: %+.1f%% vs control (%s, p = %s, %s; Cohen's d = %.2f)." % (
-                r["group"], r["subgroup"], r["change_pct"], r["test"], self._pfmt(r["p"]),
-                r["signif"], r["cohens_d"]))
-        if unit != "replicate":
-            lines.append("⚠ No replicate structure — add plate ids for defensible stats.")
+        L = [ps.paste_sentence(metric_name, comp=comp, unit=unit, control=control,
+                               opts=self._opts(metric_key)), ""]
+        L.append("p-values are Holm-adjusted within each sample (raw p in the p_raw column); each "
+                 "2nd-factor value is compared with the control '%s' by a %s on the %s."
+                 % (control, str(comp["test"].iloc[0]) if len(comp) else "test", ps._unit_word(unit)))
+        ft = self._figure_text()
+        if ft:
+            L += ["", "Figure: " + ft]
+        warns = list(info.get("warnings") or [])
         if excluded:
-            lines.append("⚠ %d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
-                         "2nd-factor tags to compare every plate as single-factor samples." % (excluded, analyzed))
-            self.err.setText("Note: %d untagged plate(s) excluded; %d analyzed — see the report."
-                             % (excluded, analyzed))
-        self.report.setPlainText("\n".join(lines))
-        self.window().statusBar().showMessage(
-            "Grouped comparison vs '%s' across %d sample(s)." % (control, len(group_order)), 5000)
+            warns.append("%d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
+                         "2nd-factor tags to compare every plate as single-factor samples."
+                         % (excluded, analyzed))
+        if warns or info.get("notes"):
+            L.append("")
+            L += ["⚠ " + w for w in warns]
+            L += ["Note: " + n for n in info.get("notes") or []]
+        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
+        self._set_report(L)
+        self._status("Grouped comparison vs '%s' across %d sample(s)." % (control, len(group_order)), 5000)
         return True
 
     # ---------------------------------------------------------------- figure
     def _build_fig(self, opts):
-        from plaque_stats import plaque_stats as ps
+        ps = _engine()
         kind, pl = self._last
         if kind == "single":
             return ps.plot_violin(pl["df"], pl["order"], opts, pl["metric_name"], pl["posthoc"])
@@ -1051,19 +1664,39 @@ class StudyTab(QWidget):
         return ps.plot_grouped(pl["df"], pl["group_order"], pl["sub_order"], pl["control"], o,
                                pl["metric_name"], pl["comparisons"])
 
+    def _render(self, opts):
+        """A fresh figure from the current state; a failure closes any half-built figure and
+        re-raises (StatsError / SystemExit included)."""
+        import matplotlib.pyplot as plt
+        before = set(plt.get_fignums())
+        try:
+            return self._build_fig(opts)
+        except BaseException:
+            for n in set(plt.get_fignums()) - before:
+                plt.close(n)
+            raise
+
     def _redraw(self):
         if self._last is None:
             return
-        import matplotlib.pyplot as plt
         opts = self._opts(self._last[1]["metric_key"])
-        before = set(plt.get_fignums())
         try:
-            fig = self._build_fig(opts)
-        except Exception as e:
-            for n in set(plt.get_fignums()) - before:    # close any half-built figure the error left open
-                plt.close(n)
-            self._warn("Could not draw: %s" % e); return
+            fig = self._render(opts)
+        except (Exception, SystemExit) as e:                      # noqa: BLE001 -- CT-R1 F1/F19
+            # the old figure no longer matches the controls: take it off screen, keep the results
+            self._clear_fig_area(restore_placeholder=True)
+            self.fig_placeholder.setText("The figure cannot be drawn with these settings — see the "
+                                         "message above.")
+            self.fig_caption.setText("")
+            self.key_text.clear()
+            for b in self._figure_buttons:
+                b.setEnabled(False)
+            self._warn("Could not draw: %s" % _stats_message(e))
+            return
         self._show_fig(fig)
+        if self._last is not None and self.savesum_btn.isEnabled():
+            for b in self._figure_buttons:
+                b.setEnabled(True)
 
     def _clear_fig_area(self, restore_placeholder=False):
         """Remove the current figure container (or placeholder) from the plot area and close its
@@ -1082,17 +1715,19 @@ class StudyTab(QWidget):
             except Exception:
                 pass
             self._last_fig = None
+        self.fig_holder.setMinimumHeight(0)
         if restore_placeholder:
             self.fig_placeholder = QLabel("The violin plot appears here after you click Analyze.")
             self.fig_placeholder.setObjectName("Placeholder"); self.fig_placeholder.setAlignment(Qt.AlignCenter)
             self.fig_placeholder.setMinimumHeight(360)
+            self.fig_placeholder.setWordWrap(True)
             self.fig_layout.addWidget(self.fig_placeholder)
 
     def _show_fig(self, fig):
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
         from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
         self._clear_fig_area()
-        # pin the canvas to the figure's true pixel size so its aspect never distorts; scroll if big
+        # pin the canvas to the figure's true pixel size so its aspect never distorts
         w_in, h_in = fig.get_size_inches()
         px_w, px_h = int(round(w_in * 96)), int(round(h_in * 96))
         container = QWidget()
@@ -1107,12 +1742,18 @@ class StudyTab(QWidget):
         self.fig_layout.addWidget(container, 0, Qt.AlignHCenter | Qt.AlignTop)
         self._fig_container = container
         self.canvas, self.toolbar, self._last_fig = canvas, toolbar, fig
+        # CT-R1 F24: the figure area is at least as tall as the canvas (+ toolbar), so the page
+        # scrolls with ONE scroll bar instead of squeezing the figure into a small inner box
+        m = self.fig_layout.contentsMargins()
+        self.fig_holder.setMinimumHeight(px_h + toolbar.sizeHint().height() + cl.spacing()
+                                         + m.top() + m.bottom())
         canvas.draw()
         self._refresh_key_text(fig)
+        self.fig_caption.setText(_ui_words(self._figure_text()))
 
     def _refresh_key_text(self, fig=None):
         """The text starter always comes from the figure on screen (never a stored copy)."""
-        from plaque_stats import legend_key
+        legend_key = _legend_key()
         key = legend_key.from_figure(fig) if fig is not None else None
         self.key_text.setText(legend_key.text_starter(key) if key else "")
         self.key_text.setCursorPosition(0)
@@ -1137,10 +1778,12 @@ class StudyTab(QWidget):
             tv = getattr(self, name, None)
             if tv is not None:
                 self._set_table(tv, pd.DataFrame())
-        if hasattr(self, "report"):
-            self.report.clear()
-        if hasattr(self, "key_text"):
-            self.key_text.clear()
+        for name in ("report", "key_text"):
+            if hasattr(self, name):
+                getattr(self, name).clear()
+        for name in ("warn_lbl", "fig_caption"):
+            if hasattr(self, name):
+                getattr(self, name).setText("")
         for b in getattr(self, "_export_buttons", []):
             b.setEnabled(False)
 
@@ -1159,6 +1802,20 @@ class StudyTab(QWidget):
         for w in (self.ctrl_cap, self.control_sel):
             w.setVisible(has_sub)
         groups = self._ordered_groups()
+        # "Compare: all pairs / vs <sample>" follows the current sample names
+        cur_ref = self.cmp_to_sel.currentData()
+        self.cmp_to_sel.blockSignals(True)
+        self.cmp_to_sel.clear()
+        self.cmp_to_sel.addItem("All pairs", None)
+        for g in groups:
+            self.cmp_to_sel.addItem("vs %s (Dunnett)" % g, g)
+        i = self.cmp_to_sel.findData(cur_ref) if cur_ref is not None else 0
+        self.cmp_to_sel.setCurrentIndex(i if i >= 0 else 0)
+        self.cmp_to_sel.blockSignals(False)
+        for w in (self.var_cap, self.var_sel, self.cmp_to_cap, self.cmp_to_sel):
+            w.setVisible(not has_sub)
+        if hasattr(self, "annot_sel"):
+            self._sync_controls()
         if not self._stats_ok:
             return
         if not self._plates:
@@ -1173,53 +1830,64 @@ class StudyTab(QWidget):
                                   "Give samples a 2nd factor to switch to control-comparison." % len(groups))
 
     # ================================================================ EXPORTS
+    _FIG_FILTERS = ("PNG image (*.png);;SVG — vector, editable (*.svg);;PDF — vector (*.pdf);;"
+                    "TIFF — journal raster (*.tiff);;EPS — vector (*.eps)")
+
+    def _with_ext(self, path, sel):
+        """CT-R1 F20: a typed figure extension wins over the filter, and a name with dots
+        ('fig_0.5MOI') keeps them -- the filter's extension is appended, never substituted."""
+        ext = os.path.splitext(path)[1].lower()
+        if ext in self._FIG_EXTS:
+            return path
+        want = next((e for k, e in self._EXT_FOR.items() if (sel or "").startswith(k)), ".png")
+        return path + want
+
+    def _save_figure_file(self, fig, path, dpi):
+        """One rule for every figure file (Save figure and the ZIP): the chosen size in inches
+        exactly (no tight crop) at the Export DPI (CT-R1 F20)."""
+        import matplotlib
+        ext = os.path.splitext(path)[1].lower()
+        kw = {"dpi": int(dpi), "facecolor": "white"}
+        if ext in (".tif", ".tiff"):
+            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+        with matplotlib.rc_context({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42}):
+            fig.savefig(path, **kw)
+
     def _save_fig(self):
         if self._last is None:
             return
-        path, sel = QFileDialog.getSaveFileName(
-            self, "Save figure", "plaque_figure.png",
-            "PNG image (*.png);;SVG — vector, editable (*.svg);;PDF — vector (*.pdf);;"
-            "TIFF — journal raster (*.tiff);;EPS — vector (*.eps)")
+        path, sel = QFileDialog.getSaveFileName(self, "Save figure", "plaque_figure.png", self._FIG_FILTERS)
         if not path:
             return
-        ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
-        want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
-        if want:
-            path = os.path.splitext(path)[0] + want
+        path = self._with_ext(path, sel)
         ext = os.path.splitext(path)[1].lower()
         self._fig_ext = ext or ".png"
-        import matplotlib as mpl
-        mpl.rcParams["svg.fonttype"] = "none"; mpl.rcParams["pdf.fonttype"] = 42; mpl.rcParams["ps.fonttype"] = 42
         opts = self._opts(self._last[1]["metric_key"])
-        dpi = 600 if ext in (".tif", ".tiff") else int(opts["dpi"])
-        # render a FRESH figure at exactly the configured size/dpi (independent of the on-screen canvas)
+        dpi = int(opts["dpi"])
         import matplotlib.pyplot as plt
         fig = None
         try:
-            fig = self._build_fig(opts)
-            kw = {"dpi": dpi, "bbox_inches": "tight", "facecolor": "white"}
-            if ext in (".tif", ".tiff"):
-                kw["pil_kwargs"] = {"compression": "tiff_lzw"}
-            fig.savefig(path, **kw)
-        except Exception as e:
-            self._warn("Could not save figure: %s" % e); return
+            fig = self._render(opts)       # a FRESH figure at exactly the configured size
+            self._save_figure_file(fig, path, dpi)
+        except (Exception, SystemExit) as e:                      # noqa: BLE001
+            self._warn("Could not save figure: %s" % _stats_message(e)); return
         finally:
             if fig is not None:
                 plt.close(fig)                    # always release the export figure
-        self.window().statusBar().showMessage("Figure saved (%s, %d dpi): %s" % (ext.lstrip("."), dpi, path), 6000)
-
-    _FIG_FILTERS = ("PNG image (*.png);;SVG — vector, editable (*.svg);;PDF — vector (*.pdf);;"
-                    "TIFF — journal raster (*.tiff);;EPS — vector (*.eps)")
+        msg = "Figure saved (%s, %.1f × %.1f in, %d dpi): %s" % (
+            ext.lstrip("."), opts["width"], opts["height"], dpi, path)
+        if ext == ".eps":
+            msg += " — EPS cannot store transparency: the violins are drawn opaque (use PDF or SVG to keep it)."
+        self._status(msg, 8000)
 
     def _save_key(self, path=None):
         """Save the legend key of the CURRENT figure (re-drawn from the current samples, names,
         palette and selection), in the figure's format -- the one last used in Save figure."""
         if self._last is None:
             return None
-        from plaque_stats import legend_key
+        legend_key = _legend_key()
         if path is None:
-            ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
-            first = next((k for k, e in ext_for.items() if e == self._fig_ext), "PNG")
+            first = next((k for k, e in self._EXT_FOR.items() if e == self._fig_ext), "PNG")
             filters = self._FIG_FILTERS.split(";;")
             sel0 = next((f for f in filters if f.startswith(first)), filters[0])
             path, sel = QFileDialog.getSaveFileName(self, "Save legend key",
@@ -1227,32 +1895,29 @@ class StudyTab(QWidget):
                                                     self._FIG_FILTERS, sel0)
             if not path:
                 return None
-            want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
-            if want:
-                path = os.path.splitext(path)[0] + want
-        ext = os.path.splitext(path)[1].lower()
+            path = self._with_ext(path, sel)
         opts = self._opts(self._last[1]["metric_key"])
-        dpi = 600 if ext in (".tif", ".tiff") else int(opts["dpi"])
+        dpi = int(opts["dpi"])
         import matplotlib.pyplot as plt
         fig = None
         try:
-            fig = self._build_fig(opts)
+            fig = self._render(opts)
             key = legend_key.from_figure(fig)
             if not key or not key.get("entries"):
                 self._warn("This figure has no sample or plate colours to key."); return None
             legend_key.save_key(key, path, dpi=dpi)
-        except Exception as e:
-            self._warn("Could not save the legend key: %s" % e); return None
+        except (Exception, SystemExit) as e:                      # noqa: BLE001
+            self._warn("Could not save the legend key: %s" % _stats_message(e)); return None
         finally:
             if fig is not None:
                 plt.close(fig)
-        self.window().statusBar().showMessage("Legend key saved: %s" % path, 6000)
+        self._status("Legend key saved: %s" % path, 6000)
         return path
 
     def _copy_key_text(self):
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(self.key_text.text())
-        self.window().statusBar().showMessage("Legend text copied to the clipboard.", 3000)
+        self._status("Legend text copied to the clipboard.", 3000)
 
     def _save_summary(self):
         if self._last is None:
@@ -1261,11 +1926,13 @@ class StudyTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save summary", "plaque_summary.csv", "CSV (*.csv)")
         if not path:
             return
+        if not os.path.splitext(path)[1]:
+            path += ".csv"
         pl["summary"].to_csv(path, index=False)
         extra = "comparisons" if kind == "grouped" else "pairwise"
         if pl.get(extra) is not None and len(pl[extra]):
             pl[extra].to_csv(os.path.splitext(path)[0] + "_" + extra + ".csv", index=False)
-        self.window().statusBar().showMessage("Summary (+ %s) saved next to it." % extra, 5000)
+        self._status("Summary (+ %s) saved next to it." % extra, 5000)
 
     def _save_data_wide(self):
         if not self._plates:
@@ -1273,7 +1940,7 @@ class StudyTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save compiled data (wide)", "plaque_compiled_wide.csv", "CSV (*.csv)")
         if path:
             self._tidy_frame().to_csv(path, index=False)
-            self.window().statusBar().showMessage("Wide per-plaque data saved: %s" % path, 5000)
+            self._status("Wide per-plaque data saved: %s" % path, 5000)
 
     def _save_data_long(self):
         if not self._plates:
@@ -1282,7 +1949,7 @@ class StudyTab(QWidget):
                                               "plaque_compiled_long.csv", "CSV (*.csv)")
         if path:
             self._long_frame().to_csv(path, index=False)
-            self.window().statusBar().showMessage("Long-format data saved (drops into the standalone app): %s" % path, 6000)
+            self._status("Long-format data saved (drops into the standalone app): %s" % path, 6000)
 
     def _export_zip(self):
         if self._last is None:
@@ -1290,41 +1957,76 @@ class StudyTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export everything (ZIP)", "plaque_analysis.zip", "ZIP (*.zip)")
         if not path:
             return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
         try:
             self._write_everything(path)
-        except Exception as e:
-            self._warn("Export failed: %s" % e); return
-        self.window().statusBar().showMessage("Exported everything: %s" % path, 6000)
+        except (Exception, SystemExit) as e:                      # noqa: BLE001 -- CT-R1 F1
+            self._warn("Export failed: %s" % _stats_message(e)); return
+        self._status("Exported everything: %s" % path, 6000)
 
     def _write_everything(self, path):
-        """Build the full standalone-parity bundle at `path` (figure in every format + summaries +
-        pairwise + report.md + run_config.json + table images + compiled data)."""
+        """Build the full standalone-parity bundle at `path` (figure in every format + its legend
+        key + summaries + pairwise + report.md + run_config.json + table images + compiled data).
+        The engine gets the IN-MEMORY table and the screen's own order, 2nd-factor order, key
+        title, control and test options (CT-R1 F1/F2/F14): no CSV round trip that re-reads the
+        labels, so the bundle's samples, tags and statistics are the screen's."""
         import shutil
         from datetime import datetime
-        from plaque_stats import plaque_stats as ps
+        import matplotlib.pyplot as plt
+        ps = _engine()
         kind, pl = self._last
         metric_key = pl["metric_key"]
         vcol = "diameter_mm" if metric_key == "diam" else "area_mm2"
         opts = self._opts(metric_key)
+        formats = ["png", "svg", "pdf", "tiff"]
         tmp = tempfile.mkdtemp(prefix="plaque_zip_")
         try:
-            data_csv = os.path.join(tmp, "compiled.csv")
-            self._tidy_frame().to_csv(data_csv, index=False)
             out = os.path.join(tmp, "out"); os.makedirs(out, exist_ok=True)
+            tidy = self._tidy_frame()
+            cols = ["group", "subgroup", "replicate", vcol] if kind == "grouped" else ["group", "replicate", vcol]
             args = dict(opts)
-            args.update({"data": data_csv, "group": "group", "value": vcol, "replicate": "replicate",
-                         "metric": None, "unit": "auto", "parametric": self.param_sel.currentData(),
-                         "formats": ["png", "svg", "pdf", "tiff"], "dpi": int(opts["dpi"]),
-                         "stats_table": True, "out": out,
-                         # use the SAME group order as the on-screen figure / Save-figure (not add order)
+            args.update({"data": tidy[cols].copy(), "group": "group", "value": vcol,
+                         "replicate": "replicate", "metric": None, "unit": "auto",
+                         "parametric": self.param_sel.currentData(),
+                         "formats": formats, "dpi": int(opts["dpi"]),
+                         "stats_table": True, "out": out, "legend_key": True,
                          "order": pl["group_order"] if kind == "grouped" else pl["order"],
                          "_stamp": datetime.now().strftime("%Y-%m-%d %H:%M")})
             if kind == "grouped":
-                args.update({"subgroup": "subgroup", "control": pl["control"]})
-            ps.run(args)
-            # also drop the standalone-ready long + wide CSVs in the bundle
+                args.update({"subgroup": "subgroup", "control": pl["control"],
+                             "sub_order": list(pl["sub_order"]), "_sublabel": "2nd factor",
+                             "posthoc": "auto"})
+            else:
+                sc = self._stat_choices()
+                args.update({"subgroup": None, "equal_var": sc["equal_var"], "posthoc": sc["posthoc"],
+                             "control": sc["control"]})
+            res = ps.run(args)
+            # the figure files: the screen's own figure, at the chosen size and Export DPI (F20)
+            base = os.path.join(out, ("grouped_%s" if kind == "grouped" else "violin_%s") % ps._safe(res["metric"]))
+            fig = self._render(opts)
+            try:
+                for fmt in formats:
+                    self._save_figure_file(fig, "%s.%s" % (base, fmt), opts["dpi"])
+            finally:
+                plt.close(fig)
+            # provenance: no temp paths; the Toolkit's version (CT-R1 F25)
+            for f in os.listdir(out):
+                if f.startswith("run_config_") and f.endswith(".json"):
+                    fp = os.path.join(out, f)
+                    with open(fp, encoding="utf-8") as fh:
+                        cfg = json.load(fh)
+                    cfg["out"] = os.path.basename(path)
+                    cfg["data"] = "Analyze tab study (in-memory, %d plaque rows)" % len(tidy)
+                    cfg["source"] = "Plaque Toolkit — Analyze tab"
+                    cfg["toolkit_version"] = (cfg.get("versions") or {}).get("toolkit")
+                    cfg["figure_size_in"] = [opts["width"], opts["height"]]
+                    with open(fp, "w", encoding="utf-8") as fh:
+                        json.dump(cfg, fh, indent=2, default=str)
+            # also drop the standalone-ready long + wide CSVs and the study file in the bundle
             self._long_frame().to_csv(os.path.join(out, "compiled_long.csv"), index=False)
-            self._tidy_frame().to_csv(os.path.join(out, "compiled_wide.csv"), index=False)
+            tidy.to_csv(os.path.join(out, "compiled_wide.csv"), index=False)
+            self._study_frame().to_csv(os.path.join(out, "study.csv"), index=False)
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
                 for root, _dirs, files in os.walk(out):
                     for f in files:
@@ -1337,22 +2039,32 @@ class StudyTab(QWidget):
     def _copy_report(self):
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(self.report.toPlainText())
-        self.window().statusBar().showMessage("Report copied to the clipboard.", 3000)
+        self._status("Report copied to the clipboard.", 3000)
 
     # ================================================================ misc
     @staticmethod
     def _pfmt(p):
         try:
-            p = float(p)
-        except (TypeError, ValueError):
-            return "—"
-        if p != p:
-            return "—"
-        return "< 0.001" if p < 1e-3 else "%.3f" % p
+            fmt_p = _engine().fmt_p
+            return fmt_p(p)
+        except Exception:                                          # noqa: BLE001 -- Light build
+            try:
+                p = float(p)
+            except (TypeError, ValueError):
+                return "n/a"
+            if p != p:
+                return "n/a"
+            return "< 0.001" if p < 1e-3 else "%.3f" % p
+
+    def _status(self, msg, ms=5000):
+        try:
+            self.window().statusBar().showMessage(msg, ms)
+        except Exception:                                          # noqa: BLE001 -- no main window
+            pass
 
     def _warn(self, msg):
         self.err.setText(msg)
-        self.window().statusBar().showMessage(msg, 6000)
+        self._status(msg, 6000)
 
     def _open_doc(self, name):
         try:

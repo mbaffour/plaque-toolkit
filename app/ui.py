@@ -3089,6 +3089,14 @@ class MainWindow(QMainWindow):
         if self.tabs.currentIndex() == 0:
             self.measure_tab.save()
 
+    def closeEvent(self, ev):
+        # CT-R1 DA-F25: an unsaved Analyze study asks before the app closes (the question and
+        # its wording live in StudyTab.confirm_close)
+        if not self.study_tab.confirm_close():
+            ev.ignore()
+            return
+        super().closeEvent(ev)
+
 
 def launch():
     app = QApplication.instance() or QApplication(sys.argv)
