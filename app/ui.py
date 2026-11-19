@@ -2578,6 +2578,9 @@ class AgreementTab(QWidget):
 
         self._metrics = {}
         self.stats_card = self._build_stats_card()
+        # CT-R1 follow-up: a wide ICC interval caused by a systematic offset gets a plain note
+        self.icc_note = QLabel(""); self.icc_note.setWordWrap(True); self.icc_note.setObjectName("ModeHelp")
+        self.icc_note.setVisible(False)
 
         self.fig_holder = QFrame(); self.fig_holder.setObjectName("Card")
         self.fig_layout = QVBoxLayout(self.fig_holder); self.fig_layout.setContentsMargins(6, 6, 6, 6)
@@ -2618,7 +2621,7 @@ class AgreementTab(QWidget):
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(intro); lay.addWidget(learn); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
-        lay.addWidget(self.stats_card); lay.addWidget(self.fig_holder, 1)
+        lay.addWidget(self.stats_card); lay.addWidget(self.icc_note); lay.addWidget(self.fig_holder, 1)
         lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow); lay.addLayout(krow)
 
     def _build_stats_card(self):
@@ -2670,14 +2673,18 @@ class AgreementTab(QWidget):
         m["n"].setText(str(s["n"]))
         m["bias"].setText("%+.3f" % s["bias"])
         m["loa"].setText("%+.3f…%+.3f" % (s["loa_lo"], s["loa_hi"]))
-        m["loa"].setToolTip("bias ± 1.96 SD" if s["loa_method"] == "1.96 SD" else
-                            "n < 20: 95%% prediction limits, bias ± t·SD·√(1+1/n) = ± %.2f SD"
-                            % s["loa_mult"])
+        m["loa"].setToolTip("bias ± 1.96 SD" + (
+            "\nWith only %d pairs, a new difference is expected within %+.3f to %+.3f "
+            "(95%% prediction interval)." % (s["n"], s["pred_lo"], s["pred_hi"])
+            if s["pred_lo"] == s["pred_lo"] else ""))
+        note = agreement.icc_interval_note(s, unit)
+        self.icc_note.setText(note); self.icc_note.setVisible(bool(note))
         m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] else "—")
         m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] else "—")
         m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] else "—")
         self._draw(s, unit)
-        self.report.setPlainText(agreement.report_sentence(s, unit, what))
+        self.report.setPlainText(agreement.report_sentence(s, unit, what)
+                                 + (("\n\nNote: " + note) if note else ""))
         self.report.setToolTip("ICC(A,1) 95% CI: McGraw & Wong (1996) exact F interval; "
                                "limits-of-agreement CI: Bland & Altman (1999).")
         for b in self._result_buttons():
@@ -2751,6 +2758,8 @@ class AgreementTab(QWidget):
             self.fig_placeholder.setMinimumHeight(300); self.fig_layout.addWidget(self.fig_placeholder)
         for v in self._metrics.values():
             v.setText("—")
+        if hasattr(self, "icc_note"):
+            self.icc_note.clear(); self.icc_note.setVisible(False)
         self.report.clear()
         if hasattr(self, "key_text"):
             self.key_text.clear()

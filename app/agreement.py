@@ -287,22 +287,24 @@ def _ba_slope(avg, diff):
     return slope, float(2 * _st.t.sf(abs(slope / se), n - 2))
 
 
-LOA_LARGE_N = 20           # from here on the limits are bias +/- 1.96 SD
+PRED_N = 20                # below this many pairs the report adds a prediction interval
 
 
-def loa_multiplier(n):
-    """Multiplier k of the limits of agreement bias +/- k*SD. CT-R1 SM-F16: below 20 pairs
-    +/-1.96 SD holds only 77-85 % of new differences, so the limits become the 95 % prediction
-    interval t(0.975, n-1) * sqrt(1 + 1/n); from 20 pairs on they stay bias +/- 1.96 SD."""
-    if n >= LOA_LARGE_N:
-        return 1.96
+def prediction_interval(bias, sd, n):
+    """95% prediction interval for ONE new difference: bias +/- t(0.975, n-1) * SD * sqrt(1 + 1/n).
+    CT-R1 SM-F16: below ~20 pairs the 95% limits of agreement (bias +/- 1.96 SD, Bland & Altman's
+    definition, kept at every n) hold only 77-85 % of new differences, so the report ADDS this
+    interval for n < 20. Returns (nan, nan) from 20 pairs on or when undefined."""
+    if n >= PRED_N or n < 3 or not _finite(sd):
+        return float("nan"), float("nan")
     from scipy import stats as _st
-    return float(_st.t.ppf(0.975, n - 1)) * math.sqrt(1.0 + 1.0 / n)
+    h = float(_st.t.ppf(0.975, n - 1)) * sd * math.sqrt(1.0 + 1.0 / n)
+    return bias - h, bias + h
 
 
 def _loa_ci_halfwidth(sd, n, k=1.96):
     """Half-width of the 95% CI of each limit of agreement, Bland & Altman (1999) exact form:
-    SE(limit) = SD * sqrt(1/n + k^2 / (2(n-1))), times t(0.975, n-1). (k = the limit multiplier.)"""
+    SE(limit) = SD * sqrt(1/n + 1.96^2 / (2(n-1))), times t(0.975, n-1)."""
     if n < 3 or not _finite(sd):
         return float("nan")
     from scipy import stats as _st
@@ -361,12 +363,12 @@ def compute(tool, fiji):
         sd = 0.0
     grand = _mean(avg)
     slope, intercept = regress(fiji, tool)
-    k = loa_multiplier(n)
+    pred_lo, pred_hi = prediction_interval(bias, sd, n)
     ba_slope, ba_p = (0.0, float("nan")) if constant else _ba_slope(avg, diff)
     return {
         "n": n, "mean_tool": _mean(tool), "mean_fiji": _mean(fiji),
-        "bias": bias, "sd": sd, "loa_lo": bias - k * sd, "loa_hi": bias + k * sd,
-        "loa_mult": k, "loa_method": "1.96 SD" if n >= LOA_LARGE_N else "t prediction",
+        "bias": bias, "sd": sd, "loa_lo": bias - 1.96 * sd, "loa_hi": bias + 1.96 * sd,
+        "pred_lo": pred_lo, "pred_hi": pred_hi,
         "rmse": math.sqrt(_mean([d * d for d in diff])),
         "pct_bias": (bias / grand * 100.0) if grand else float("nan"),
         "mae": _mean([abs(d) for d in diff]),
@@ -377,7 +379,7 @@ def compute(tool, fiji):
         # methods; a non-zero slope means the bias changes with plaque size (PT-46).
         "ba_slope": ba_slope, "ba_slope_p": ba_p,
         # 95% CI of each limit of agreement (Bland & Altman 1999, exact form).
-        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n, k),
+        "loa_ci_halfwidth": _loa_ci_halfwidth(sd, n),
     }
 
 
@@ -475,6 +477,17 @@ def correlation_phrase(r, p=float("nan")):
     return strength
 
 
+def icc_interval_note(s, unit="mm"):
+    """A plain note when the exact ICC interval is wide because of a systematic offset
+    (paired t-test p < 0.05 AND ICC - lower limit > 0.10); '' otherwise."""
+    icc, lo, tp = s.get("icc"), s.get("icc_lo"), s.get("t_p")
+    if not (_finite(icc) and _finite(lo) and _finite(tp)) or tp >= 0.05 or icc - lo <= 0.10:
+        return ""
+    return ("The ICC interval is wide because the two methods differ by a systematic offset "
+            "(bias %+.3f %s): with two methods that offset is estimated from a single contrast. "
+            "Judge agreement from the bias and the limits of agreement." % (s["bias"], unit))
+
+
 SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
 
 
@@ -538,14 +551,15 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
     extra = []
     if _finite(s.get("loa_ci_halfwidth")):
         extra.append("each limit ±%.3f %s, 95%% CI" % (s["loa_ci_halfwidth"], unit))
-    if s.get("loa_method") == "t prediction":
-        extra.append("t-based prediction limits, as n < %d" % LOA_LARGE_N)
     if extra:
         loa += " (%s)" % "; ".join(extra)
     out += " " + loa
     if _finite(s.get("slope")):
         out += ", and a regression slope of %.2f (1.0 = no proportional bias)" % s["slope"]
     out += "."
+    if _finite(s.get("pred_lo")) and _finite(s.get("pred_hi")):
+        out += (" With only %d pairs, a new difference is expected within %+.3f to %+.3f %s "
+                "(95%% prediction interval)." % (n, s["pred_lo"], s["pred_hi"], unit))
     bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
     if _finite(bs) and _finite(bp):
         if bp < 0.05:
@@ -714,10 +728,7 @@ def _draw_bland(ax2, s, unit, label_tool, label_manual):
     ax2.set_title("B  Bland-Altman", loc="left", fontsize=10, fontweight="bold")
     yspan = max(abs(s["loa_hi"]), abs(s["loa_lo"]), max(abs(d) for d in diff)) * 1.25 or 0.1
     ax2.set_ylim(-yspan, yspan)
-    if s.get("loa_method") == "t prediction":
-        up, dn = "upper limit", "lower limit"
-    else:
-        up, dn = "+1.96 SD", "-1.96 SD"
+    up, dn = "+1.96 SD", "-1.96 SD"
     tr = ax2.get_yaxis_transform()
     for y, txt, va in ((s["loa_hi"], "%s  %+.3f" % (up, s["loa_hi"]), "bottom"),
                        (s["bias"], "bias  %+.3f" % s["bias"], "bottom"),
