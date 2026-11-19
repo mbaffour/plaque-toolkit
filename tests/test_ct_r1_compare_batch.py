@@ -262,10 +262,20 @@ def test_images_are_listed_in_natural_order(tmp_path):
     assert names == ["plate_1.tif", "Plate_2.tif", "Plate_10.tif", "Plate_11.png"]
 
 
-def test_turbidity_overlay_numbers_plaques_top_to_bottom():
-    """F17: the QC overlay printed the engine's order (#1 at the bottom of the plate)."""
-    plaques = [{"center": (50, 90)}, {"center": (10, 10)}, {"center": (70, 10)}, {"center": (5, 40)}]
-    assert ptb.overlay_numbers(plaques) == [4, 1, 2, 3]
+def test_turbidity_overlay_label_equals_plate_index_of_the_csv_row(tmp_path, monkeypatch):
+    """F17 decision: the overlay exists to find a plaques_all.csv row on the plate, so the number
+    drawn must be that row's PLATE_INDEX (engine order, frozen), not a reading-order rank."""
+    import numpy as np
+    drawn = []
+    real = ptb.cv2.putText
+    monkeypatch.setattr(ptb.cv2, "putText", lambda img, text, *a, **k: drawn.append(text) or real(img, text, *a, **k))
+    def hull(cx, cy):
+        return [[cx - 5, cy - 5], [cx + 5, cy - 5], [cx + 5, cy + 5], [cx - 5, cy + 5]]
+    det = {"orig": np.zeros((120, 120, 3), np.uint8), "dish_center": None, "dish_r": 0,
+           "plaques": [{"hull": hull(50, 90)}, {"hull": hull(10, 10)}, {"hull": hull(70, 10)}]}
+    rows = [{"PLATE_INDEX": i, "TURBIDITY": 0.5} for i in (1, 2, 3)]
+    ptb.annotate_plate(det, rows, str(tmp_path), "P")
+    assert drawn == ["1", "2", "3"] and (tmp_path / "overlay_P.png").exists()
 
 
 def test_batch_numbers_plaques_top_to_bottom_like_the_measure_tab(neutral_plate_tif, tmp_path):
