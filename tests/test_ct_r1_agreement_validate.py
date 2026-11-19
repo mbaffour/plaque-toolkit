@@ -736,3 +736,15 @@ def test_toc_link_scrolls_and_relative_doc_link_opens_in_the_viewer(qt):
     opened = appui._DOC_VIEWERS[-1]
     assert opened._path.endswith("VALIDATION_GUIDE.md") and opened.browser.toPlainText()
     opened.close()
+
+
+def test_cli_unknown_column_is_one_line_listing_the_numeric_columns_exit_2(capsys):
+    data = os.path.join(ROOT, "validation", "paired_toolkit_vs_fiji.csv")
+    with pytest.raises(SystemExit) as ex:
+        cli_ag.main([data, "--tool", "diam_toolkit_mm", "--out", os.devnull])
+    assert ex.value.code == 2
+    err = capsys.readouterr().err.strip()
+    assert "\n" not in err and "Traceback" not in err
+    assert err == ("agreement.py: error: --tool 'diam_toolkit_mm' is not a numeric column of "
+                   "paired_toolkit_vs_fiji.csv. Numeric columns: plaque_id, area_tool_mm2, "
+                   "area_fiji_mm2, diam_tool_mm, diam_fiji_mm.")

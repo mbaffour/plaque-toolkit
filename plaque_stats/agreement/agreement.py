@@ -748,6 +748,10 @@ def _find_col(cols, hints, exclude=(), prefer=None):
     return cands[0]
 
 
+class ColumnError(ValueError):
+    """A --tool / --manual name that is not a numeric column (the CLI exits with code 2)."""
+
+
 def _numeric_cols(df):
     return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
@@ -761,6 +765,12 @@ def run(args):
         if str(args["data"]).lower().endswith((".csv", ".tsv", ".txt")) \
         else pd.read_excel(args["data"])
     num = _numeric_cols(df)
+    for flag, key in (("--tool", "tool"), ("--manual", "manual")):
+        name = args.get(key)
+        if name and name not in num:       # CT-R1: a one-line message, not a pandas KeyError
+            raise ColumnError("%s %r is not a numeric column of %s. Numeric columns: %s."
+                              % (flag, name, os.path.basename(str(args["data"])),
+                                 ", ".join(map(str, num)) or "none"))
     what_pref = None
     w = str(args.get("what") or "").lower()
     if w.startswith("diam"):
@@ -932,6 +942,10 @@ def main(argv=None):
     args["formats"] = [x.strip() for x in ns.formats.split(",") if x.strip()]
     try:
         run(args)
+    except ColumnError as e:             # a usage error: one line, exit code 2 (like argparse)
+        import sys
+        print("agreement.py: error: %s" % e, file=sys.stderr)
+        raise SystemExit(2)
     except ValueError as e:              # a plain message, not a traceback
         raise SystemExit(str(e))
 
