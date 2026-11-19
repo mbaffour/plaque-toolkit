@@ -1188,21 +1188,22 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                 # happens by chance all the time, so the raw ratio never warns. (b) a neutral note
                 # whenever the equal-variance path ran with < 5 units in a group; (c) a warning only
                 # when the most extreme pair differs in variance by a Bonferroni-adjusted F test.
-                ev = equal_variance_check({g: groups[g] for g in tg})
-                omni["variance_check"] = ev
-                if ev["min_n"] < 5:
-                    notes.append(
-                        "%s assume the groups have similar spread. With %s per group this cannot be "
-                        "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups "
-                        "to differ in spread, use --equal-var no (Welch ANOVA + Games-Howell)."
-                        % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
-                           _n_range(ns, tg, uw), _ratio_txt(ev["sd_ratio"])))
-                if ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
-                    warns.append(
-                        "The spread differs between groups more than chance explains (SD ratio %s, "
-                        "adjusted p = %s): Welch ANOVA + Games-Howell (--equal-var no) is the safer "
-                        "analysis." % (_ratio_txt(ev["sd_ratio"]), fmt_p(ev["p_adj"])))
             omni["variance_rule"] = rule
+            ev = equal_variance_check({g: groups[g] for g in tg})
+            omni["variance_check"] = ev
+            if ev["min_n"] < 5 and not welch:
+                notes.append(
+                    "%s assume the groups have similar spread. With %s per group this cannot be "
+                    "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups "
+                    "to differ in spread, use --equal-var no (Welch ANOVA + Games-Howell)."
+                    % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
+                       _n_range(ns, tg, uw), _ratio_txt(ev["sd_ratio"])))
+            if ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
+                warns.append(
+                    "The spread differs between groups more than chance explains (SD ratio %s, "
+                    "adjusted p = %s): Welch ANOVA + Games-Howell (--equal-var no) is the safer "
+                    "analysis%s." % (_ratio_txt(ev["sd_ratio"]), fmt_p(ev["p_adj"]),
+                                     " (used here)" if welch else ""))
         else:
             hres = _quiet(st.kruskal, *gv)
             N = sum(len(x) for x in gv); kk = len(gv)

@@ -25,7 +25,26 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from plaque_stats import legend_key
+
+
+def _legend_key_module():
+    """The shared legend-key helper, imported the way plaque_turbidity does it (CT-R1 SM-F19):
+    the package (repo checkout), else a flat legend_key.py on sys.path (pip-installed stats
+    package, which also shadows the folder with a flat plaque_stats.py), else None -- then the
+    figure is still drawn, only the key files are skipped."""
+    try:
+        from plaque_stats import legend_key as m
+        m.entry                                          # a flat plaque_stats.py has no such module
+        return m
+    except Exception:                                    # noqa: BLE001
+        try:
+            import legend_key as m
+            return m
+        except Exception:                                # noqa: BLE001
+            return None
+
+
+legend_key = _legend_key_module()
 
 # ---------------------------- CONFIG (edit me) ----------------------------- #
 ORDER   = ["WT", "2-4", "DTR", "G12E", "I70T", "T65I", "T71A"]   # x-axis order
@@ -59,7 +78,9 @@ def figure_key(samples, colours):
               if (SHOW_POINTS and not POINT_COLOR) else None)
         entries.append(legend_key.entry(s, c, kind="patch", edge="black", alpha=0.80,
                                         linewidth=0.8, shape="violin", extra_marker=em))
-    return legend_key.make_key(entries, fontsize=FONT - 2, frameon=False)
+    return legend_key.make_key(entries, fontsize=FONT - 2, frameon=False,
+                               note="Violins: all plaques. Bar: median, whisker: IQR (25th to 75th "
+                                    "percentile) of all plaques. White dots: plate medians.")
 
 
 def main():
@@ -135,8 +156,11 @@ def main():
         ax.annotate("%d plaque(s) > %.1f mm not shown" % (hidden, a.ymax),
                     (1, 1), xytext=(-4, -4), xycoords="axes fraction",
                     textcoords="offset points", ha="right", va="top", fontsize=8, color="#888")
-    key = legend_key.attach(fig, figure_key(samples, colours))
-    if a.key_on_figure:
+    key = legend_key.attach(fig, figure_key(samples, colours)) if legend_key else None
+    if legend_key is None and (a.legend_key or a.key_on_figure):
+        print("NOTE: the legend key helper (plaque_stats/legend_key.py) was not found, so the "
+              "legend key was skipped; the figure is drawn as usual.")
+    if a.key_on_figure and key:
         legend_key.embed(ax, key)
     fig.tight_layout()
 
@@ -144,7 +168,7 @@ def main():
     out = out if os.path.isabs(out) else os.path.join(os.path.dirname(os.path.abspath(a.csv)) or ".", out)
     for ext in ("png", "pdf", "svg"):
         fig.savefig("%s.%s" % (out, ext), dpi=300, bbox_inches="tight")
-    if a.legend_key:
+    if a.legend_key and key:
         legend_key.write_key_files(key, out, ("png", "pdf", "svg"), dpi=300)
         print("SAVED %s_legend_key.(png|pdf|svg) + %s_legend_text.txt" % (out, out))
     print("SAVED %s.(png|pdf|svg)  | %s mode | %d samples | %d plaques%s" %
