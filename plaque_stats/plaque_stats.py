@@ -394,10 +394,11 @@ def _normalize_core(df, group, value, replicate, metric, subgroup=None):
         elif pick is not None:
             # CT-R1 SM-F24: a typo'd --value on a LONG file without a metric column used to be
             # accepted silently as the metric's display name
+            others = [c for c in cols if c not in labels and c != vlong]
             raise StatsError("[error] value column %r not found. This file has a %r column but no "
-                             "%r column, so --value must be %r or one of: %s"
+                             "%r column, so --value must be %r%s."
                              % (value, vlong, metric or "metric", vlong,
-                                ", ".join(c for c in cols if c not in labels)))
+                                (" or one of: " + ", ".join(others)) if others else ""))
         else:
             value = vcol
     elif value is None:
@@ -959,7 +960,7 @@ def equal_variance_check(groups):
 
 
 def _ratio_txt(r):
-    return "n/a" if r != r else ("%.1f" % r if math.isfinite(r) else "infinite (a group has no spread)")
+    return "n/a" if r != r else ("%.1f" % r if math.isfinite(r) else "Inf")      # as app.R
 
 
 def _n_range(ns, tg, uw):
@@ -1191,19 +1192,21 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
             omni["variance_rule"] = rule
             ev = equal_variance_check({g: groups[g] for g in tg})
             omni["variance_check"] = ev
-            if ev["min_n"] < 5 and not welch:
+            n_min_all = min(ns.values())
+            # wording identical to plaque_stats/app.R spread_check(); only the last clause names the
+            # CLI option where the R app names its "Variances: unequal (Welch)" control
+            if n_min_all < 5 and not welch:
                 notes.append(
-                    "%s assume the groups have similar spread. With %s per group this cannot be "
-                    "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups "
-                    "to differ in spread, use --equal-var no (Welch ANOVA + Games-Howell)."
+                    "%s assume the groups have similar spread. With %d %s per group this cannot be "
+                    "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to "
+                    "differ in spread, choose --equal-var no (Welch)."
                     % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
-                       _n_range(ns, tg, uw), _ratio_txt(ev["sd_ratio"])))
+                       n_min_all, _unit_word(unit, n_min_all), _ratio_txt(ev["sd_ratio"])))
             if ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
                 warns.append(
-                    "The spread differs between groups more than chance explains (SD ratio %s, "
-                    "adjusted p = %s): Welch ANOVA + Games-Howell (--equal-var no) is the safer "
-                    "analysis%s." % (_ratio_txt(ev["sd_ratio"]), fmt_p(ev["p_adj"]),
-                                     " (used here)" if welch else ""))
+                    "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
+                    "%s): Welch ANOVA + Games-Howell is the safer analysis."
+                    % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"])))
         else:
             hres = _quiet(st.kruskal, *gv)
             N = sum(len(x) for x in gv); kk = len(gv)

@@ -175,7 +175,9 @@ def test_A3_shipped_example_gets_the_note_not_the_warning(tmp_path):
     res = ps.run(_args(tmp_path, str(tmp_path / "example_data_wide.csv")))
     assert not any("spread" in w for w in res["warnings"])
     note = [n for n in res["notes"] if n.startswith("ANOVA and Tukey assume the groups have similar spread")]
-    assert note and "With 3 plates per group" in note[0] and "SD ratio here: 7.2" in note[0]
+    assert note == ["ANOVA and Tukey assume the groups have similar spread. With 3 plates per group this "
+                    "cannot be checked reliably (largest/smallest SD ratio here: 7.2). If you expect the "
+                    "groups to differ in spread, choose --equal-var no (Welch)."]
     report = (tmp_path / "out" / "report_diameter_mm.md").read_text(encoding="utf-8")
     assert note[0] in report
 
@@ -188,11 +190,19 @@ def test_A3_extreme_pair_f_test_warns_at_8_plates():
     F = sds[hi] ** 2 / sds[lo] ** 2
     p_adj = min(1.0, 2 * st.f.sf(F, 7, 7) * 3)                  # k(k-1)/2 = 3 pairs
     assert omni["variance_check"]["p_adj"] == pytest.approx(p_adj, rel=1e-9)
-    assert any(w.startswith("The spread differs between groups more than chance explains")
-               for w in omni["warnings"])
-    # at >= 8 normal units with a failed Levene, auto uses Welch + Games-Howell, not Kruskal-Wallis
+    want = ("The spread differs between groups more than chance explains (SD ratio %.1f, adjusted "
+            "%s): Welch ANOVA + Games-Howell is the safer analysis." % (math.sqrt(F), ps.p_text(p_adj)))
+    assert want in omni["warnings"]
+    # in auto mode the advice never switches the test: forced parametric keeps Levene's choice
+    par = ps.run_stats(df, ["A", "B", "C"], "auto", "parametric")[0]
+    assert want in par["warnings"]
+    # brief A3: at >= 8 units with NORMAL data and a failed Levene, auto uses Welch + Games-Howell
+    # (not Kruskal-Wallis); this draw is normal by construction, so check that branch when Shapiro agrees
     auto = ps.run_stats(df, ["A", "B", "C"], "auto", "auto")[0]
-    assert auto["test"] == "Welch ANOVA" and auto["posthoc"] == "Games-Howell"
+    if all(p > 0.05 for p in auto["normality_p"].values()):
+        assert auto["test"] == "Welch ANOVA" and auto["posthoc"] == "Games-Howell"
+    else:
+        assert auto["test"] == "Kruskal–Wallis"
 
 
 # =========================================================================== A4 .. A8
@@ -543,3 +553,26 @@ def test_A6_every_allowed_center_error_runs_end_to_end(tmp_path, center, error):
     if (center, error) == ("median", "ci95"):
         assert "95 % CI of the median (plates resampled, 2,000 bootstrap resamples, seed 7)" in res["figure_sentence"]
         assert "median (bootstrap 95 % CI) of all plaques" in res["paste_sentence"] or len(res["order"]) > 2
+
+
+def test_gate_shipped_example_default_numbers_unchanged_from_1_3_0(tmp_path):
+    """Release gate: the shipped example with DEFAULT options gives the same numbers as v1.3.0
+    (commit ca1a3ab). The constants are that version's CSV output; only columns were added."""
+    res = ps.run(_args(tmp_path, os.path.join(ROOT, "plaque_stats", "example_data_wide.csv")))
+    out = tmp_path / "out"
+    om = pd.read_csv(out / "omnibus_test_diameter_mm.csv").iloc[0]
+    assert (om["test"], om["unit"]) == ("one-way ANOVA", "replicate")
+    assert om["p"] == pytest.approx(8.664450118784204e-06, rel=1e-10)
+    assert om["levene_p"] == pytest.approx(0.6230307464548228, rel=1e-10)
+    pw = pd.read_csv(out / "pairwise_tests_diameter_mm.csv")
+    assert list(pw.columns[:7]) == ["group_a", "group_b", "mean_a", "mean_b", "mean_diff", "p_adj", "signif"]
+    want = {("T4", "T7"): (0.8110540587580062, 0.0001484612589278),
+            ("T4", "lambda"): (-0.5629870018707734, 0.0011220469260948),
+            ("T7", "lambda"): (-1.3740410606287796, 6.985589097507905e-06)}
+    for _, r in pw.iterrows():
+        d, p = want[(r["group_a"], r["group_b"])]
+        assert r["mean_diff"] == pytest.approx(d, abs=1e-12) and r["p_adj"] == pytest.approx(p, rel=1e-6)
+    sm = pd.read_csv(out / "summary_by_group_diameter_mm.csv").set_index("group")
+    assert sm.loc["T4", "mean"] == pytest.approx(2.6055142857142854, abs=1e-12)
+    assert sm.loc["T7", "sd"] == pytest.approx(0.3737843416384026, abs=1e-12)
+    assert res["omni"]["posthoc"] == "Tukey HSD" and not res["warnings"]
