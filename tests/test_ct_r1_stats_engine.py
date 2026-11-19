@@ -533,3 +533,13 @@ def test_cli_help_lists_the_new_options():
     h = ps.build_args().format_help()
     for flag in ("--equal-var", "--posthoc", "--equivalence-margin", "--log-y-drop-nonpositive", "letters"):
         assert flag in h
+
+
+@pytest.mark.parametrize("center,error", [("median", "ci95"), ("median", "iqr"), ("median", "none"),
+                                          ("mean", "sd"), ("mean", "ci95"), ("mean", "iqr")])
+def test_A6_every_allowed_center_error_runs_end_to_end(tmp_path, center, error):
+    res = ps.run(_args(tmp_path, _frame(), center=center, error=error, stats_table=True))
+    assert "Whisker" in res["figure_sentence"] or "No whisker" in res["figure_sentence"]
+    if (center, error) == ("median", "ci95"):
+        assert "95 % CI of the median (plates resampled, 2,000 bootstrap resamples, seed 7)" in res["figure_sentence"]
+        assert "median (bootstrap 95 % CI) of all plaques" in res["paste_sentence"] or len(res["order"]) > 2

@@ -1410,7 +1410,7 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
         bits.append("Large points: plate means.")
         if center == "median":
             bar = "median of all plaques"
-            wh = ("95 % CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
+            wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
                   % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
             if error == "iqr":
                 wh = "IQR of the plaques (25th to 75th percentile)"
@@ -1423,7 +1423,7 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
         bits.append("Violins%s: all plaques." % (" and points" if o.get("show_points", True) else ""))
         if center == "median":
             bar = "median of the plaques"
-            wh = ("95 % CI of the median (%s bootstrap resamples of the plaques, seed %d)"
+            wh = ("95 %% CI of the median (%s bootstrap resamples of the plaques, seed %d)"
                   % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
         else:
             bar = "mean of the plaques"
@@ -1499,7 +1499,8 @@ def _log_axis(ax, lo, hi):
     from matplotlib.ticker import LogLocator, FuncFormatter, NullFormatter
     ax.set_yscale("log")
     decades = math.log10(hi / lo) if (lo > 0 and hi > lo) else 1.0
-    subs = (1.0, 2.0, 5.0) if decades <= 3 else (1.0,)
+    subs = (tuple(float(i) for i in range(1, 10)) if decades < 1.2 else
+            (1.0, 2.0, 5.0) if decades <= 3 else (1.0,))
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=subs, numticks=15))
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: "%g" % v))
     ax.yaxis.set_minor_formatter(NullFormatter())
@@ -1546,7 +1547,8 @@ def _caption(fig, bits):
     bits = [b for b in bits if b]
     if not bits:
         return None
-    return fig.text(0.012, 0.008, " · ".join(bits) + ".", ha="left", va="bottom", fontsize=7.5,
+    txt = " · ".join(bits) + "."
+    return fig.text(0.012, 0.008, txt[0].upper() + txt[1:], ha="left", va="bottom", fontsize=7.5,
                     color="#5b6a65", style="italic")
 
 
@@ -1762,6 +1764,10 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             verts[:, 1] = np.clip(verts[:, 1], float(np.min(data[i])), float(np.max(data[i])))
 
     tops = {}                                             # per sample: top of everything drawn
+    # CT-R1 DA-F10: with many samples the value labels ran into the neighbouring violin
+    show_val = opts.get("show_value", True) and len(order) <= 8
+    vfs = 9 if len(order) <= 5 else 7.5
+    bottoms = []
     for i, g in enumerate(order):
         v = data[i]; x0 = pos[i]; c = gcol[g]
         sub = ddf[ddf["group"] == g]
@@ -1795,8 +1801,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                         solid_capstyle="round", zorder=7)
                 if hi > lo:
                     ax.plot([x0, x0], [lo, hi], color="#12211d", lw=1.1, zorder=7)
-                if opts.get("show_value", True):
-                    ax.annotate("%.2f" % cen, (x0 + 0.21, cen), fontsize=9, fontweight="bold",
+                if show_val:
+                    ax.annotate("%.2f" % cen, (x0 + 0.21, cen), fontsize=vfs, fontweight="bold",
                                 va="center", ha="left", color="#12211d", zorder=8,
                                 bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
         else:                                             # -------- no replicates: bar on the plaques --------
@@ -1806,13 +1812,15 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             if ok_bar:
                 ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
                 ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
-                if opts.get("show_value", True):
-                    ax.annotate("%.2f" % cen, (x0 + 0.12, cen), fontsize=9, fontweight="bold",
+                if show_val:
+                    ax.annotate("%.2f" % cen, (x0 + 0.12, cen), fontsize=vfs, fontweight="bold",
                                 va="center", ha="left", color="#12211d", zorder=8,
                                 bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
         if ok_bar and hi == hi:
             top = max(top, float(hi), float(cen))         # CT-R1 DA-F16: brackets clear the whiskers
         tops[g] = top
+        if len(v):
+            bottoms.append(min(float(np.min(v)), float(lo) if (ok_bar and lo == lo) else float("inf")))
 
     ax.set_xticks(pos); ax.set_xticklabels([_lk.safe_text(g) for g in order], fontweight="bold")
     ax.set_xlim(0.4, len(order) + 0.6)
@@ -1833,6 +1841,11 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                   borderaxespad=0.2)
 
     caption_bits = [log_note]
+    if opts.get("show_value", True) and not show_val:
+        caption_bits.append("bar values are in the summary table")
+    if log_y and bottoms:                         # the violins were estimated in log10 units, which
+        b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
+        ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
     fig.tight_layout()                           # first pass: the axes get their real size
     if _fit_xticklabels(fig, ax):
@@ -1911,6 +1924,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                         fontsize=fs, fontweight="bold", color="#33413c", linespacing=1.15)
             if used_short and rm is not None:
                 caption_bits.append("n = plaques, N = plates")
+    if log_y:                                     # ticks for the FINAL range (CT-R1 DA-F15)
+        _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
     _layout(fig, cap)
     return fig
@@ -2687,6 +2702,11 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
         pitch = max(0.12, room / nmax)
         star_fs = max(6.0, min(star_fs, pitch * 72.0 / 1.75))
     y0, _y1 = ax.get_ylim()
+    if log_y:                                     # violins were estimated in log10 units
+        lows = [float(v) for v in ddf["value"].values if v > 0]
+        if lows:
+            b0 = min(lows)
+            y0 = b0 / 10 ** (0.05 * max(0.2, math.log10(max(fin.values()) / b0)))
     bot = T(y0)
     gtop = {g: max(T(v) for (gg, _s), v in fin.items() if gg == g) for g in group_order
             if any(gg == g for gg, _s in fin)}
@@ -2719,6 +2739,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
                     color="#33413c", linespacing=1.1)
         if pm is not None:
             caption_bits.append("n = plaques, N = plates")
+    if log_y:
+        _log_axis(ax, *ax.get_ylim())
     _layout(fig, _caption(fig, caption_bits))
     return fig
 
