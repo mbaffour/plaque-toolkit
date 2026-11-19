@@ -139,12 +139,16 @@ DEFAULTS = {
     "title": None, "ylabel": None, "xlabel": "",
     "parametric": "auto",          # auto | parametric | nonparametric
     "annotate": "auto",            # auto | all | adjacent | none  (which pairs get brackets)
-    "show_points": True, "show_box": True, "show_mean": True,
+    "show_points": True, "show_mean": True,
     "log_y": False, "width": 8.0, "height": 5.2, "dpi": 300,
     "point_size": 16.0, "jitter": 0.08, "violin_alpha": 0.55, "seed": 7,
     "formats": ["png", "svg", "pdf"], "theme": "clean", "legend": True, "violin_fill": "auto",
     "show_n": True, "show_value": True, "center": "mean", "error": "auto", "frame": False,
     "stats_table": True,
+    "equal_var": "auto",           # auto | yes | no   (CT-R1 SM-F5)
+    "posthoc": "auto",             # auto | dunnett    (Dunnett vs --control; CT-R1 B1)
+    "equivalence_margin": None,    # TOST margin in data units (CT-R1 B4)
+    "log_y_drop_nonpositive": False,
     "legend_key": True,            # write <figure>_legend_key.<fmt> + <figure>_legend_text.txt
 }
 
@@ -244,7 +248,7 @@ def _sniff_delimiter(header, default):
     return best if counts[best] else default
 
 
-def read_table(path, text_columns=None, return_info=False):
+def read_table(path, return_info=False, *, text_columns=None):
     """Read a CSV / TSV / TXT / XLSX table the way a person typed it (CT-R1 SM-F1, SM-F2, web F4).
 
     * Labels stay labels: nothing is turned into "missing" except an empty cell (pandas' default
@@ -927,6 +931,42 @@ def _quiet(fn, *a, **kw):
             return None
 
 
+def equal_variance_check(groups):
+    """The extreme-pair variance check (CT-R1 SM-F5, supervisor rule shared with the R app):
+    the samples with the largest and smallest unit-level SD, F = s2_max / s2_min,
+    p_pair = 2 * F.sf(F, n_max - 1, n_min - 1), p_adj = min(1, p_pair * k (k - 1) / 2).
+    Returns {"sd_ratio", "F", "p_pair", "p_adj", "max_group", "min_group", "min_n", "k"}."""
+    use = {g: np.asarray(v, float) for g, v in groups.items() if len(v) >= 2}
+    k = len(use)
+    out = {"sd_ratio": float("nan"), "F": float("nan"), "p_pair": float("nan"), "p_adj": float("nan"),
+           "max_group": None, "min_group": None, "k": k,
+           "min_n": min((len(v) for v in use.values()), default=0)}
+    if k < 2:
+        return out
+    sd = {g: float(np.std(v, ddof=1)) for g, v in use.items()}
+    gmax = max(sd, key=sd.get); gmin = min(sd, key=sd.get)
+    out.update(max_group=gmax, min_group=gmin)
+    if sd[gmax] <= 0:
+        return out
+    if sd[gmin] <= 0:
+        out.update(sd_ratio=float("inf"), F=float("inf"), p_pair=0.0, p_adj=0.0)
+        return out
+    F = sd[gmax] ** 2 / sd[gmin] ** 2
+    p_pair = float(min(1.0, 2.0 * st.f.sf(F, len(use[gmax]) - 1, len(use[gmin]) - 1)))
+    out.update(sd_ratio=sd[gmax] / sd[gmin], F=float(F), p_pair=p_pair,
+               p_adj=float(min(1.0, p_pair * k * (k - 1) / 2.0)))
+    return out
+
+
+def _ratio_txt(r):
+    return "n/a" if r != r else ("%.1f" % r if math.isfinite(r) else "infinite (a group has no spread)")
+
+
+def _n_range(ns, tg, uw):
+    v = sorted({ns[g] for g in tg})
+    return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
+
+
 def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", control=None,
               equivalence_margin=None):
     """Compute normality, an omnibus test, and pairwise post-hoc p-values on the chosen unit.
@@ -1001,7 +1041,8 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     else:
         sd_ratio = float("nan")
     all_normal = all((p != p) or p > 0.05 for p in normal.values())
-    min_n = min(ns.values()) if ns else 0
+    # the n that decides the method: the samples that can be tested (a 1-plate sample is n/a)
+    min_n = min((ns[g] for g in tg), default=min(ns.values()) if ns else 0)
     if parametric == "auto":
         # At small replicate n (the usual case: ~3 plates) Shapiro–Wilk is uninformative AND
         # non-parametric tests are underpowered — Mann–Whitney cannot reach p<0.05 at 3 vs 3, and
@@ -1128,8 +1169,8 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                     posthoc = games_howell({g: groups[g] for g in order})
                     omni["posthoc"] = "Games-Howell"
                     if equal_var == "auto":
-                        warns.append("Levene p = %.3f: group variances differ, so Welch's ANOVA and "
-                                     "Games-Howell (no equal-variance assumption) were used." % levene_p)
+                        warns.append("Levene p = %s: group variances differ, so Welch's ANOVA and "
+                                     "Games-Howell (no equal-variance assumption) were used." % fmt_p(levene_p))
             if not welch:
                 omni["test"] = "one-way ANOVA"
                 r = _quiet(st.f_oneway, *gv)
@@ -1143,15 +1184,24 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                 if omni["p"] != omni["p"]:
                     notes.append("All values are identical within and between the samples, so no test "
                                  "is possible (p = n/a).")
-                # the SD-ratio warning: pooled-variance methods at an n where Levene cannot object
-                if sd_ratio == sd_ratio and sd_ratio > 3 and equal_var != "yes":
-                    n_txt = ("%d %ss" % (min(ns[g] for g in tg), uw))
+                # CT-R1 SM-F5 (supervisor rule, identical in the R app): at 3 plates a 3x SD ratio
+                # happens by chance all the time, so the raw ratio never warns. (b) a neutral note
+                # whenever the equal-variance path ran with < 5 units in a group; (c) a warning only
+                # when the most extreme pair differs in variance by a Bonferroni-adjusted F test.
+                ev = equal_variance_check({g: groups[g] for g in tg})
+                omni["variance_check"] = ev
+                if ev["min_n"] < 5:
+                    notes.append(
+                        "%s assume the groups have similar spread. With %s per group this cannot be "
+                        "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups "
+                        "to differ in spread, use --equal-var no (Welch ANOVA + Games-Howell)."
+                        % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
+                           _n_range(ns, tg, uw), _ratio_txt(ev["sd_ratio"])))
+                if ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
                     warns.append(
-                        "The largest sample SD is %s the smallest (%s level). Levene's test cannot "
-                        "detect unequal variances with %s per group; consider --equal-var no "
-                        "(Welch's ANOVA + Games-Howell)%s."
-                        % ("%.1f×" % sd_ratio if math.isfinite(sd_ratio) else "far larger than",
-                           uw, n_txt, "" if ctrl is None else " instead of Dunnett"))
+                        "The spread differs between groups more than chance explains (SD ratio %s, "
+                        "adjusted p = %s): Welch ANOVA + Games-Howell (--equal-var no) is the safer "
+                        "analysis." % (_ratio_txt(ev["sd_ratio"]), fmt_p(ev["p_adj"])))
             omni["variance_rule"] = rule
         else:
             hres = _quiet(st.kruskal, *gv)
@@ -1866,88 +1916,326 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
 
 
 # --------------------------------------------------------------------- reporting
+_EFFECT_NAMES = {"cohens_d": "Cohen's d", "hedges_g": "Hedges' g", "eta_squared": "eta squared (η²)",
+                 "epsilon_squared": "epsilon squared (ε² = H / (N − 1))",
+                 "eta_squared_H": "eta squared from H (η²_H = (H − k + 1) / (N − k))"}
+_CENTER_WORDS = {("mean", "sem"): "mean ± SEM", ("mean", "sd"): "mean ± SD",
+                 ("mean", "ci95"): "mean (95 % CI)", ("mean", "iqr"): "mean (IQR)",
+                 ("mean", "none"): "mean", ("median", "iqr"): "median (IQR)",
+                 ("median", "ci95"): "median (bootstrap 95 % CI)", ("median", "none"): "median"}
+
+
+def _unit_word(unit, n=2):
+    w = "plate" if unit == "replicate" else "plaque"
+    return w if n == 1 else w + "s"
+
+
+def _num(x, nd=2):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return "n/a"
+    return "n/a" if x != x else "%.*f" % (nd, x)
+
+
+def _n_list(ns, unit):
+    """'3 plates per sample' or 'T4 3, T7 2 plates' (the real n of every sample, not the minimum)."""
+    vals = [int(v) for v in ns.values()]
+    if not vals:
+        return "n/a"
+    if len(set(vals)) == 1:
+        return "%s per sample" % _plural(vals[0], _unit_word(unit, 1))
+    return ", ".join("%s %d" % (g, n) for g, n in ns.items()) + " " + _unit_word(unit)
+
+
+def _value_text(cen, lo, hi, n, error):
+    """'2.59 ± 0.06', '2.63 (2.41–2.82)' or '2.59' -- never '± nan' (CT-R1 SM-F10)."""
+    if cen is None or cen != cen:
+        return "n/a"
+    if error in ("sd", "sem") and n is not None and n >= 2 and hi == hi and hi > cen:
+        return "%.2f ± %.2f" % (cen, hi - cen)
+    if error in ("ci95", "iqr") and lo == lo and hi == hi and hi > lo:
+        return "%.2f (%.2f–%.2f)" % (cen, lo, hi)
+    return "%.2f" % cen
+
+
+def _centers_from(summ, omni, center, error):
+    """{sample: (centre, low, high, n)} when the caller has no center_table(): from the unit
+    statistics the test used (mean) or the per-plaque quartiles (median)."""
+    out = {}
+    us = (omni or {}).get("unit_stats", {})
+    for _, r in (summ if summ is not None else pd.DataFrame()).iterrows():
+        g = r["group"]
+        if center == "median":
+            lo, hi = (r["q1"], r["q3"]) if error == "iqr" else (r["median"], r["median"])
+            out[g] = (float(r["median"]), float(lo), float(hi), int(r.get("n_units", r["n"])))
+            continue
+        u = us.get(g)
+        if u is None:
+            out[g] = (float(r["mean"]), float("nan"), float("nan"), int(r["n"]))
+            continue
+        half = {"sem": u["sem"], "sd": u["sd"]}.get(error)
+        if error == "ci95" and u["n"] >= 2:
+            half = u["sem"] * float(st.t.ppf(0.975, u["n"] - 1))
+        if half is None or half != half:
+            out[g] = (u["mean"], u["mean"], u["mean"], u["n"])
+        else:
+            out[g] = (u["mean"], u["mean"] - half, u["mean"] + half, u["n"])
+    return out
+
+
+def _what_values(center, error, have_rep, unit):
+    """'mean ± SEM of the plate means' -- what the quoted numbers are."""
+    stat = _CENTER_WORDS.get((center, error), center)
+    if center == "median":
+        return "%s of all plaques" % stat
+    return "%s of the %s" % (stat, "plate means" if (have_rep and unit == "replicate") else "plaques")
+
+
+def _pairs_text(pairs, posthoc_name, max_list=8):
+    """'Pairwise (Tukey HSD): T4 vs T7 p < 0.001, ...' -- long lists say how many instead."""
+    tested = [(a, b, p) for a, b, p in pairs if p == p]
+    if not tested:
+        return ""
+    sig = [(a, b, p) for a, b, p in tested if p < 0.05]
+    head = "Pairwise (%s): " % posthoc_name if posthoc_name else "Pairwise: "
+    if len(tested) <= 6:
+        return head + ", ".join("%s vs %s %s" % (a, b, p_text(p)) for a, b, p in tested) + "."
+    if not sig:
+        return head + "no pair has adjusted p < 0.05 (%d pairs tested)." % len(tested)
+    if len(sig) <= max_list:
+        return head + ", ".join("%s vs %s %s" % (a, b, p_text(p)) for a, b, p in sig) + \
+            "; the other %d pairs p ≥ 0.05." % (len(tested) - len(sig))
+    return head + "%d of %d pairs have adjusted p < 0.05 (every pair is in the pairwise table)." % (
+        len(sig), len(tested))
+
+
+def paste_sentence(metric, summ=None, omni=None, unit=None, have_rep=None, opts=None,
+                   comp=None, control=None, centers=None):
+    """ONLY the paste-ready sentence(s) of an analysis (CT-R1 web F10, SM-F9/F10), naming the
+    metric, the values, the test, the statistical unit and n.
+
+    Single factor: paste_sentence(metric, summ, omni, unit, have_rep, opts) with summ from
+      group_summary() and omni from run_stats(); `centers` (center_table()) makes the quoted
+      values exactly the figure's bar and whisker (else they are rebuilt from summ / omni).
+    Grouped: paste_sentence(metric, comp=comparisons_df, unit=unit, control=control, opts=opts)
+      with comparisons_df from grouped_stats()."""
+    o = _plot_opts(opts or {})
+    center, error = o["center"], o["_error"]
+    if comp is not None:
+        return _paste_grouped(metric, comp, unit, control)
+    omni = omni or {}
+    if summ is None or not len(summ):
+        return ""
+    if have_rep is None:
+        have_rep = unit == "replicate"
+    order = list(summ["group"])
+    cen = centers or _centers_from(summ, omni, center, error)
+    what = _what_values(center, error, have_rep, unit)
+    on = ("plate means" if unit == "replicate" else
+          "single plaques (pseudoreplicated: plaques of one plate are not independent)")
+    nplq = {r["group"]: int(r["n"]) for _, r in summ.iterrows()}
+    nun = omni.get("n_per_group", {g: cen.get(g, (0, 0, 0, 0))[3] for g in order})
+    test, p = omni.get("test", "n/a"), omni.get("p", float("nan"))
+
+    def nn(g):
+        if unit == "replicate":
+            return "N = %s, n = %s" % (_plural(nun.get(g, 0), "plate"), _plural(nplq[g], "plaque"))
+        return "n = %s" % _plural(nplq[g], "plaque")
+
+    def val(g):
+        c = cen.get(g)
+        return "n/a" if c is None else _value_text(c[0], c[1], c[2], c[3], error)
+
+    if len(order) == 2:
+        g1, g2 = order
+        eff = omni.get("effect", {}) or {}
+        e_txt = ""
+        if eff.get("hedges_g") == eff.get("hedges_g") and eff.get("hedges_g") is not None:
+            e_txt = ", Hedges' g = %.2f (Cohen's d = %.2f" % (eff["hedges_g"], eff.get("cohens_d", float("nan")))
+            if 0 < omni.get("min_n", 0) < 5:
+                e_txt += "; a %d-vs-%d %s estimate, treat as rough" % (
+                    nun.get(g1, 0), nun.get(g2, 0), _unit_word(unit, 1))
+            e_txt += ")"
+        if p != p:
+            res = "%s on %s could not be computed (p = n/a)" % (test, on)
+        else:
+            res = "%s on %s, %s" % (test, on, p_text(p))
+        return ("%s in %s was %s (%s; %s) vs %s in %s (%s); %s%s."
+                % (metric, g1, val(g1), what, nn(g1), val(g2), g2, nn(g2), res, e_txt))
+    if len(order) < 2:
+        return "%s: only one sample (%s), so nothing was compared." % (metric, order[0] if order else "none")
+    k = len(order)
+    if p != p:
+        verdict = "%s was not tested across the %d samples (%s; p = n/a)" % (metric, k, test)
+    else:
+        verdict = ("%s %s between the %d samples (%s on %s, %s, %s)"
+                   % (metric, "differed" if p < 0.05 else "did not differ significantly", k, test, on,
+                      _n_list(nun, unit), p_text(p)))
+    vals = "; ".join("%s %s" % (g, val(g)) for g in order)
+    post = omni.get("posthoc") or ""
+    if post == "Dunnett" and omni.get("control"):
+        post = "Dunnett, each sample vs %s" % omni["control"]
+    pairs = [(r["group_a"], r["group_b"], r["p_adj"]) for r in omni.get("pairwise", [])]
+    s = "%s. Values are %s: %s." % (verdict, what, vals)
+    pt = _pairs_text(pairs, post)
+    return s + (" " + pt if pt else "")
+
+
+def _paste_grouped(metric, comp, unit, control):
+    if comp is None or not len(comp):
+        return "%s: no subgroup could be compared with the control %s." % (metric, control)
+    on = "plate means" if unit == "replicate" else "single plaques (pseudoreplicated)"
+    uw = _unit_word(unit)
+    if control is None:
+        control = comp["control"].iloc[0]
+    out = []
+    for g, sub in comp.groupby("group", sort=False):
+        bits = []
+        for _, r in sub.iterrows():
+            p = r["p"]
+            if p != p:
+                ptxt = "not tested, p = n/a"
+            elif str(r.get("test", "")) == "Dunnett":
+                ptxt = "Dunnett-adjusted " + p_text(p)
+            else:
+                ptxt = "Holm-adjusted " + p_text(p)
+            bits.append("%s on %s vs %s on %s (%s on %s, %d vs %d %s, %s)"
+                        % (_num(r["mean_subgroup"]), r["subgroup"], _num(r["mean_control"]), control,
+                           r["test"], on, int(r["n_subgroup"]), int(r["n_control"]), uw, ptxt))
+        out.append("In %s, %s was %s." % (g, metric, "; ".join(bits)))
+    return ("Each subgroup was compared with the control %s within its group (values are means of "
+            "the %s). " % (control, on)) + " ".join(out)
+
+
 def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, args):
+    """The markdown report. Signature unchanged; optional keys read from `args`:
+    _stamp, _parse_note, _data_notes, _centers, _annotation_note, center/error/annotate/log_y."""
+    args = args or {}
+    o = _plot_opts(args)
+    order = list(summ["group"])
+    uw = _unit_word(unit)
     L = []
     L.append(f"# Plaque statistics report — {metric}\n")
-    L.append(f"_Generated {args['_stamp']} · plaque_stats v{__version__}_\n")
-    L.append("## Group summary (per plaque)\n")
+    L.append("_Generated %s · %s_\n" % (_stamp(args), _toolkit_version()))
+    data_lines = [x for x in [args.get("_parse_note")] + list(args.get("_data_notes") or []) if x]
+    if data_lines:
+        L.append("## Data\n")
+        L.extend("- %s" % x for x in data_lines)
+        L.append("")
+    L.append("## Group summary (per plaque; the unit_* columns are the statistical unit)\n")
     L.append(_md(summ.round(4)))
     if rep_summ is not None:
         L.append("\n## Per-replicate (plate) means\n")
         L.append(_md(rep_summ.round(4)))
     L.append("\n## Group comparison\n")
-    L.append(f"- **Statistical unit:** {unit}"
-             + ("  _(per-plate means — avoids pseudoreplication)_" if unit == "replicate"
-                else "  _(per-plaque — no replicate column, so plates are pooled;"
-                     " treat with caution)_") + "\n")
-    L.append("- **Omnibus test:** %s, p = %s (parametric=%s, unit n = %d per group, Levene p=%s)\n"
-             % (omni["test"], _fmt_p(omni["p"]), omni["parametric_used"],
-                omni.get("min_n", 0), _fmt_p(omni["levene_p"])))
-    eff = omni.get("effect", {})
-    if eff:
-        ek, ev = next(iter(eff.items()))
-        if ev == ev:
-            L.append("- **Effect size:** %s = %.3f\n" % (ek.replace("_", " "), ev))
+    if unit == "replicate":
+        L.append("- **Statistical unit:** the plate (per-plate means — avoids pseudoreplication); "
+                 "%s.\n" % _n_list(omni.get("n_per_group", {}), unit))
+    else:
+        why = ("--unit plaque was chosen although the data have plates" if have_rep
+               else "the data have no plate/replicate column")
+        L.append("- **Statistical unit:** the plaque (%s). Plaques on one plate are not independent, "
+                 "so these p-values are too small; %s.\n" % (why, _n_list(omni.get("n_per_group", {}), unit)))
+    L.append("- **Omnibus test:** %s, %s (Levene p = %s)\n"
+             % (omni["test"], p_text(omni["p"]), fmt_p(omni.get("levene_p"))))
+    if omni.get("posthoc"):
+        post = omni["posthoc"]
+        if post == "Dunnett":
+            post += (" (each sample vs the control %s, simultaneous 95 %% CIs; Dunnett's test "
+                     "assumes similar variances in all samples)" % omni.get("control"))
+        elif post == "Tukey HSD":
+            post += " (all pairs, family-wise adjusted, equal variances assumed)"
+        elif post == "Games-Howell":
+            post += " (all pairs, no equal-variance assumption)"
+        L.append("- **Post-hoc test:** %s\n" % post)
+    eff = omni.get("effect", {}) or {}
+    eff_txt = ["%s = %.3f" % (_EFFECT_NAMES.get(k, k.replace("_", " ")), v)
+               for k, v in eff.items() if v is not None and v == v]
+    if eff_txt:
+        L.append("- **Effect size:** %s\n" % "; ".join(eff_txt))
     for w in omni.get("warnings", []):
         L.append("- ⚠️ **%s**\n" % w)
+    pw = omni.get("pairwise") or []
     if posthoc:
-        L.append("\n**Pairwise (adjusted p):**\n")
-        rows = [{"pair": f"{a} vs {b}", "p_adj": _fmt_p(p), "signif": stars(p)}
-                for (a, b), p in posthoc.items()]
+        L.append("\n**Pairwise (adjusted p; differences, CIs and effect sizes on the %s):**\n" % uw)
+        rows = []
+        for r in pw:
+            ci = ("[%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
+                  if r.get("diff_ci95_lo") == r.get("diff_ci95_lo") else "n/a")
+            row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
+                   "difference (A−B)": _num(r["mean_diff"], 3), "95 % CI": ci,
+                   "CI type": r.get("ci_method") or "", "Cohen's d": _num(r["cohens_d"]),
+                   "Hedges' g": _num(r["hedges_g"]), "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
+            if "tost_p" in r:
+                row["TOST p"] = fmt_p(r["tost_p"])
+            rows.append(row)
+        if not rows:
+            rows = [{"pair": f"{a} vs {b}", "p_adj": fmt_p(p), "signif": stars(p)} for (a, b), p in posthoc.items()]
         L.append(_md(pd.DataFrame(rows)))
-    # paste-ready sentence
+    if omni.get("equivalence_margin") and pw:
+        m = omni["equivalence_margin"]
+        L.append("\n**Equivalence (TOST, two one-sided Welch t-tests on the %s, margin ±%g):** "
+                 "a pair is called equivalent when TOST p < 0.05, i.e. the 90 %% CI of the "
+                 "difference lies inside ±%g.\n" % (uw, m, m))
+        for r in pw:
+            L.append("- %s vs %s: TOST %s — %s." % (r["group_a"], r["group_b"], p_text(r.get("tost_p")),
+                                                   r.get("equivalence", "not testable")))
     L.append("\n## Paste-ready sentence\n")
-
-    def _n(row):
-        s = "n=%d" % int(row["n"])
-        return s + (", %d plates" % int(row["n_replicates"]) if have_rep else " plaques")
-
-    if len(summ) == 2:
-        g1, g2 = summ.iloc[0], summ.iloc[1]
-        d_txt = ""
-        d_val = omni.get("effect", {}).get("cohens_d")
-        us = omni.get("unit_stats", {})
-        if d_val is not None and d_val == d_val:
-            d_txt = ", Cohen's d = %.2f" % d_val
-            if omni.get("min_n", 0) < 5:
-                d_txt += " (a %d-vs-%d %s estimate; treat as rough)" % (
-                    us.get(g1["group"], {}).get("n", 0), us.get(g2["group"], {}).get("n", 0),
-                    "plate" if unit == "replicate" else "plaque")
-        if unit == "replicate" and g1["group"] in us and g2["group"] in us:
-            # Quote the numbers the test was run on (plate means +/- SEM, n = plates), not
-            # per-plaque mean +/- SD beside a plate-level p (AUDIT-2026-10.md, PT-43).
-            u1, u2 = us[g1["group"]], us[g2["group"]]
-            L.append("> %s in %s was %.2f ± %.2f (mean ± SEM of %d plate means; %d plaques) vs %s "
-                     "%.2f ± %.2f (%d plates; %d plaques); %s on plate means, p = %s%s."
-                     % (metric, g1["group"], u1["mean"], u1["sem"], u1["n"], int(g1["n"]),
-                        g2["group"], u2["mean"], u2["sem"], u2["n"], int(g2["n"]),
-                        omni["test"], _fmt_p(omni["p"]), d_txt))
-        else:
-            L.append("> %s in %s was %.2f ± %.2f (%s) vs %s %.2f ± %.2f (%s); %s p = %s%s."
-                     % (metric, g1["group"], g1["mean"], g1["sd"], _n(g1),
-                        g2["group"], g2["mean"], g2["sd"], _n(g2),
-                        omni["test"], _fmt_p(omni["p"]), d_txt))
-    else:
-        unit_note = ("the plate is the experimental unit" if unit == "replicate"
-                     else "NOTE: unit = plaque — pseudoreplication, add plate replicates")
-        L.append("> %s across %d groups: p = %s (statistical unit: %s; pairwise: %s). "
-                 "Values are mean ± SD per plaque; %s."
-                 % (omni["test"], len(summ), _fmt_p(omni["p"]), unit,
-                    omni.get("posthoc", "Holm/Tukey"), unit_note))
-
+    L.append("> " + paste_sentence(metric, summ, omni, unit, have_rep, args, centers=args.get("_centers")))
+    L.append("\n## Figure\n")
+    n_units = list(summ["n_units"]) if "n_units" in summ.columns else None
+    fig_txt = figure_sentence(o, have_rep, n_units)
+    ann = args.get("_annotation_note")
+    if ann is None:
+        ann = annotation_plan(order, posthoc, o)["note"]
+    L.append(fig_txt + ((" " + ann) if ann else ""))
+    L.append("\n## Design and power\n")
+    L.append("- " + power_sentence(omni.get("power"), unit))
+    icc = omni.get("icc")
+    if icc and icc.get("icc") == icc.get("icc"):
+        L.append("- **Plate-to-plate variation:** %.0f %% of the variance within a sample lies between "
+                 "plates (one-way random-effects ICC of plaques within plates = %.2f; %d plates, %d "
+                 "plaques). The larger this share, the more the plate, not the plaque, must be the unit."
+                 % (100 * icc["icc"], icc["icc"], icc["n_plates"], icc["n_plaques"]))
     L.append("\n## Assumptions & limitations\n")
-    L.append("- **Experimental unit:** %s — %s." % (
-        unit, "per-plate means, the biological replicate (correct)" if unit == "replicate"
-        else "per plaque; plaques on a plate are NOT independent — add a replicate/plate column"))
-    L.append("- **Test choice:** %s. With **< 8 replicates per group** the tool uses a *parametric* test "
-             "on the plate means — Shapiro–Wilk is unreliable and non-parametric tests are underpowered at "
-             "small n (Mann–Whitney cannot reach p<0.05 at 3 vs 3); this follows SuperPlots (Lord et al. "
-             "2020). Override with `--parametric`." % omni["test"])
-    L.append("- **Replicates per group:** min = %d. Aim for ≥ 3 plates; more plates = more power."
-             % omni.get("min_n", 0))
+    L.append("- **Experimental unit:** %s." % (
+        "the plate — per-plate means, the biological replicate (correct)" if unit == "replicate"
+        else "the plaque — plaques on a plate are NOT independent; add a replicate/plate column"))
+    choice = omni.get("choice_note") or ""
+    rule = omni.get("variance_rule") or ""
+    L.append("- **Test choice:** %s, followed by %s. %s %s"
+             % (omni["test"], omni.get("posthoc") or "no post-hoc test", choice, rule))
+    L.append("- **Units per sample:** %s. Aim for ≥ 3 plates; more plates = more power."
+             % _n_list(omni.get("n_per_group", {}), unit))
     for w in omni.get("warnings", []):
         L.append("- ⚠️ %s" % w)
-    open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
+    for nt in omni.get("notes", []):
+        L.append("- %s" % nt)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(L) + "\n")
+
+
+def power_sentence(pw, unit="replicate"):
+    """One sentence from power_summary() (CT-R1 B3)."""
+    uw = _unit_word(unit)
+    if not pw or not pw.get("available"):
+        return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
+    s = ("**Power:** with %d %s per sample and the observed pooled SD of the %s (%.3g), a difference "
+         "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
+         % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
+            pw["pooled_sd"], pw["detectable_diff"], round(100 * pw["power"]), pw["alpha"]))
+    if not pw.get("equal_n", True):
+        s = s.replace("with %d %s per sample" % (pw["n_per_group"], uw),
+                      "with %d %s per sample (the smallest sample)" % (pw["n_per_group"], uw))
+
+    def need(n):
+        return ("more than 1,000 %s" % uw) if n is None else _plural(n, _unit_word(unit, 1))
+    if "largest_diff" in pw:
+        s += (" Detecting the largest observed difference (%.3g) needs %s per sample; the smallest "
+              "(%.3g) needs %s." % (pw["largest_diff"], need(pw["n_for_largest"]),
+                                   pw["smallest_diff"], need(pw["n_for_smallest"])))
+    return s
 
 
 def _md(df):
@@ -2018,80 +2306,105 @@ def make_example(folder):
     print("wrote example_data_long.csv, example_data_wide.csv, TEMPLATE.csv ->", os.path.abspath(folder))
 
 
+_TABLE_RC = {"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42}
+
+
 def save_stats_table(summ, base, metric, unit, formats=("png",)):
-    """Render the descriptive-statistics table in each requested format (PNG + editable SVG/PDF)."""
-    cols = ["group", "n", "n_replicates", "mean", "sd", "sem", "ci95_lo", "ci95_hi",
-            "median", "iqr", "cv_pct"]
-    disp = summ[cols].copy()
-    disp.columns = ["Sample", "n", "plates", "Mean", "SD", "SEM", "CI95 lo", "CI95 hi",
-                    "Median", "IQR", "CV %"]
-    for c in ["Mean", "SD", "SEM", "CI95 lo", "CI95 hi", "Median", "IQR", "CV %"]:
-        disp[c] = disp[c].map(lambda x: ("%.3g" % x) if pd.notna(x) else "")
-    # a presentation-ready combined column (mean ± SD)
-    disp.insert(3, "Mean ± SD", ["%.3g ± %.2g" % (m, s) if pd.notna(m) and pd.notna(s) else ""
-                                 for m, s in zip(summ["mean"], summ["sd"])])
-    nrow = len(disp)
-    fig, ax = plt.subplots(figsize=(min(13, 2.0 + 0.92 * len(disp.columns)), 0.55 + 0.34 * (nrow + 1)))
-    ax.axis("off")
-    ax.set_title("Descriptive statistics — %s  (per plaque; tests use unit: %s)" % (metric, unit),
-                 fontsize=11, fontweight="bold", loc="left", pad=12)
-    tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
-                   loc="center", cellLoc="center")
-    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.35)
-    tbl.auto_set_column_width(range(len(disp.columns)))
-    for (r, c), cell in tbl.get_celld().items():
-        cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
-        if r == 0:
-            cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
-        elif r % 2 == 0:
-            cell.set_facecolor("#f6f9f7")
-        if c == 0 and r > 0:
-            cell.set_text_props(fontweight="bold")
-    _save_all(fig, base, formats)
+    """Render the descriptive-statistics table in each requested format (PNG + editable SVG/PDF).
+    The per-plaque columns are unchanged; when the summary carries the unit columns
+    (group_summary), 'N' and the unit mean ± SEM are added (CT-R1 SM-F7)."""
+    with matplotlib.rc_context(_TABLE_RC):                 # CT-R1 DA-F18: no rcParams leak
+        cols = ["group", "n", "n_replicates", "mean", "sd", "sem", "ci95_lo", "ci95_hi",
+                "median", "iqr", "cv_pct"]
+        disp = summ[cols].copy()
+        disp.columns = ["Sample", "n", "plates", "Mean", "SD", "SEM", "CI95 lo", "CI95 hi",
+                        "Median", "IQR", "CV %"]
+        for c in ["Mean", "SD", "SEM", "CI95 lo", "CI95 hi", "Median", "IQR", "CV %"]:
+            disp[c] = disp[c].map(lambda x: ("%.3g" % x) if pd.notna(x) else "")
+        # a presentation-ready combined column (mean ± SD)
+        disp.insert(3, "Mean ± SD", ["%.3g ± %.2g" % (m, s) if pd.notna(m) and pd.notna(s) else
+                                     ("%.3g" % m if pd.notna(m) else "")
+                                     for m, s in zip(summ["mean"], summ["sd"])])
+        per_plate = "unit_mean" in summ.columns and (summ.get("unit", pd.Series(["plaque"])) == "plate").any()
+        if per_plate:
+            disp["N plates"] = summ["n_units"].astype(int).astype(str).values
+            disp["Plate mean ± SEM"] = ["%.3g ± %.2g" % (m, s) if pd.notna(s) else
+                                        ("%.3g" % m if pd.notna(m) else "")
+                                        for m, s in zip(summ["unit_mean"], summ["unit_sem"])]
+        nrow = len(disp)
+        fig, ax = plt.subplots(figsize=(min(15, 2.0 + 0.92 * len(disp.columns)), 0.55 + 0.34 * (nrow + 1)))
+        ax.axis("off")
+        ax.set_title(_lk.safe_text("Descriptive statistics — %s  (per plaque%s; tests use unit: %s)"
+                                   % (metric, "; last two columns: plate means" if per_plate else "", unit)),
+                     fontsize=11, fontweight="bold", loc="left", pad=12)
+        tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
+                       loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.35)
+        tbl.auto_set_column_width(range(len(disp.columns)))
+        for (r, c), cell in tbl.get_celld().items():
+            cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
+            if r == 0:
+                cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
+            elif r % 2 == 0:
+                cell.set_facecolor("#f6f9f7")
+            if c == 0 and r > 0:
+                cell.set_text_props(fontweight="bold")
+        _save_all(fig, base, formats)
 
 
 def _save_all(fig, base, formats):
     """Save a figure to every requested format (SVG/PDF keep text editable for Inkscape)."""
-    for fmt in formats:
-        kw = {"dpi": 200, "bbox_inches": "tight", "facecolor": "white"}
-        if fmt in ("tif", "tiff"):
-            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
-        fig.savefig(f"{base}.{fmt}", **kw)
+    with matplotlib.rc_context(_TABLE_RC):
+        for fmt in formats:
+            kw = {"dpi": 200, "bbox_inches": "tight", "facecolor": "white"}
+            if fmt in ("tif", "tiff"):
+                kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+            fig.savefig(f"{base}.{fmt}", **kw)
     plt.close(fig)
 
 
-def save_pairwise_table(unit_means, posthoc, base, metric, unit, formats=("png",)):
-    """Render the pairwise comparison table (Δ magnitude + adjusted p) in each requested format."""
+def save_pairwise_table(unit_means, posthoc, base, metric, unit, formats=("png",), pairwise=None):
+    """Render the pairwise comparison table (Δ magnitude + adjusted p) in each requested format.
+    With `pairwise` (omni["pairwise"]) the 95 % CI of Δ and Hedges' g are added (CT-R1 B2)."""
     rows = []
+    extra = {(r["group_a"], r["group_b"]): r for r in (pairwise or [])}
     for (a, b), p in posthoc.items():
         da, db = unit_means.get(a, float("nan")), unit_means.get(b, float("nan"))
-        rows.append([str(a), str(b), "%.3g" % da, "%.3g" % db, "%+.3g" % (da - db),
-                     _fmt_p(p), stars(p)])
+        row = [str(a), str(b), "%.3g" % da, "%.3g" % db, "%+.3g" % (da - db)]
+        if pairwise is not None:
+            r = extra.get((a, b), {})
+            lo, hi = r.get("diff_ci95_lo", float("nan")), r.get("diff_ci95_hi", float("nan"))
+            row += ["[%+.3g, %+.3g]" % (lo, hi) if lo == lo else "n/a", _num(r.get("hedges_g"))]
+        rows.append(row + [fmt_p(p), stars(p)])
     if not rows:
         return
-    disp = pd.DataFrame(rows, columns=["Sample A", "Sample B", "mean A", "mean B",
-                                       "Δ (A−B)", "p (adj)", "signif"])
-    nrow = len(disp)
-    fig, ax = plt.subplots(figsize=(min(12, 2.2 + 0.95 * len(disp.columns)), 0.75 + 0.32 * (nrow + 1)))
-    ax.axis("off")
-    ax.set_title("Pairwise comparisons — %s  (unit: %s)" % (metric, unit),
-                 fontsize=11, fontweight="bold", loc="left", pad=12)
-    fig.text(0.5, 0.008, "Each row compares two SAMPLES (A vs B); every mean is averaged across all "
-             "plate replicates.  Δ = mean A − mean B.", ha="center", fontsize=8, color="#5b6a65")
-    tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
-                   loc="center", cellLoc="center")
-    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.3)
-    tbl.auto_set_column_width(range(len(disp.columns)))
-    sigc = list(disp.columns).index("signif")
-    for (r, c), cell in tbl.get_celld().items():
-        cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
-        if r == 0:
-            cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
-        elif r % 2 == 0:
-            cell.set_facecolor("#f6f9f7")
-        if r > 0 and c == sigc and disp.iloc[r - 1]["signif"] != "ns":
-            cell.set_text_props(fontweight="bold", color="#0a5c43")
-    _save_all(fig, base, formats)
+    cols = ["Sample A", "Sample B", "mean A", "mean B", "Δ (A−B)"]
+    if pairwise is not None:
+        cols += ["95 % CI of Δ", "Hedges' g"]
+    disp = pd.DataFrame(rows, columns=cols + ["p (adj)", "signif"])
+    with matplotlib.rc_context(_TABLE_RC):
+        nrow = len(disp)
+        fig, ax = plt.subplots(figsize=(min(14, 2.2 + 0.95 * len(disp.columns)), 0.75 + 0.32 * (nrow + 1)))
+        ax.axis("off")
+        ax.set_title(_lk.safe_text("Pairwise comparisons — %s  (unit: %s)" % (metric, unit)),
+                     fontsize=11, fontweight="bold", loc="left", pad=12)
+        fig.text(0.5, 0.008, "Each row compares two SAMPLES (A vs B) on the %s.  Δ = mean A − mean B."
+                 % ("plate means" if unit == "replicate" else "plaques"),
+                 ha="center", fontsize=8, color="#5b6a65")
+        tbl = ax.table(cellText=disp.values.tolist(), colLabels=list(disp.columns),
+                       loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.3)
+        tbl.auto_set_column_width(range(len(disp.columns)))
+        sigc = list(disp.columns).index("signif")
+        for (r, c), cell in tbl.get_celld().items():
+            cell.set_edgecolor("#d7e0db"); cell.set_linewidth(0.7)
+            if r == 0:
+                cell.set_facecolor("#e7efeb"); cell.set_text_props(fontweight="bold", color="#12211d")
+            elif r % 2 == 0:
+                cell.set_facecolor("#f6f9f7")
+            if r > 0 and c == sigc and disp.iloc[r - 1]["signif"] not in ("ns", "n/a"):
+                cell.set_text_props(fontweight="bold", color="#0a5c43")
+        _save_all(fig, base, formats)
 
 
 # --------------------------------------------------------------------------- main
@@ -2104,7 +2417,9 @@ def normalize_grouped(df, group, subgroup, value, replicate, metric):
     """Tidy frame: group, subgroup, replicate, value — for the grouped mode (labels as typed,
     dropped rows counted in attrs, exactly as normalize())."""
     out, value = _normalize_core(df, group, value, replicate, metric, subgroup=subgroup)
-    return out[["group", "subgroup", "replicate", "value"]], value
+    res = out[["group", "subgroup", "replicate", "value"]]
+    res.attrs.update(out.attrs)
+    return res, value
 
 
 def _plate_means_gs(df):
@@ -2122,28 +2437,56 @@ def _two_sample_test(control_vals, treat_vals, parametric):
     if len(a) < 2 or len(b) < 2:
         return float("nan"), "n/a (need ≥2 per side)"
     if parametric == "nonparametric":
-        try:
-            _, p = st.mannwhitneyu(a, b, alternative="two-sided")
-            return float(p), "Mann–Whitney U"
-        except ValueError:
+        r = _quiet(st.mannwhitneyu, a, b, alternative="two-sided")
+        if r is None:
             return float("nan"), "Mann–Whitney U (all ties)"
+        return float(r.pvalue), "Mann–Whitney U"
     # auto/parametric: Welch t-test (MWU can't reach p<0.05 at 3 vs 3 — underpowered at small n)
-    _, p = st.ttest_ind(a, b, equal_var=False)
-    return float(p), "Welch t-test"
+    r = _quiet(st.ttest_ind, a, b, equal_var=False)
+    p = float(r.pvalue) if r is not None else float("nan")
+    return p, "Welch t-test"
 
 
-def grouped_stats(df, group_order, sub_order, control, parametric="auto"):
+def grouped_stats(df, group_order, sub_order, control, parametric="auto", unit="auto",
+                  posthoc="auto", return_info=False):
     """Per (group, subgroup) summary + each non-control subgroup tested vs the control subgroup,
     on the experimental unit (plate means when replicates exist, else plaques). Returns
-    (summary_df, comparisons_df, unit)."""
+    (summary_df, comparisons_df, unit) as always; with return_info=True a 4th item
+    {"warnings": [...], "notes": [...]} (also in comparisons_df.attrs).
+
+    New keyword arguments (CT-R1 SM-F14, web F11, B1):
+      unit     auto | replicate | plaque  -- as in run_stats(); replicate without plates is an error.
+      posthoc  auto | dunnett  -- dunnett = Dunnett's many-to-one test within each group (simultaneous
+               95 % CIs), instead of Welch t-tests + Holm."""
+    unit = _check_choice(unit, ("auto", "replicate", "plaque"), "--unit")
+    parametric = _check_choice(parametric, ("auto", "parametric", "nonparametric"), "--parametric")
+    posthoc = _check_choice(posthoc, ("auto", "dunnett"), "--posthoc")
+    if posthoc == "dunnett" and parametric == "nonparametric":
+        raise StatsError("Dunnett's test is parametric: drop --parametric nonparametric, or drop "
+                         "--posthoc dunnett to get Mann–Whitney tests.")
     pm = _plate_means_gs(df)
-    unit = "replicate" if pm is not None else "plaque"
-    src = pm if pm is not None else df
+    if unit == "replicate" and pm is None:
+        raise StatsError("no plate/replicate column: --unit replicate needs a plate id on every row. "
+                         "Add one, or choose --unit plaque (pseudoreplicated).")
+    unit = ("replicate" if pm is not None else "plaque") if unit == "auto" else unit
+    src = pm if unit == "replicate" else df
+    uw = _unit_word(unit)
+    warns, notes = [], []
+    if unit == "plaque":
+        warns.append("Statistical unit is the PLAQUE%s: plaques from the same plate are not independent "
+                     "(pseudoreplication), so p-values are anti-conservative."
+                     % (" because --unit plaque was chosen" if pm is not None else
+                        " (no replicate/plate column)"))
     rows, comps = [], []
     for g in group_order:
-        ctrl = src[(src["group"] == g) & (src["subgroup"] == control)]["value"].values
+        ctrl = src[(src["group"] == g) & (src["subgroup"] == control)]["value"].values.astype(float)
+        dn_p, dn_ci = {}, {}
+        if posthoc == "dunnett":
+            cell = {s: src[(src["group"] == g) & (src["subgroup"] == s)]["value"].values.astype(float)
+                    for s in sub_order}
+            dn_p, dn_ci = dunnett(cell, control)
         for s in sub_order:
-            vals = src[(src["group"] == g) & (src["subgroup"] == s)]["value"].values
+            vals = src[(src["group"] == g) & (src["subgroup"] == s)]["value"].values.astype(float)
             d = describe(vals)
             rows.append({"group": g, "subgroup": s, "is_control": s == control,
                          "n_units": len(vals),
@@ -2151,120 +2494,231 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto"):
                          "mean": d["mean"], "sd": d["sd"], "sem": d["sem"],
                          "ci95_lo": d["ci95_lo"], "ci95_hi": d["ci95_hi"],
                          "median": d["median"], "min": d["min"], "max": d["max"]})
+            if 0 < len(vals) < 2:
+                warns.append("%s / %s has %s: it cannot be tested; add %s (its comparison is n/a)."
+                             % (g, s, _plural(len(vals), _unit_word(unit, 1)), uw))
             if s != control and len(ctrl) and len(vals):
-                p, test = _two_sample_test(ctrl, vals, parametric)
+                if posthoc == "dunnett":
+                    p = dn_p.get((s, control), float("nan"))
+                    lo, hi = dn_ci.get((s, control), (float("nan"), float("nan")))
+                    test = "Dunnett" if p == p else "n/a (need ≥2 per side)"
+                else:
+                    p, test = _two_sample_test(ctrl, vals, parametric)
+                    lo = hi = float("nan")
+                    if len(ctrl) >= 2 and len(vals) >= 2:
+                        se, dfree = _welch_se_df(vals, ctrl)
+                        if se > 0 and dfree == dfree:
+                            h = float(st.t.ppf(0.975, dfree)) * se
+                            lo, hi = float(np.mean(vals) - np.mean(ctrl) - h), float(np.mean(vals) - np.mean(ctrl) + h)
                 mc, mm = float(np.mean(ctrl)), float(np.mean(vals))
+                cd = cohens_d(vals, ctrl)
                 comps.append({"group": g, "subgroup": s, "control": control,
                               "mean_control": round(mc, 4), "mean_subgroup": round(mm, 4),
-                              "change_pct": round((mm - mc) / mc * 100, 1) if mc else float("nan"),
-                              "cohens_d": round(cohens_d(vals, ctrl), 3),
+                              # CT-R1 SM-F14: a % change of a control mean <= 0 is meaningless
+                              "change_pct": round((mm - mc) / mc * 100, 1) if mc > 0 else float("nan"),
+                              "cohens_d": round(cd, 3) if cd == cd else float("nan"),
                               "n_control": len(ctrl), "n_subgroup": len(vals),
                               # a test that didn't run (n<2 per side -> p is NaN) must NOT read as a
                               # tested 'ns'; label it n/a so the report/plot don't imply a null result
-                              "test": test, "p": p, "signif": stars(p) if p == p else "n/a"})
+                              "test": test, "p": p, "signif": stars(p) if p == p else "n/a",
+                              "mean_diff": mm - mc, "diff_ci95_lo": lo, "diff_ci95_hi": hi,
+                              "hedges_g": hedges_g(vals, ctrl)})
     comps_df = pd.DataFrame(comps)
     if len(comps_df):
-        # Several subgroups are each tested against the one control within a group: adjust
-        # those p-values (Holm, within group) and report both (AUDIT-2026-10.md, PT-44).
         comps_df["p_raw"] = comps_df["p"]
-        adj = []
-        for g, sub in comps_df.groupby("group", sort=False):
-            raw = {i: (float(p) if p == p else float("nan")) for i, p in zip(sub.index, sub["p"])}
-            a = _holm(raw)
-            adj += [(i, a[i]) for i in sub.index]
-        for i, p in adj:
-            comps_df.loc[i, "p"] = p
-            comps_df.loc[i, "signif"] = stars(p) if p == p else "n/a"
-    return pd.DataFrame(rows), comps_df, unit
+        if posthoc != "dunnett":
+            # Several subgroups are each tested against the one control within a group: adjust
+            # those p-values (Holm, within group) and report both (AUDIT-2026-10.md, PT-44).
+            adj = []
+            for g, sub in comps_df.groupby("group", sort=False):
+                raw = {i: (float(p) if p == p else float("nan")) for i, p in zip(sub.index, sub["p"])}
+                a = _holm(raw)
+                adj += [(i, a[i]) for i in sub.index]
+            for i, p in adj:
+                comps_df.loc[i, "p"] = p
+                comps_df.loc[i, "signif"] = stars(p) if p == p else "n/a"
+        mins = [min(r["n_control"], r["n_subgroup"]) for _, r in comps_df.iterrows()]
+        if parametric == "nonparametric" and mins and min(mins) < 4:
+            warns.append("Non-parametric test with <4 per side: significance can be UNREACHABLE "
+                         "(Mann–Whitney floor p = 0.10 at 3 vs 3). With few plates prefer a "
+                         "parametric test on the plate means.")
+    if posthoc == "dunnett":
+        notes.append("Dunnett's test (each subgroup vs %s within its group, simultaneous 95 %% CIs) "
+                     "assumes similar variances in all subgroups of a group." % control)
+    comps_df.attrs["warnings"], comps_df.attrs["notes"] = warns, notes
+    summ = pd.DataFrame(rows)
+    if return_info:
+        return summ, comps_df, unit, {"warnings": warns, "notes": notes}
+    return summ, comps_df, unit
 
 
 def plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     """Grouped SuperPlot: main groups on x, subgroups as neutral violins offset within each group,
-    plate-mean dots + mean±SEM coloured by subgroup, and a significance star for each non-control
-    subgroup vs the control (within its group). Legend marks the control."""
-    plt.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42,
-                         "font.size": 12, "font.family": "sans-serif", "axes.linewidth": 0.9})
+    plate-mean dots + bar/whisker coloured by subgroup, and a significance star for each non-control
+    subgroup vs the control (within its group). Legend marks the control.
+    Runs inside matplotlib.rc_context (CT-R1 DA-F18)."""
+    with matplotlib.rc_context(_FIG_RC):
+        return _plot_grouped(df, list(group_order), list(sub_order), control, _plot_opts(opts),
+                             metric_name, comp if comp is not None else pd.DataFrame())
+
+
+def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
+    import matplotlib.transforms as mtransforms
     rng = np.random.default_rng(opts["seed"])
     fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
-    pal = opts["palette"]
+    pal = clean_palette(opts.get("palette"), needed=len(sub_order), what="subgroup level")
     scol = {s: pal[i % len(pal)] for i, s in enumerate(sub_order)}          # colour per subgroup
     pm = _plate_means_gs(df)
-    span = (float(df["value"].max()) - float(df["value"].min())) or 1.0
+    log_y = bool(opts.get("log_y"))
+    drawmask, log_note = _log_guard(df["value"].values, opts)
+    ddf = df[drawmask]
+    cen_tab = center_table(df, group_order, opts, by=("group", "subgroup"))
     K = max(len(sub_order), 1)
     slot = 0.82 / K
     offs = {s: (i - (K - 1) / 2.0) * slot for i, s in enumerate(sub_order)}
     pmap = {(r["group"], r["subgroup"]): r["p"] for _, r in comp.iterrows()} if len(comp) else {}
-    gmax = {}
+    if log_y:
+        ax.set_yscale("log")
+    tops, cells = {}, []
     for gi, g in enumerate(group_order):
         for s in sub_order:
             x = (gi + 1) + offs[s]
-            vals = df[(df["group"] == g) & (df["subgroup"] == s)]["value"].values
+            vals = ddf[(ddf["group"] == g) & (ddf["subgroup"] == s)]["value"].values
             if not len(vals):
                 continue
-            vp = ax.violinplot([vals], positions=[x], widths=slot * 0.92, showextrema=False)
+            cells.append((g, s, x))
+            vp = ax.violinplot([np.log10(vals) if log_y else vals], positions=[x], widths=slot * 0.92,
+                               showextrema=False)
             for b in vp["bodies"]:
                 b.set_facecolor("#b9c2bd"); b.set_edgecolor("#6f7b74")
                 b.set_alpha(min(1.0, 0.32 * float(opts.get("violin_alpha", 0.55)) / 0.55))
                 b.set_linewidth(0.8)
                 vv = b.get_paths()[0].vertices
+                if log_y:
+                    vv[:, 1] = 10.0 ** vv[:, 1]
                 vv[:, 1] = np.clip(vv[:, 1], float(np.min(vals)), float(np.max(vals)))
             c = scol[s]
+            top = float(np.max(vals))
             if pm is not None:
                 if opts.get("show_points", True):        # faint raw plaques behind the plate means
                     jr = x + rng.uniform(-slot * 0.30, slot * 0.30, size=len(vals))
                     ax.scatter(jr, vals, s=opts["point_size"] * 0.7, color=c, alpha=0.20,
                                edgecolor="none", zorder=2)
                 um = pm[(pm["group"] == g) & (pm["subgroup"] == s)]["value"].values
+                if log_y:
+                    um = um[um > 0]
                 jx = (x + np.linspace(-0.03, 0.03, len(um))) if len(um) > 1 else np.array([float(x)])
-                ax.scatter(jx, um, s=opts["point_size"] * 4.0, color=c, edgecolor="#12211d",
-                           linewidth=0.8, zorder=6)
-                cen, lo, hi = _center_spread(um, opts.get("center", "mean"), opts.get("error", "auto"))
+                if len(um):
+                    ax.scatter(jx[:len(um)], um, s=opts["point_size"] * 4.0, color=c, edgecolor="#12211d",
+                               linewidth=0.8, zorder=6)
+                    top = max(top, float(np.max(um)))
             else:
                 jx = x + rng.uniform(-slot * 0.25, slot * 0.25, size=len(vals))
                 ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3)
-                cen, lo, hi = _center_spread(vals, opts.get("center", "mean"), opts.get("error", "auto"))
-            ax.plot([x - slot * 0.34, x + slot * 0.34], [cen, cen], color="#12211d", lw=2.0, zorder=7)
-            if hi > lo:
-                ax.plot([x, x], [lo, hi], color="#12211d", lw=1.1, zorder=7)
-            if opts.get("show_value", True):                 # the mean/median value, beside the crossbar
-                ax.annotate("%.2f" % cen, (x + slot * 0.38, cen), ha="left", va="center",
-                            fontsize=7.5, fontweight="bold", color="#12211d", zorder=8,
-                            bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="#cdd6d1", lw=0.6, alpha=0.9))
-            if opts.get("show_n", True):                      # n plaques, above each sub-violin
-                ax.text(x, float(np.max(vals)) + span * 0.012, "n=%d" % len(vals),
-                        ha="center", va="bottom", fontsize=7.5, color="#33413c", zorder=8)
-            gmax[g] = max(gmax.get(g, float("-inf")), float(np.max(vals)))
+            cen, lo, hi, _n = cen_tab.get((g, s), (float("nan"),) * 4)
+            if log_y:
+                lo = lo if lo > 0 else (cen if cen > 0 else float("nan"))
+            if cen == cen and (cen > 0 or not log_y):
+                ax.plot([x - slot * 0.34, x + slot * 0.34], [cen, cen], color="#12211d", lw=2.0, zorder=7)
+                if hi > lo:
+                    ax.plot([x, x], [lo, hi], color="#12211d", lw=1.1, zorder=7)
+                if opts.get("show_value", True):             # the mean/median value, beside the crossbar
+                    ax.annotate("%.2f" % cen, (x + slot * 0.38, cen), ha="left", va="center",
+                                fontsize=7.5, fontweight="bold", color="#12211d", zorder=8,
+                                bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="#cdd6d1", lw=0.6, alpha=0.9))
+                if hi == hi:
+                    top = max(top, float(hi))
+            tops[(g, s)] = top
 
-    if opts.get("annotate", "auto") != "none":       # let the desktop's Brackets=None hide them
-        for gi, g in enumerate(group_order):
-            lvl = gmax.get(g, float(df["value"].max())) + span * 0.075   # headroom above the n labels
-            xc = (gi + 1) + offs[control]
-            for s in sub_order:
-                if s == control or (g, s) not in pmap:
-                    continue
-                xs = (gi + 1) + offs[s]
-                ax.plot([xc, xc, xs, xs], [lvl, lvl + span * 0.02, lvl + span * 0.02, lvl],
-                        lw=1.0, color="#33413c")
-                _pv = pmap[(g, s)]
-                ax.text((xc + xs) / 2, lvl + span * 0.025, stars(_pv) if _pv == _pv else "n/a",
-                        ha="center", va="bottom", fontsize=11)
-                lvl += span * 0.095
-
-    ax.set_xticks(np.arange(1, len(group_order) + 1)); ax.set_xticklabels(group_order, fontweight="bold")
-    ax.set_ylabel(opts["ylabel"] or metric_name, fontsize=13, fontweight="bold")
+    ax.set_xticks(np.arange(1, len(group_order) + 1))
+    ax.set_xticklabels([_lk.safe_text(g) for g in group_order], fontweight="bold")
+    ax.set_xlim(0.4, len(group_order) + 0.6)
+    ax.set_ylabel(_lk.safe_text(opts["ylabel"] or metric_name), fontsize=13, fontweight="bold")
     if opts.get("xlabel"):
-        ax.set_xlabel(opts["xlabel"], fontsize=13)
-    if opts.get("title"):
-        ax.set_title(opts["title"], fontsize=14, fontweight="bold", loc="left", pad=8)
-    if opts.get("log_y"):
-        ax.set_yscale("log")
+        ax.set_xlabel(_lk.safe_text(opts["xlabel"]), fontsize=13)
+    if log_y:
+        y0, y1 = ax.get_ylim()
+        _log_axis(ax, y0, y1)
     _style_axes(ax, opts)
     # legend key from the SAME subgroup -> colour dict the marks were drawn with
-    key = _lk.attach(fig, grouped_key(sub_order, control, scol, pm is not None,
-                                      opts.get("_sublabel", "subgroup")))
+    n_units = [v[3] for v in cen_tab.values()]
+    key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup")
+    key["note"] = figure_sentence(opts, pm is not None, n_units)
+    _lk.attach(fig, key)
     if opts.get("legend", True):                 # "Place key on figure"
         _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+    caption_bits = [log_note]
+    _wrap_title(fig, ax, opts)
     fig.tight_layout()
+    if _fit_xticklabels(fig, ax):
+        fig.tight_layout()
+    aw, ah = _axes_in(fig, ax)
+
+    # ---- headroom laid out in inches (CT-R1 SM-F13: log axis; brackets never touch n labels)
+    T = (lambda y: math.log10(y)) if log_y else (lambda y: float(y))
+    Ti = (lambda t: 10.0 ** t) if log_y else (lambda t: float(t))
+    fin = {k: v for k, v in tops.items() if v == v and (v > 0 or not log_y)}
+    if not fin:
+        _layout(fig, _caption(fig, caption_bits))
+        return fig
+    n_plan = None
+    if opts.get("show_n", True) and cells:
+        full, short = [], []
+        for g, s, _x in cells:
+            sub = df[(df["group"] == g) & (df["subgroup"] == s)]
+            nn, NN = len(sub), int(sub["replicate"].nunique(dropna=True))
+            full.append("n=%d\nN=%d" % (nn, NN) if pm is not None else "n=%d" % nn)
+            short.append(full[-1])
+        n_plan = _n_label_plan(fig, full, short, aw / (len(group_order) + 0.2) / K * 0.98)
+    hn = (n_plan[3] * (2.0 if n_plan[2] else 1.0) + 0.08) if n_plan else 0.0
+    brackets = {}
+    if opts.get("annotate", "auto") != "none":       # let the desktop's Brackets=None hide them
+        for g in group_order:
+            treat = [s for s in sub_order if s != control and (g, s) in pmap and (g, s) in fin]
+            treat.sort(key=lambda s: abs(offs[s] - offs[control]))     # nearest bracket lowest
+            if treat and (g, control) in fin:
+                brackets[g] = treat
+    star_fs, gap = 10.0, 0.08
+    pitch = star_fs / 72.0 * 1.75
+    nmax = max([len(v) for v in brackets.values()] or [0])
+    room = ah * 0.55 - hn - gap
+    if nmax and nmax * pitch > room:
+        pitch = max(0.12, room / nmax)
+        star_fs = max(6.0, min(star_fs, pitch * 72.0 / 1.75))
+    y0, _y1 = ax.get_ylim()
+    bot = T(y0)
+    gtop = {g: max(T(v) for (gg, _s), v in fin.items() if gg == g) for g in group_order
+            if any(gg == g for gg, _s in fin)}
+    need = []
+    for g, t in gtop.items():
+        c = hn + 0.03 + ((gap + len(brackets.get(g, [])) * pitch) if g in brackets else 0.0)
+        need.append((t - bot) / max(0.10, 1.0 - c / ah))
+    R = max(need) if need else 1.0
+    u = R / ah
+    ax.set_ylim(Ti(bot), Ti(bot + R))
+    for gi, g in enumerate(group_order):
+        if g not in brackets:
+            continue
+        base = gtop[g] + gap * u
+        xc = (gi + 1) + offs[control]
+        tick = 0.22 * pitch * u
+        for lv, s in enumerate(brackets[g]):
+            xs = (gi + 1) + offs[s]
+            yb = base + lv * pitch * u
+            ax.plot([xc, xc, xs, xs], [Ti(yb), Ti(yb + tick), Ti(yb + tick), Ti(yb)], lw=1.0, color="#33413c")
+            _pv = pmap[(g, s)]
+            ax.text((xc + xs) / 2, Ti(yb + tick * 1.08), stars(_pv) if _pv == _pv else "n/a",
+                    ha="center", va="bottom", fontsize=star_fs)
+    if n_plan:
+        texts, fs, stagger, h_in, _short = n_plan
+        tr = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+        for i, (g, s, x) in enumerate(cells):
+            yfrac = 0.985 - ((h_in + 0.03) / ah if (stagger and i % 2) else 0.0)
+            ax.text(x, yfrac, texts[i], transform=tr, ha="center", va="top", fontsize=fs,
+                    color="#33413c", linespacing=1.1)
+        if pm is not None:
+            caption_bits.append("n = plaques, N = plates")
+    _layout(fig, _caption(fig, caption_bits))
     return fig
 
 
@@ -2282,128 +2736,250 @@ def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup"):
 
 
 def _write_grouped_report(path, metric, summ, comp, unit, control, args):
+    args = args or {}
     unote = ("per-plate means — the plate is the experimental unit (avoids pseudoreplication)"
-             if unit == "replicate" else "per-plaque values — NO replicate column, so this is "
-             "pseudoreplicated; add a replicate/plate column for defensible stats")
+             if unit == "replicate" else "per-plaque values — pseudoreplicated (plaques of one plate "
+             "are not independent); add a replicate/plate column for defensible stats")
+    dunn = len(comp) and (comp["test"] == "Dunnett").any()
+    L = ["# Grouped control-comparison — %s\n" % metric,
+         "_Generated %s · %s_\n" % (_stamp(args), _toolkit_version())]
+    data_lines = [x for x in [args.get("_parse_note")] + list(args.get("_data_notes") or []) if x]
+    if data_lines:
+        L.append("## Data\n")
+        L.extend("- %s" % x for x in data_lines)
+        L.append("")
+    L.append("Each subgroup is compared with the control **%s** within its group, on %s.\n" % (control, unote))
+    if len(comp):
+        L.append("| group | subgroup | control mean | subgroup mean | difference (95 % CI) | change | "
+                 "Hedges' g | test | p | |")
+        L.append("|---|---|---:|---:|---:|---:|---:|---|---:|---|")
+        for _, r in comp.iterrows():
+            ci = (" [%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
+                  if r.get("diff_ci95_lo") == r.get("diff_ci95_lo") else "")
+            ch = "n/a" if r["change_pct"] != r["change_pct"] else "%+.1f%%" % r["change_pct"]
+            L.append("| %s | %s | %s | %s | %s%s | %s | %s | %s | %s | %s |"
+                     % (r["group"], r["subgroup"], _num(r["mean_control"], 3), _num(r["mean_subgroup"], 3),
+                        _num(r.get("mean_diff"), 3), ci, ch, _num(r.get("hedges_g")), r["test"],
+                        fmt_p(r["p"]), r["signif"]))
+    L.append("\n_Stars: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant, n/a = not tested. "
+             + ("p-values and simultaneous 95 % CIs are Dunnett's (each subgroup vs the control within "
+                "its group); Dunnett's test assumes similar variances. " if dunn else
+                "p-values are Holm-adjusted within each group (raw p in the CSV as p_raw); the CI is a "
+                "plain Welch-t interval. ")
+             + "Change = (subgroup − control)/control, n/a when the control mean is ≤ 0._\n")
+    L.append("## Paste-ready sentence\n")
+    L.append("> " + paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args))
+    L.append("\n## Figure\n")
+    L.append(figure_sentence(_plot_opts(args), unit == "replicate" or args.get("_have_rep", False),
+                             list(summ["n_units"]) if "n_units" in summ.columns else None))
+    ws = list(comp.attrs.get("warnings", [])) if hasattr(comp, "attrs") else []
+    ns = list(comp.attrs.get("notes", [])) if hasattr(comp, "attrs") else []
+    if ws or ns:
+        L.append("\n## Warnings and notes\n")
+        L.extend("- ⚠️ %s" % w for w in ws)
+        L.extend("- %s" % n for n in ns)
     with open(path, "w", encoding="utf-8") as f:
-        f.write("# Grouped control-comparison — %s\n\n_Generated %s | plaque_stats v%s_\n\n"
-                % (metric, args.get("_stamp", ""), __version__))
-        f.write("Each subgroup is compared with the control **%s** within its group, on %s.\n\n"
-                % (control, unote))
-        if len(comp):
-            f.write("| group | subgroup | control mean | subgroup mean | change | Cohen's d | test | p | |\n")
-            f.write("|---|---|---:|---:|---:|---:|---|---:|---|\n")
-            for _, r in comp.iterrows():
-                f.write("| %s | %s | %.3f | %.3f | %+.1f%% | %.2f | %s | %s | %s |\n"
-                        % (r["group"], r["subgroup"], r["mean_control"], r["mean_subgroup"],
-                           r["change_pct"], r["cohens_d"], r["test"], _fmt_p(r["p"]), r["signif"]))
-        f.write("\n_Stars: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant, n/a = not tested. "
-                "p-values are Holm-adjusted within each group (raw p in the CSV as p_raw). "
-                "Change = (subgroup − control)/control._\n")
+        f.write("\n".join(L) + "\n")
+
+
+def _read_input(args):
+    """(raw frame, parse note): a DataFrame in args["data"] is used as given (no file round
+    trip, CT-R1 DA-F1/F2); a path is read with every column as text, so labels stay as typed."""
+    data = args["data"]
+    if isinstance(data, pd.DataFrame):
+        return data.copy(), "in-memory table, %s x %d columns." % (_plural(len(data), "row"), data.shape[1])
+    df, info = read_table(data, return_info=True, text_columns="all")
+    return df, info["note"]
+
+
+def _prov(args):
+    prov = {k: v for k, v in args.items() if not k.startswith("_")}
+    if isinstance(prov.get("data"), pd.DataFrame):
+        prov["data"] = "<in-memory table, %d rows>" % len(args["data"])
+    return prov
+
+
+def _save_fig(fig, base, args):
+    for fmt in args["formats"]:
+        kw = {"dpi": args["dpi"], "bbox_inches": "tight", "facecolor": "white"}
+        if fmt in ("tif", "tiff"):
+            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+        with matplotlib.rc_context(_FIG_RC):
+            fig.savefig("%s.%s" % (base, fmt), **kw)
 
 
 def run_grouped(args):
-    df, metric = normalize_grouped(read_table(args["data"]), args["group"], args["subgroup"],
-                                   args["value"], args["replicate"], args["metric"])
-    group_order = args["order"] or list(dict.fromkeys(df["group"]))
-    group_order = [g for g in group_order if g in set(df["group"])]
+    """Grouped control-comparison mode. Optional args: data may be a DataFrame; sub_order (the
+    on-screen subgroup order), _sublabel (key title), posthoc (auto|dunnett), unit.
+    Returns a result dict (comparisons, summary, unit, warnings, notes, paste_sentence, ...)."""
+    args = {**DEFAULTS, **args}
+    raw, parse_note = _read_input(args)
+    df, metric = normalize_grouped(raw, args["group"], args["subgroup"], args["value"],
+                                   args["replicate"], args["metric"])
+    notes = data_notes(df)
+    present = list(dict.fromkeys(df["group"]))
+    group_order = resolve_order(args.get("order"), present)
+    if len(group_order) < len(present):
+        gone = [g for g in present if g not in group_order]
+        notes.append("%s not analysed: %s not in --order." % (
+            _plural(int(df["group"].isin(gone).sum()), "row"), ", ".join(map(str, gone))))
     subs = list(dict.fromkeys(df["subgroup"]))
-    control = args.get("control") or subs[0]
+    sub_order = resolve_order(args.get("sub_order"), subs, "sub_order") if args.get("sub_order") else None
+    control = args.get("control") or (sub_order[0] if sub_order else subs[0])
     if control not in subs:
         raise StatsError("[error] control %r not among subgroup levels: %s" % (control, subs))
-    sub_order = [control] + [s for s in subs if s != control]          # control drawn first
-    df = df[df["group"].isin(group_order)].reset_index(drop=True)
+    if sub_order is None:
+        sub_order = [control] + [s for s in subs if s != control]          # control drawn first
+    elif control not in sub_order:
+        sub_order = [control] + sub_order
+    df = df[df["group"].isin(group_order) & df["subgroup"].isin(sub_order)].reset_index(drop=True)
+    o = _plot_opts(args)                                   # option errors before any file is written
+    _log_guard(df["value"].values, o)
     out = args["out"]; os.makedirs(out, exist_ok=True)
     mt = _safe(metric)
 
-    summ, comp, unit = grouped_stats(df, group_order, sub_order, control, args.get("parametric", "auto"))
+    summ, comp, unit, info = grouped_stats(df, group_order, sub_order, control,
+                                           args.get("parametric", "auto"), unit=args.get("unit", "auto"),
+                                           posthoc=args.get("posthoc") or "auto", return_info=True)
     summ.to_csv(os.path.join(out, "grouped_summary_%s.csv" % mt), index=False)
     if len(comp):
         comp.to_csv(os.path.join(out, "control_comparisons_%s.csv" % mt), index=False)
 
-    opts = dict(args); opts["_sublabel"] = args["subgroup"]
+    opts = dict(args); opts["_sublabel"] = args.get("_sublabel") or args["subgroup"]
     fig = plot_grouped(df, group_order, sub_order, control, opts, metric, comp)
     base = os.path.join(out, "grouped_%s" % mt)
-    for fmt in args["formats"]:
-        kw = {"dpi": args["dpi"], "bbox_inches": "tight", "facecolor": "white"}
-        if fmt in ("tif", "tiff"):
-            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
-        fig.savefig("%s.%s" % (base, fmt), **kw)
+    _save_fig(fig, base, args)
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     plt.close(fig)
 
+    rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _have_rep=unit == "replicate")
     _write_grouped_report(os.path.join(out, "grouped_report_%s.md" % mt),
-                          metric, summ, comp, unit, control, args)
-    prov = {k: v for k, v in args.items() if not k.startswith("_")}
+                          metric, summ, comp, unit, control, rargs)
+    prov = _prov(args)
     prov.update({"mode": "grouped", "metric": metric, "groups": group_order,
                  "subgroups": sub_order, "control": control, "unit": unit,
-                 "versions": {"plaque_stats": __version__, "numpy": np.__version__,
-                              "pandas": pd.__version__, "scipy": scipy.__version__}})
-    json.dump(prov, open(os.path.join(out, "run_config_%s.json" % mt), "w"), indent=2)
+                 "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
+                              "numpy": np.__version__, "pandas": pd.__version__,
+                              "scipy": scipy.__version__}})
+    with open(os.path.join(out, "run_config_%s.json" % mt), "w") as fh:
+        json.dump(prov, fh, indent=2, default=str)
+    print("[data] " + parse_note)
+    for n in notes:
+        print("[data] " + n)
+    for w in info["warnings"]:
+        print("[warn] " + w)
     n_sig = int((comp["p"] < 0.05).sum()) if len(comp) else 0
     print("[done] grouped %s: %d groups × %d subgroups vs '%s' (unit=%s); %d vs-control p<0.05 -> %s"
           % (metric, len(group_order), len(sub_order), control, unit, n_sig, os.path.abspath(out)))
+    return {"mode": "grouped", "metric": metric, "group_order": group_order, "sub_order": sub_order,
+            "control": control, "unit": unit, "summary": summ, "comparisons": comp,
+            "warnings": info["warnings"], "notes": notes + info["notes"], "parse_note": parse_note,
+            "paste_sentence": paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args),
+            "out": os.path.abspath(out)}
 
 
 def run(args):
+    """Single-factor run: files in args["out"]. args["data"] may be a path or a DataFrame.
+    Returns a result dict (new in 1.3.x; it used to return None): mode, metric, order, unit,
+    have_rep, omni, posthoc, summary, replicate_means, pairwise, warnings, notes, parse_note,
+    paste_sentence, figure_sentence, out."""
+    args = {**DEFAULTS, **args}
     if args.get("subgroup"):
         return run_grouped(args)
-    df, metric = normalize(read_table(args["data"]), args["group"], args["value"],
-                           args["replicate"], args["metric"])
-    order = args["order"] or list(dict.fromkeys(df["group"]))
-    order = [g for g in order if g in set(df["group"])]
+    raw, parse_note = _read_input(args)
+    df, metric = normalize(raw, args["group"], args["value"], args["replicate"], args["metric"])
+    notes = data_notes(df)
+    present = list(dict.fromkeys(df["group"]))
+    order = resolve_order(args.get("order"), present)
+    if len(order) < len(present):
+        gone = [g for g in present if g not in order]
+        notes.append("%s not analysed: %s not in --order." % (
+            _plural(int(df["group"].isin(gone).sum()), "row"), ", ".join(map(str, gone))))
     df = df[df["group"].isin(order)].reset_index(drop=True)   # analyse only the selected groups
+    if args.get("control") not in (None, "") and args["control"] not in order:
+        raise StatsError("--control %r is not one of the samples: %s" % (args["control"], ", ".join(map(str, order))))
+    o = _plot_opts(args)                                   # option errors before any file is written
+    _, log_note = _log_guard(df["value"].values, o)
     out = args["out"]; os.makedirs(out, exist_ok=True)
-
     mt = _safe(metric)                        # suffix outputs by metric so runs don't overwrite
-    summ = group_summary(df, order)
+
+    omni, posthoc, unit, have_rep = run_stats(
+        df, order, args["unit"], args["parametric"], equal_var=args.get("equal_var", "auto"),
+        posthoc=args.get("posthoc") or "auto", control=args.get("control"),
+        equivalence_margin=args.get("equivalence_margin"))
+    summ = group_summary(df, order, unit=unit)
     rep = replicate_means(df)
     summ.to_csv(os.path.join(out, f"summary_by_group_{mt}.csv"), index=False)
     if rep is not None:
         rep.to_csv(os.path.join(out, f"summary_by_replicate_{mt}.csv"), index=False)
-
-    omni, posthoc, unit, have_rep = run_stats(df, order, args["unit"], args["parametric"])
     # group means on the analysis unit (plate means when unit=replicate) — the "magnitude" of differences
     src = rep if (unit == "replicate" and rep is not None) else df
     unit_means = src.groupby("group")["value"].mean().to_dict()
+    eff = omni.get("effect", {}) or {}
+    ek = next(iter(eff), None)
     tests = pd.DataFrame([{"test": omni["test"], "unit": unit, "p": omni["p"],
-                           "parametric": omni["parametric_used"], "levene_p": omni["levene_p"]}])
+                           "parametric": omni["parametric_used"], "levene_p": omni["levene_p"],
+                           "posthoc": omni.get("posthoc") or "", "equal_var": omni.get("equal_var"),
+                           "effect": ek or "", "effect_value": eff.get(ek, float("nan")) if ek else float("nan"),
+                           "sd_ratio": omni.get("sd_ratio"), "n_warnings": len(omni.get("warnings", []))}])
     tests.to_csv(os.path.join(out, f"omnibus_test_{mt}.csv"), index=False)
+    pw = omni.get("pairwise") or []
+    extra = {(r["group_a"], r["group_b"]): r for r in pw}
+    pw_df = pd.DataFrame()
     if posthoc:
-        pd.DataFrame([{"group_a": a, "group_b": b,
-                       "mean_a": unit_means.get(a), "mean_b": unit_means.get(b),
-                       "mean_diff": unit_means.get(a, float("nan")) - unit_means.get(b, float("nan")),
-                       "p_adj": p, "signif": stars(p)}
-                      for (a, b), p in posthoc.items()]).to_csv(
-            os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
+        rows = []
+        for (a, b), p in posthoc.items():
+            row = {"group_a": a, "group_b": b,
+                   "mean_a": unit_means.get(a), "mean_b": unit_means.get(b),
+                   "mean_diff": unit_means.get(a, float("nan")) - unit_means.get(b, float("nan")),
+                   "p_adj": p, "signif": stars(p)}
+            for k, v in extra.get((a, b), {}).items():   # CT-R1 B2/B4: additive columns only
+                row.setdefault(k, v)
+            rows.append(row)
+        pw_df = pd.DataFrame(rows)
+        pw_df.to_csv(os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
 
     fig = plot_violin(df, order, args, metric, posthoc)
     base = os.path.join(out, f"violin_{mt}")
-    for fmt in args["formats"]:
-        kw = {"dpi": args["dpi"], "bbox_inches": "tight", "facecolor": "white"}
-        if fmt in ("tif", "tiff"):
-            kw["pil_kwargs"] = {"compression": "tiff_lzw"}
-        fig.savefig(f"{base}.{fmt}", **kw)
+    _save_fig(fig, base, args)
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
+    ann = getattr(fig, "annotation_note", "")
     plt.close(fig)
 
-    write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, args)
+    if log_note:
+        notes.append(log_note[0].upper() + log_note[1:] + ".")
+    centers = center_table(df, order, o)
+    rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _centers=centers,
+                 _annotation_note=ann)
+    write_report(os.path.join(out, f"report_{mt}.md"), metric, summ, rep, omni, posthoc, unit, have_rep, rargs)
     if args.get("stats_table", True):
         save_stats_table(summ, os.path.join(out, f"stats_table_{mt}"), metric, unit, args["formats"])
         if posthoc:
             save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}"),
-                                metric, unit, args["formats"])
-    prov = {k: v for k, v in args.items() if not k.startswith("_")}
+                                metric, unit, args["formats"], pairwise=pw)
+    prov = _prov(args)
     prov.update({"metric": metric, "groups": order, "unit": unit,
-                 "versions": {"plaque_stats": __version__, "numpy": np.__version__,
-                              "pandas": pd.__version__, "scipy": scipy.__version__}})
+                 "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
+                              "numpy": np.__version__, "pandas": pd.__version__,
+                              "scipy": scipy.__version__}})
     with open(os.path.join(out, f"run_config_{mt}.json"), "w") as fh:
-        json.dump(prov, fh, indent=2)
+        json.dump(prov, fh, indent=2, default=str)
+    print("[data] " + parse_note)
+    for n in notes:
+        print("[data] " + n)
     for w in omni.get("warnings", []):
         print("[warn] " + w)
-    print(f"[done] {metric}: {omni['test']} p={_fmt_p(omni['p'])} (unit={unit}) -> {os.path.abspath(out)}")
+    print(f"[done] {metric}: {omni['test']} {p_text(omni['p'])} (unit={unit}) -> {os.path.abspath(out)}")
+    sentence = paste_sentence(metric, summ, omni, unit, have_rep, args, centers=centers)
+    return {"mode": "single", "metric": metric, "order": order, "unit": unit, "have_rep": have_rep,
+            "omni": omni, "posthoc": posthoc, "summary": summ, "replicate_means": rep,
+            "pairwise": pw_df, "warnings": list(omni.get("warnings", [])),
+            "notes": notes + list(omni.get("notes", [])), "parse_note": parse_note,
+            "paste_sentence": sentence,
+            "figure_sentence": figure_sentence(o, have_rep, list(summ["n_units"])),
+            "annotation_note": ann, "out": os.path.abspath(out)}
 
 
 def _safe(s):
@@ -2412,36 +2988,56 @@ def _safe(s):
 
 def build_args():
     p = argparse.ArgumentParser(description="Publication-ready violin plots + stats for plaque data.")
-    p.add_argument("data", nargs="?", help="input CSV/TSV/XLSX (tidy — see the header of this file)")
+    p.add_argument("data", nargs="?", help="input CSV/TSV/XLSX (tidy — see the header of this file); "
+                                           "comma, semicolon or tab separated; decimal commas are read")
     p.add_argument("--config", help="JSON config file (overrides defaults; CLI flags override it)")
     p.add_argument("--make-example", action="store_true", help="write example + template CSVs and exit")
     p.add_argument("--group"); p.add_argument("--value"); p.add_argument("--replicate")
     p.add_argument("--metric"); p.add_argument("--out", default="plaque_stats_out")
     p.add_argument("--subgroup", help="second factor (e.g. host) — switches to grouped "
                                       "control-comparison mode (paired violins within each group)")
-    p.add_argument("--control", help="the control level of --subgroup that the others are tested "
-                                     "against (default: the first level seen)")
-    p.add_argument("--unit", choices=["auto", "replicate", "plaque"])
+    p.add_argument("--control", help="grouped mode: the control level of --subgroup that the others "
+                                     "are tested against (default: the first level seen). One factor: "
+                                     "the reference sample for --posthoc dunnett and for the brackets "
+                                     "of figures with more than 5 samples (default: the first sample)")
+    p.add_argument("--unit", choices=["auto", "replicate", "plaque"],
+                   help="statistical unit: auto (plates when the file has them), replicate (plate "
+                        "means; an error without a plate column) or plaque (pseudoreplicated)")
     p.add_argument("--parametric", choices=["auto", "parametric", "nonparametric"])
-    p.add_argument("--annotate", choices=["auto", "all", "adjacent", "none"])
+    p.add_argument("--equal-var", dest="equal_var", choices=["auto", "yes", "no"],
+                   help="3+ samples: auto = Levene decides (and a warning when the SDs differ more "
+                        "than 3-fold), no = Welch ANOVA + Games-Howell always, yes = ANOVA + Tukey always")
+    p.add_argument("--posthoc", choices=["auto", "dunnett"],
+                   help="dunnett = every sample vs --control (or each subgroup vs the control in "
+                        "grouped mode), with simultaneous 95%% CIs; assumes similar variances")
+    p.add_argument("--equivalence-margin", dest="equivalence_margin", type=float,
+                   help="add a TOST equivalence test per pair: are the unit means within ± this "
+                        "many units (e.g. 0.2 mm)?")
+    p.add_argument("--annotate", choices=["auto", "all", "adjacent", "letters", "none"],
+                   help="brackets: auto (significant pairs; > 5 samples: only vs the reference), "
+                        "all, adjacent, letters (compact letter display) or none")
     p.add_argument("--violin-fill", dest="violin_fill", choices=["auto", "group", "neutral"])
-    p.add_argument("--order", help="comma-separated group order")
+    p.add_argument("--order", help="comma-separated group order (every name must exist)")
     p.add_argument("--palette", help="named theme (okabe, set2, tab10, warm, cool, grays) "
-                                     "or comma-separated hex colours")
+                                     "or comma/semicolon-separated colours (hex with or without #)")
     p.add_argument("--title"); p.add_argument("--ylabel"); p.add_argument("--xlabel")
     p.add_argument("--formats", help="comma-separated: png,svg,pdf,tiff")
     p.add_argument("--width", type=float); p.add_argument("--height", type=float)
     p.add_argument("--dpi", type=int); p.add_argument("--seed", type=int)
-    p.add_argument("--log-y", dest="log_y", action="store_true")
+    p.add_argument("--log-y", dest="log_y", action="store_true",
+                   help="log y axis (refused when values are <= 0, see below)")
+    p.add_argument("--log-y-drop-nonpositive", dest="log_y_drop_nonpositive", action="store_true",
+                   help="with --log-y: hide values <= 0 on the figure (counted on the figure and in "
+                        "the report; they stay in the statistics)")
     p.add_argument("--no-points", dest="show_points", action="store_false")
-    p.add_argument("--no-box", dest="show_box", action="store_false")
     p.add_argument("--theme", choices=["clean", "grid"])
     p.add_argument("--center", choices=["mean", "median"], help="group summary marker (default mean)")
     p.add_argument("--error", choices=["auto", "sd", "sem", "ci95", "iqr", "none"],
-                   help="error bar on the centre marker (auto: sem for mean, iqr for median)")
+                   help="error bar: auto (sem for mean, iqr for median); with median only iqr, "
+                        "ci95 (seeded plate bootstrap of the median) or none")
     p.add_argument("--no-n", dest="show_n", action="store_false", help="hide the n-plaques labels")
     p.add_argument("--no-value", dest="show_value", action="store_false",
-                   help="hide the mean/median value label on the grouped plot")
+                   help="hide the mean/median value label")
     p.add_argument("--frame", dest="frame", action="store_true", help="box the plot (all 4 spines)")
     p.add_argument("--no-stats-table", dest="stats_table", action="store_false",
                    help="skip the descriptive-stats table PNG")
@@ -2465,15 +3061,18 @@ def main(argv=None):
 
     args = dict(DEFAULTS)
     if ns.config:
-        args.update(json.load(open(ns.config)))
+        with open(ns.config) as fh:
+            args.update(json.load(fh))
     for k, v in vars(ns).items():
         if v is not None and k not in ("config", "make_example"):
             args[k] = v
     if isinstance(args.get("palette"), str) and args["palette"].strip().lower() in PALETTES:
         args["palette"] = list(PALETTES[args["palette"].strip().lower()])   # named theme
-    for listy in ("order", "palette", "formats"):
+    for listy in ("order", "formats"):
         if isinstance(args.get(listy), str):
             args[listy] = [x.strip() for x in args[listy].split(",") if x.strip()]
+    if isinstance(args.get("palette"), str):
+        args["palette"] = clean_palette(args["palette"])          # CT-R1 web F13: ';', no '#'
     args["data"] = ns.data
     args["_stamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     run(args)
