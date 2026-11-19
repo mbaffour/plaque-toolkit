@@ -610,13 +610,15 @@ class PlaqueCanvas(QWidget):
 
     def save(self):
         st = self.export_state()
-        return pgui.save_results(
+        res = pgui.save_results(
             self._plaques, self.orig_bgr, self.image_path, self.out_dir, self.ppm, self.lawn_gray,
             labels=self.label_mode, write_key=True,
             sensitive=st["sensitive"], small=st["small"], watershed=st["watershed"],
             plate_mm=st["plate_mm"], edited=st["edited"], edits=st["edits"],
             source_image=st["source_image"], orientation=st["orientation"],
             **self._figure_kwargs())
+        self.mark_saved()
+        return res
 
     # ---- toolbar ----------------------------------------------------------- #
     def _build_toolbar(self):
@@ -785,6 +787,25 @@ class PlaqueCanvas(QWidget):
         if not self.dirty:
             self.dirty = True
             self.dirty_changed.emit(True)
+        self._update_hint_base()
+
+    def mark_saved(self):
+        """The edits on screen are now in a file (Save results / Export all): Open, Re-detect
+        and Orient no longer need to ask. `edited` (what run_metadata.json records) is not
+        affected -- the result still differs from the detection."""
+        if self.dirty:
+            self.dirty = False
+            self.dirty_changed.emit(False)
+        self._update_hint_base()
+
+    def _update_hint_base(self):
+        # keep the current message, refresh only the state part (" · unsaved edits")
+        try:
+            msg = self._hint_msg
+        except AttributeError:
+            msg = None
+        if hasattr(self, "hint"):
+            self._update_hint(msg)
 
     def _label_mode_changed(self, _idx=0):
         self.label_mode = self.label_combo.currentData() or "numbers"
@@ -1204,7 +1225,8 @@ class PlaqueCanvas(QWidget):
         base = (f"{len(self._plaques)} plaques"
                 + (f" · {nsel} selected" if nsel else "")
                 + (f" · {dish}" if dish else "")
-                + f" · {cal}" + (" · edited" if self.dirty else ""))
+                + f" · {cal}" + (" · unsaved edits" if self.dirty else ""))
+        self._hint_msg = msg
         self.hint.setText((msg + "   ·   " + base) if msg else (base + "   —   hover here for the mouse and key shortcuts"))
 
     # ---- geometry helpers -------------------------------------------------- #
@@ -1562,6 +1584,7 @@ class PlaqueCanvas(QWidget):
                 key_note = " + legend key"
         except Exception:                           # noqa: BLE001
             pass
+        self.mark_saved()
         self._update_hint("✓ exported %d rows + annotated figure%s → 'out' folder" % (len(df), key_note))
         self._open_folder(self.out_dir)
         return self.out_dir

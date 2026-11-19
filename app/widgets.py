@@ -35,7 +35,9 @@ COLUMN_TOOLTIPS = {
 }
 # what an uncalibrated mm value is shown as (the number itself stays in the data)
 NO_VALUE = "—"
-_FLAG_TINT = QColor(255, 244, 214)       # light amber: a row whose QC_FLAG is not OK
+# translucent amber: a row whose QC_FLAG is not OK. Translucent so it reads on the light AND
+# the dark theme (an opaque pale fill under the dark theme's light text was unreadable).
+_FLAG_TINT = QColor(255, 176, 32, 70)
 
 
 class PandasTableModel(QAbstractTableModel):

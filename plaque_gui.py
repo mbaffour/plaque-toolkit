@@ -348,7 +348,8 @@ def _plaque_mask(shape, p):
 #   class key -> (plain name, RGB exactly as drawn, "solid" | "dashed")
 PLAQUE_CLASSES = {
     "auto":      ("auto-detected",   (40, 220, 70),   "solid"),
-    "manual":    ("added by hand",   (30, 170, 255),  "solid"),
+    # (30, 144, 255), not the canvas's old (30, 170, 255): the legend text names that "cyan"
+    "manual":    ("added by hand",   (30, 144, 255),  "solid"),
     "region":    ("detect-area",     (255, 170, 0),   "solid"),
     "watershed": ("watershed split", (180, 120, 255), "solid"),
     "overlap":   ("overlapping",     (255, 40, 150),  "dashed"),

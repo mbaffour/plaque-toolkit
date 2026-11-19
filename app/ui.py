@@ -391,6 +391,7 @@ class MeasureTab(QWidget):
         lay = _FitVBox(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(params_box)
         lay.addLayout(strip)
+        self._params_box, self._right, self._strip = params_box, right, strip
         lay.addWidget(split, 1)
         self._split = split
         split.splitterMoved.connect(lambda *_a: self._sync_min_height())
@@ -405,18 +406,31 @@ class MeasureTab(QWidget):
         self._sync_min_height()
 
     def _sync_min_height(self):
+        """Publish the tab's real minimum height for its CURRENT width: the wrapped parameter
+        row + the help strip + the taller of the canvas card (editor toolbar rows, feedback
+        line, a usable image, legend row) and the right panel. Summed by hand: _FitVBox hides
+        height-for-width from the scroll area on purpose, so the layout cannot be asked."""
         lay = self.layout()
         if lay is None or self.width() <= 0:
             return
-        # the base-class calls: _FitVBox answers -1 on purpose, QVBoxLayout knows the real figure
-        QVBoxLayout.heightForWidth(lay, self.width())
-        need = QVBoxLayout.minimumHeightForWidth(lay, self.width())
-        ed = self.editor
-        if ed is not None and ed.layout() is not None and ed.width() > 0:
-            # the editor sits inside the splitter, which does not pass on that its toolbar
-            # needs more rows when it is narrow: add what the plain minimum leaves out
-            el = ed.layout()
-            need += max(0, el.minimumHeightForWidth(ed.width()) - el.minimumSize().height())
+
+        def h4w(widget_or_layout, w):
+            if widget_or_layout.hasHeightForWidth() and w > 0:
+                return max(widget_or_layout.heightForWidth(w), 0)
+            ms = widget_or_layout.minimumSizeHint() if hasattr(widget_or_layout, "minimumSizeHint") \
+                else widget_or_layout.minimumSize()
+            return max(ms.height(), 0)
+
+        m = lay.contentsMargins()
+        inner = self.width() - m.left() - m.right()
+        ch = self.canvas_holder
+        cl = ch.layout()
+        cw = ch.width() if ch.width() > 0 else int(inner * 0.6)
+        canvas_need = (cl.minimumHeightForWidth(cw) if cl.hasHeightForWidth()
+                       else cl.minimumSize().height())
+        need = (m.top() + m.bottom() + 2 * lay.spacing()
+                + h4w(self._params_box, inner) + h4w(self._strip, inner)
+                + max(canvas_need, self._right.minimumSizeHint().height()))
         if need > 0 and need != self.minimumHeight():
             self.setMinimumHeight(need)
 
@@ -546,9 +560,9 @@ class MeasureTab(QWidget):
         """A one-line explanation under the summary numbers for a Dish action that could not
         do anything (CT-R1 F14: the 85 / 100 buttons did nothing, silently)."""
         self._dish_msg = text
+        self.refresh_table()            # (this resets the status bar, so the note goes after it)
         if text:
             self.window().statusBar().showMessage(text, 8000)
-        self.refresh_table()
 
     def _quick_dish(self, mm):
         """The 85 / 100 buttons: set the Dish box and, if that cannot rescale the plate on
@@ -812,8 +826,11 @@ class MeasureTab(QWidget):
             parts.append("%d detect-area" % c["detect_area"])
         if c["by_hand"]:
             parts.append("%d added by hand" % c["by_hand"])
-        return "%s · %s%s" % (" + ".join(parts), self._engine_label_of(self.det),
-                              " (edited)" if self.editor.dirty else "")
+        # short engine name ("Published", not "Published (validated)") so "(edited)" reads clearly;
+        # edited = differs from the detection result, or hand edits not yet saved
+        eng = self._engine_label_of(self.det).split(" (")[0]
+        edited = self.editor.edited or self.editor.dirty
+        return "%s · %s%s" % (" + ".join(parts), eng, " (edited)" if edited else "")
 
     def _show_status(self):
         txt = self._status_text()
