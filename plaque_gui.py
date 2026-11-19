@@ -394,6 +394,17 @@ def _run_scaled(image_path, plate_size, scale, sensitive, info):
         dish_reason = ("no round contour larger than 100,000 px (the dish rim) was found; "
                        "sizes are in pixels unless you set the plate by hand")
 
+    # CT-R1 F18 (D3): a detection whose centre lies outside the dish is not a plaque on this
+    # lawn (glare on the wall, the label, the bench). Dropped and counted -- unless the "dish"
+    # is itself implausibly small (a plaque taken for the dish, F9), which would drop everything.
+    n_outside = 0
+    if plate is not None:
+        import plaque_qc
+        if not plaque_qc.dish_too_small(plate, orig.shape):
+            inside = [p for p in plaques if _inside(plate["hull"], p["center"])]
+            n_outside = len(plaques) - len(inside)
+            plaques = inside
+
     pxl_per_mm = None
     if plate_size and plate is not None and plate["diam_px"] > 0:
         try:
@@ -417,7 +428,7 @@ def _run_scaled(image_path, plate_size, scale, sensitive, info):
 
     if info is not None:
         info.update({"scale": scale, "dish_source": dish_source, "dish_reason": dish_reason,
-                     "n_outside_dish": 0, "n_small_added": n_added, "dish_warnings": []})
+                     "n_outside_dish": n_outside, "n_small_added": n_added, "dish_warnings": []})
     return (cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), orig, proc, plaques, pxl_per_mm,
             candidates, lawn_gray, plate)
 

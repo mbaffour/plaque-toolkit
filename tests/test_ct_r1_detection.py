@@ -339,3 +339,103 @@ def test_d1_cli_multiscale_is_opt_in_and_keeps_standard_rows(tmp_path, mixed_pla
     assert "--multiscale is ignored in --published mode" in c.stdout
     meta = json.load(open(tmp_path / "b" / "run_metadata.json"))
     assert meta["settings"]["multiscale"] is True
+
+
+# --------------------------------------------------------------------------- #
+#  D3: detections outside the dish are dropped and counted (non-published app engines)
+#  D4: dish plausibility warnings
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def outside_plate(tmp_path):
+    """Three plaques on the dish and one on a grey patch in the corner, outside the dish."""
+    import cv2
+    img = np.zeros((2000, 2000, 3), np.uint8)
+    cv2.circle(img, (1000, 1000), 800, (150, 150, 150), -1)
+    img[0:320, 0:320] = 150
+    cv2.circle(img, (160, 160), 40, (70, 70, 70), -1)
+    for c in [(800, 800), (1200, 1200), (1000, 700)]:
+        cv2.circle(img, c, 40, (70, 70, 70), -1)
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    path = str(tmp_path / "outside.png")
+    cv2.imwrite(path, img)
+    return path
+
+
+@pytest.fixture
+def closeup_plate(tmp_path):
+    """No rim in frame: one big dark disc (taken for the 'dish') and four plaques around it."""
+    import cv2
+    img = np.full((1600, 1600, 3), 150, np.uint8)
+    cv2.circle(img, (800, 800), 200, (70, 70, 70), -1)
+    for c in [(300, 300), (1300, 300), (300, 1300), (1300, 1300)]:
+        cv2.circle(img, c, 30, (70, 70, 70), -1)
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    path = str(tmp_path / "closeup.png")
+    cv2.imwrite(path, img)
+    return path
+
+
+def test_d3_detections_outside_the_dish_are_dropped_and_counted(outside_plate):
+    from app import engine_api
+    legacy = engine_api.detect_single(outside_plate, plate_mm=90, small=False, legacy=True)
+    assert legacy["n_plaques"] == 4 and legacy["n_outside_dish"] == 0
+    for scale in ("standard", "auto", "small"):
+        d = engine_api.detect_single(outside_plate, plate_mm=90, scale=scale)
+        assert d["n_plaques"] == 3 and d["n_outside_dish"] == 1, scale
+        assert not any(p["center"][0] < 330 and p["center"][1] < 330 for p in d["plaques"])
+    # Published is untouched: the corner plaque stays
+    pub = engine_api.detect_single(outside_plate, plate_mm=90, published=True)
+    assert pub["n_plaques"] == 4 and pub["n_outside_dish"] == 0
+
+
+def test_d3_d4_implausible_dish_warns_and_drops_nothing(closeup_plate):
+    from app import engine_api
+    for kw in (dict(scale="auto"), dict(published=True)):
+        d = engine_api.detect_single(closeup_plate, plate_mm=90, **kw)
+        assert round(d["plate"]["diam_px"]) == 402
+        assert d["n_outside_dish"] == 0 and d["n_plaques"] == 5
+        assert len(d["dish_warnings"]) == 1 and "only 25%" in d["dish_warnings"][0]
+
+
+def test_d4_dish_plausibility_rules():
+    import plaque_qc as q
+    good = {"center": (1000.0, 1000.0), "radius": 900.0}
+    assert q.dish_plausibility(good, (2000, 2000, 3)) == []
+    small_img = q.dish_plausibility(None, (500, 700))
+    assert len(small_img) == 1 and "500 px on its short side" in small_img[0]
+    w = q.dish_plausibility((1000, 1000, 200), (2000, 2000))
+    assert len(w) == 1 and "20%" in w[0]
+    w = q.dish_plausibility((1550, 1000, 400), (2000, 2000))
+    assert len(w) == 1 and "far from the image centre (550 px off)" in w[0]
+    w = q.dish_plausibility((1000, 1000, 1000), (2000, 2000))
+    assert len(w) == 1 and "touches or runs past the edge" in w[0]
+
+
+def test_d4_app_flag_line_shows_dish_warnings_and_outside_count(qtbot, closeup_plate, outside_plate):
+    appui = _gui()
+    win = appui.MainWindow()
+    qtbot.addWidget(win)
+    tab = win.measure_tab
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    tab.plate.setValue(90)
+    tab.image_path = closeup_plate
+    tab._detect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
+    assert "probably a plaque or another round object" in tab.flag_label.text()
+    tab.det = None
+    tab.image_path = outside_plate
+    tab._detect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
+    assert "1 detection outside the dish was left out." in tab.flag_label.text()
+
+
+def test_d4_cli_prints_dish_warnings_without_touching_the_csv(tmp_path, closeup_plate):
+    r = _run_cli(["-i", closeup_plate, "-p", "90", "-o", "o"], tmp_path)
+    assert r.returncode == 0
+    assert "WARNING: The dish found is only 25%" in r.stdout
+    meta = json.load(open(tmp_path / "o" / "run_metadata.json"))
+    assert "only 25%" in meta["images"][0]["dish_warnings"][0]
+    import pandas as pd
+    cols = pd.read_csv(tmp_path / "o" / "data-green-closeup.csv").columns.tolist()
+    assert cols == ["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM",
+                    "MEAN_GRAY", "TURBIDITY_REL"]

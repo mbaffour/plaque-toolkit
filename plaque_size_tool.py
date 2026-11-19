@@ -866,6 +866,21 @@ def _process_one(image_path, plate_size, run_images, args):
         if _ar is not None and _ar > 1.03:
             print(f"  WARNING: dish looks elliptical (axis ratio {_ar:.2f}) - the photo may be "
                   f"tilted/foreshortened, biasing mm calibration. Image plates straight-on.")
+        # CT-R1 detection D4: plain warnings about the dish this run scales from (stdout and
+        # run_metadata.json only; no CSV changes)
+        _dish_warn = []
+        try:
+            import plaque_qc
+            _dd = None
+            if plate_df is not None and not plate_df.empty:
+                _b = plate_df['ENCL_DIAMETER_PXL'].idxmax()
+                _c = plate_df.loc[_b, 'ENCL_CENTER']
+                _dd = (float(_c[0]), float(_c[1]), float(plate_df.loc[_b, 'ENCL_DIAMETER_PXL']) / 2.0)
+            _dish_warn = plaque_qc.dish_plausibility(_dd, image_size)
+            for _w in _dish_warn:
+                print("  WARNING: " + _w)
+        except Exception:
+            _dish_warn = []
 
         # OPT-IN watershed recovery of touching/merged plaques. No-op (and no SOURCE
         # column) unless --watershed and not --published, so default output is unchanged.
@@ -949,6 +964,7 @@ def _process_one(image_path, plate_size, run_images, args):
                 "dimmed": bool(image_brightness > 70),
                 "mm_per_px": last_calibration['mm_per_px'],
                 "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
+                "dish_warnings": list(_dish_warn),
                 "csv": "data-green-%s.csv" % output_stem(image_path),
             })
         except Exception as exc:         # pragma: no cover - defensive only

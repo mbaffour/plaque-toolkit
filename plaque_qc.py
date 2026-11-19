@@ -90,6 +90,62 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
     return out
 
 
+DISH_MIN_FRAC = 0.30        # dish diameter below this fraction of the short side: implausible
+DISH_OFFCENTRE_FRAC = 0.25  # dish centre further than this fraction of the short side from the centre
+MIN_SHORT_SIDE_PX = 600     # below this the pixel size gates swallow most plaques (CT-R1 F23)
+
+
+def _dish_tuple(dish):
+    if dish is None:
+        return None
+    if isinstance(dish, dict):
+        if not dish.get("center") or not dish.get("radius"):
+            return None
+        return float(dish["center"][0]), float(dish["center"][1]), float(dish["radius"])
+    cx, cy, r = dish
+    return float(cx), float(cy), float(r)
+
+
+def dish_too_small(dish, image_shape):
+    """True when the 'dish' is under DISH_MIN_FRAC of the image's short side: most likely a
+    plaque or another round object taken for the dish (a close-up with no rim; CT-R1 F9)."""
+    d = _dish_tuple(dish)
+    if d is None:
+        return False
+    return 2.0 * d[2] < DISH_MIN_FRAC * min(int(image_shape[0]), int(image_shape[1]))
+
+
+def dish_plausibility(dish, image_shape):
+    """Plain-language warnings about the dish the calibration scales from, and about images
+    too small to measure reliably (CT-R1 detection D4: F4, F9, F23). Never changes a number:
+    the app shows them under the summary, the CLI prints them, both record them in
+    run_metadata.json. ``dish`` is the app's plate dict, ``(cx, cy, r)`` in px, or None;
+    ``image_shape`` is (H, W[, C])."""
+    H, W = int(image_shape[0]), int(image_shape[1])
+    short = min(H, W)
+    out = []
+    if short < MIN_SHORT_SIDE_PX:
+        out.append("The image is only %d px on its short side: plaques under ~30 px are not "
+                   "detected and the dish may be missed. Use a higher-resolution photo." % short)
+    d = _dish_tuple(dish)
+    if d is None:
+        return out
+    cx, cy, r = d
+    if dish_too_small(d, image_shape):
+        out.append("The dish found is only %.0f%% of the image's short side, so it is probably a "
+                   "plaque or another round object, not the dish: mm sizes are likely wrong. Use "
+                   "Set plate on the real rim, or photograph the whole dish."
+                   % (100.0 * 2.0 * r / short))
+    off = math.hypot(cx - W / 2.0, cy - H / 2.0)
+    if off > DISH_OFFCENTRE_FRAC * short:
+        out.append("The dish found is far from the image centre (%.0f px off); check that its "
+                   "circle sits on the real rim." % off)
+    if cx - r < 2 or cy - r < 2 or cx + r > W - 3 or cy + r > H - 3:
+        out.append("The dish touches or runs past the edge of the photo, so its rim may be cut "
+                   "off and the mm scale biased. Leave a margin around the dish.")
+    return out
+
+
 def flags_for_dataframe(df, image_shape, dish=None, **kw):
     """plaque_size_tool-style frame (ENCL_CENTER, AREA_PXL, ENCL_DIAMETER_PXL, optional
     circularity proxy) -> two lists aligned with df.index."""

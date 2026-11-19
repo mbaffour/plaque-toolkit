@@ -980,6 +980,16 @@ class MeasureTab(QWidget):
         if plate and plate.get("axis_ratio") and plate["axis_ratio"] > 1.03:
             flag = (f"⚠ Dish looks tilted (axis ratio {plate['axis_ratio']:.2f}). "
                     "mm calibration may be biased — re-shoot square-on for best accuracy.")
+        # CT-R1 detection D2-D4: say what is wrong with the dish instead of silently scaling off it
+        extras = ["⚠ " + w for w in (det.get("dish_warnings") or [])]
+        if not plate and det.get("dish_reason"):
+            extras.append("⚠ No dish found: " + det["dish_reason"] + ".")
+        n_out = int(det.get("n_outside_dish") or 0)
+        if n_out:
+            extras.append("%d detection%s outside the dish %s left out." % (
+                n_out, "" if n_out == 1 else "s", "was" if n_out == 1 else "were"))
+        if extras:
+            flag = "  ".join(([flag] if flag else []) + extras)
 
         if isinstance(precise, dict) and precise.get("precise"):
             summ = precise.get("precise_summary", {})

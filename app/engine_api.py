@@ -71,6 +71,13 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
          ppm, candidates, lawn_gray, plate) = pgui.run_detection(
              path, plate_size, scale == "small", bool(sensitive),
              scale=(None if legacy else scale), info=info)
+    # CT-R1 detection D4: plain warnings about the dish / image size, for every engine
+    # (informational only: no number changes)
+    try:
+        import plaque_qc
+        info["dish_warnings"] = plaque_qc.dish_plausibility(plate, orig_bgr.shape)
+    except Exception:                         # a warning must never break a detection
+        pass
     if not ppm:
         # No dish to calibrate from (e.g. an already-cropped plate). If the image carries
         # an embedded ImageJ/Fiji mm scale — like our own "Cropped plate for Fiji" export —
