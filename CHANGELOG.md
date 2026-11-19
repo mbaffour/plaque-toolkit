@@ -45,8 +45,39 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
   the plate stays the unit and that sample's comparisons are n/a.
 * **Statistics engine, effect-size label.** For Kruskal-Wallis, `epsilon_squared` now holds
   H/(N−1); the value that used to be under that name is reported as `eta_squared_H`.
-* **QC flag names.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is kept
-  for a shape far from round. No measurement column changes.
+* **Desktop app, engines Current and Sensitive: plaque sizes and the mm scale.** (Published in
+  the app and on the command line, the command-line default, and Precise are unchanged.)
+  * The app used to run these two engines with the small-plaque threshold only, which outlines
+    any plaque wider than about 50 px roughly 30 px too small. A new **Plaque size** choice
+    (Auto / Standard / Small; Auto is the default) runs both thresholds, keeps the standard
+    outline wherever the standard pass finds the plaque and adds the plaques only the small pass
+    finds. Medians on plates with large plaques rise toward the command-line values (bundled
+    Plate_8: 3.89 → 4.97 mm; `sample.tif`: 2.81 → 3.12 mm). Choose **Small** for the old
+    behaviour.
+  * The dish, and so the mm scale, now comes from the standard pass. On four bundled plates the
+    old dish was a threshold halo 4–5 % too wide (Plate_8, 11, 14, 17), so every mm size on them
+    grows by about that much; Plate_2, which had no dish, now gets one.
+  * In Small mode a plaque that was outlined twice (core and halo) is counted once (Plate_6:
+    96 → 89 plaques).
+  * Detections whose centre lies outside the dish are dropped and counted in the flag line
+    (none on the bundled plates).
+  * `TURBIDITY_REL` is relative to the clearest plaque on the plate, so it moves when Auto adds
+    plaques.
+* **Fiji agreement, ICC 95 % interval.** The interval is now the exact McGraw & Wong F interval
+  instead of a bootstrap, which was too narrow at small n (83–90 % coverage at 5–10 pairs). On the
+  shipped validation file (n = 100): 0.963–0.982 → **0.949–0.986**. No interval is given below
+  5 pairs. The ICC itself (0.974), r, CCC, the bias (−0.028 mm) and the 95 % limits of agreement
+  (−0.146 to +0.089 mm) are unchanged.
+* **Fiji agreement, interval of the limits of agreement.** Bland & Altman's 1999 standard error
+  replaces the √(3/n) approximation: half-width 0.0206 → 0.0204 mm on the shipped file.
+* **Fiji agreement, pasted columns.** A header such as `AREA_MM2`, a row-number column, `.62`,
+  `1,234.5` or a non-numeric line used to shift or change the pairs without notice; they are now
+  read correctly or refused with the line named.
+* **QC flags.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is for a shape
+  far from round (low solidity or an elongated outline). `EDGE` is measured against the lawn
+  edge (0.93 of the dish radius), so it now fires for plaques at the rim. New flags `NESTED`
+  (an outline inside another) and `BRIGHT` (brighter than its surroundings: a bubble or glare,
+  not a plaque). No measurement column changes.
 
 ### Desktop app: Compare and Batch tabs
 
@@ -75,6 +106,47 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * Pixel mode works without a mm scale; Add/Draw are guarded at the image edge; the image fits
   the view after a resize; small windows scroll instead of overlapping.
 * The QC column has tooltips and a tint, and `LARGE?` (see above).
+
+### Detection in the desktop app (`plaque_gui.py`, Measure / Batch / Validate)
+
+* **Plaque size: Auto / Standard / Small** on the Measure and Batch tabs (replaces Batch's "Small
+  plaques" box). Changing it marks the result on screen as out of date. The table's `SOURCE`
+  column says which pass found each plaque; `run_metadata.json` records the choice. On the
+  command line the same merge is opt-in: `--multiscale` (ignored, with a note, under
+  `--published`).
+* **Dish warnings.** The app and the command line say when the dish looks wrong (far smaller than
+  the image, far off-centre, or more than 2 % cut off by the frame) instead of silently reporting
+  millimetres from it. Warnings go to the flag line / stdout and `run_metadata.json`, never
+  into a CSV.
+* **Precise** reports `n_outside_roi` and `max_det`; its two-environment runner honours
+  `PLAQSEG_WEIGHTS` and `PLAQSEG_IMGSZ`. Which plaques Precise keeps, and its mm scale, are
+  unchanged.
+* The app's Published path is pinned by a fixture recorded before these changes
+  (`tests/fixtures/ct_r1_published_app_pin.json`: three bundled plates and `sample.tif`).
+
+### Fiji agreement, Validate and Help (desktop tabs, `agreement.py` CLI)
+
+* **Pasted columns** are read line by line (headers, row numbers, decimal commas, one-line
+  lists); unequal lists are refused with both counts; a preview shows the pairs as read.
+* **One sentence everywhere.** The desktop tab, the CLI and the web app build the paste-ready
+  sentence from the same code, including the proportional-bias statement and the interval of
+  the limits. Below 20 pairs the report adds a 95 % prediction interval for one new difference;
+  the limits of agreement themselves stay bias ± 1.96 SD at every sample size.
+* **Legend key** for the agreement figure (Legend key…, text starter, Place key on figure; key
+  files beside each CLI figure), one colour for points within the limits, and the figure no
+  longer changes after other plots have been drawn.
+* A note explains an ICC interval that is wide because the two methods differ by a systematic
+  offset. Identical or constant columns and fewer than 3 pairs are refused in plain words.
+* **Compare vs Fiji** aligns pixel-unit Fiji results (scale searched from 0.005× to 200×), reads
+  tab and semicolon tables and XM/YM headers, and will not save a match of fewer than half the
+  plaques.
+* **Validate** scores only plaque label files, lists unusable ones as failed with the reason,
+  disables Precise when it is not installed, and gains **Save results (CSV)…** and a paste-ready
+  sentence.
+* Result tables show 4 significant digits (p as `< 0.001`); copy and sort use the full values.
+* **About** lists all seven tabs; Help documents' table-of-contents and cross-document links work.
+* Agreement CLI: an unknown `--tool` / `--manual` column is a one-line message listing the
+  numeric columns.
 
 ### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
 
