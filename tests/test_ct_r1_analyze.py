@@ -368,3 +368,73 @@ def test_plates_chip_counts_plates_with_plaques_and_effect_chip_reads(st, dialog
     assert st._chips["plates"].text() == "6"
     assert st._chips["effect"].text().startswith("Cohen's d = ")
     float(st._chips["effect"].text().split("= ")[1])
+
+
+# --------------------------------------------------------------------------- F9 / F12 / new options
+def _table(view):
+    return view.model().dataframe().copy()
+
+
+def test_one_plate_sample_keeps_the_plate_unit_and_says_so_on_screen(st, dialogs):
+    """CT-R1 F9: one sample with a single plate no longer switches everything to per-plaque
+    statistics; the warning is visible beside the result and its comparisons read n/a."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mutA", "", [1.5, 1.6, 1.55]), ("mutB", "", [2.0])])
+    st.analyse_btn.click()
+    assert st._chips["unit"].text() == "plate"
+    assert "mutB has 1 plate" in st.warn_lbl.text() and st.warn_lbl.isVisibleTo(st)
+    cmp_ = _table(st.tbl_cmp)
+    nb = cmp_[(cmp_["sample A"] == "mutB") | (cmp_["sample B"] == "mutB")]
+    assert len(nb) == 2 and set(nb["p (adjusted)"]) == {"n/a"} and set(nb["signif"]) == {"n/a"}
+    ok = cmp_[(cmp_["sample A"] != "mutB") & (cmp_["sample B"] != "mutB")]
+    assert ok["p (adjusted)"].iloc[0] != "n/a"
+    assert "mutB has 1 plate" in st.report.toPlainText()
+
+
+def test_summary_has_plate_level_rows_and_the_figure_sentence_is_shown(st, dialogs):
+    """CT-R1 F12: plate mean / SD / SEM beside the per-plaque numbers; the figure sentence under
+    the figure and in the Report; p-values via the engine's fmt_p."""
+    ps = ST._engine()
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55]), ("T7", "", [1.2, 1.3, 1.25])])
+    st.analyse_btn.click()
+    summ = _table(st.tbl_group)
+    for c in ("N plates", "plate mean", "plate SD", "plate SEM", "n plaques", "plaque mean"):
+        assert c in summ.columns, c
+    raw = st._last[1]["summary"]
+    assert np.allclose(summ["plate mean"].astype(float), raw["unit_mean"].round(4))
+    assert np.allclose(summ["plate SEM"].astype(float), raw["unit_sem"].round(4))
+    cap = st.fig_caption.text()
+    assert cap.startswith("Violins: all plaques.") and "Bar: mean of the 3 plate means" in cap
+    assert "Whisker: SEM of the plate means" in cap
+    assert "Figure: " + cap in st.report.toPlainText()
+    assert st._chips["p"].text() == ps.fmt_p(st._last[1]["omni"]["p"])
+    assert "Power:" in st.report.toPlainText()
+
+
+def test_variances_and_compare_to_options_reach_the_engine_and_the_zip(st, dialogs, tmp_path):
+    """New options: Variances (auto / equal / unequal) and Compare (all pairs / vs a sample =
+    Dunnett); the ZIP uses the same choices."""
+    _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.9, 1.2]), ("T7", "", [1.2, 1.3, 1.25])])
+    st.analyse_btn.click()
+    assert st._chips["test"].text() == "one-way ANOVA"
+    st.var_sel.setCurrentIndex(st.var_sel.findData("no"))
+    assert st._chips["test"].text() == "Welch ANOVA"
+    assert "Games-Howell" in st.cmp_cap.text()
+    st.var_sel.setCurrentIndex(st.var_sel.findData("auto"))
+    st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData("mut"))
+    assert "Dunnett" in st.cmp_cap.text() and "vs mut" in st.cmp_cap.text()
+    cmp_ = _table(st.tbl_cmp)
+    assert len(cmp_) == 2 and all("mut" in (a, b) for a, b in zip(cmp_["sample A"], cmp_["sample B"]))
+    z = _zip(st, dialogs, tmp_path)
+    omni = pd.read_csv(io.BytesIO(z.read("omnibus_test_diameter_mm.csv")))
+    assert omni["posthoc"][0] == "Dunnett"
+    pw = _csv(z, "pairwise_tests_diameter_mm.csv")
+    assert len(pw) == 2
+    # an engine refusal (Dunnett is parametric) is shown, not a traceback
+    st.param_sel.setCurrentIndex(st.param_sel.findData("nonparametric"))
+    assert "Dunnett" in st.err.text() and st._last is None
+
+
+def test_grouped_mode_hides_the_one_factor_options(st, dialogs):
+    _fill(st, [("T4", "LB", [1.0, 1.1]), ("T4", "IPTG", [1.5, 1.6])])
+    assert st.var_sel.isHidden() and st.cmp_to_sel.isHidden() and not st.control_sel.isHidden()
+    assert not st.fill_sel.isEnabled()                      # F13: grouped violins are always grey
