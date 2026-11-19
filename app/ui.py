@@ -819,6 +819,7 @@ class MeasureTab(QWidget):
 # --------------------------------------------------------------------------- #
 #  Summary tables shared by the Batch and Compare tabs (CT-R1 F18, F23)
 # --------------------------------------------------------------------------- #
+from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QBoxLayout  # noqa: E402  (only the Compare tab needs it)
 
 
@@ -936,18 +937,40 @@ def _summary_table(columns):
     view.verticalHeader().setVisible(False)
     view.horizontalHeader().setStretchLastSection(True)
     view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    # the sorted column needs room for its arrow: re-fit when the user sorts by another one
+    view.horizontalHeader().sortIndicatorChanged.connect(lambda *_: _fit_columns(view))
     return view, model, proxy
 
 
 def _fit_columns(view, max_width=420):
-    """Size every column to its contents AND its full header text; cap very long text."""
-    hdr = view.horizontalHeader()
+    """Size every column to its contents AND its full header text; cap very long text.
+    Qt's own resizeColumnsToContents reserves room for a sort arrow on EVERY column (~40 px
+    each), which pushed the last columns of the summaries off the card; only the column that
+    is sorted needs it."""
+    hdr, model = view.horizontalHeader(), view.model()
+    if model is None:
+        return
+    bold = QFont(hdr.font()); bold.setBold(True)       # the stylesheet draws headers semi-bold
+    fm_head, fm_cell = QFontMetrics(bold), view.fontMetrics()
+    sorted_col = hdr.sortIndicatorSection() if hdr.isSortIndicatorShown() else -1
     hdr.setStretchLastSection(False)
-    view.resizeColumnsToContents()
-    for c in range(hdr.count()):
-        if hdr.sectionSize(c) > max_width:
-            hdr.resizeSection(c, max_width)
-    hdr.setStretchLastSection(True)              # the last column takes whatever width is left
+    for c in range(model.columnCount()):
+        head = str(model.headerData(c, Qt.Horizontal, Qt.DisplayRole) or "")
+        w = fm_head.horizontalAdvance(head) + 26 + (22 if c == sorted_col else 0)
+        for r in range(min(model.rowCount(), 500)):
+            w = max(w, fm_cell.horizontalAdvance(str(model.data(model.index(r, c), Qt.DisplayRole) or "")) + 22)
+        hdr.resizeSection(c, min(w, max_width))
+    # the last column takes whatever width is left, but only when it holds text: a stretched
+    # numeric column puts its right-aligned numbers at the far edge of the card, far from
+    # their header (seen in the Batch and per-phage tables)
+    last = model.columnCount() - 1
+    cells = [str(model.data(model.index(r, last), Qt.DisplayRole) or "") for r in range(min(model.rowCount(), 50))]
+    def _num(t):
+        try:
+            float(t); return True
+        except ValueError:
+            return False
+    hdr.setStretchLastSection(not any(_num(t) for t in cells if t))
 
 
 def _read_csv_or_empty(path):
@@ -1184,7 +1207,7 @@ class CompareTab(QWidget):
 
         self.results = QSplitter()
         self.results.addWidget(left); self.results.addWidget(right)
-        self.results.setSizes([680, 540]); self.results.setChildrenCollapsible(False)
+        self.results.setSizes([730, 500]); self.results.setChildrenCollapsible(False)
         self.results.splitterMoved.connect(lambda *_: self._rescale_figures())
 
         inputs_box = QGroupBox("Inputs")

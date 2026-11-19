@@ -262,6 +262,12 @@ def test_images_are_listed_in_natural_order(tmp_path):
     assert names == ["plate_1.tif", "Plate_2.tif", "Plate_10.tif", "Plate_11.png"]
 
 
+def test_turbidity_overlay_numbers_plaques_top_to_bottom():
+    """F17: the QC overlay printed the engine's order (#1 at the bottom of the plate)."""
+    plaques = [{"center": (50, 90)}, {"center": (10, 10)}, {"center": (70, 10)}, {"center": (5, 40)}]
+    assert ptb.overlay_numbers(plaques) == [4, 1, 2, 3]
+
+
 def test_batch_numbers_plaques_top_to_bottom_like_the_measure_tab(neutral_plate_tif, tmp_path):
     """F17: batch CSVs and the annotated image used the engine's order (#1 at the bottom)."""
     from app import batch_measure, engine_api

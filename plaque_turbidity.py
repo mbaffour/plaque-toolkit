@@ -625,13 +625,25 @@ def phage_label(stem, group_by_prefix):
     return stem
 
 
+def overlay_numbers(plaques):
+    """Number printed on each plaque of the QC overlay: 1 = topmost plaque, counting downward,
+    left to right at equal height -- the same reading order as the Measure and Batch tabs
+    (CT-R1 F17). The CSV's PLATE_INDEX keeps the engine's order (frozen published numbers)."""
+    order = sorted(range(len(plaques)), key=lambda i: (plaques[i]["center"][1], plaques[i]["center"][0]))
+    num = [0] * len(plaques)
+    for rank, i in enumerate(order, 1):
+        num[i] = rank
+    return num
+
+
 def annotate_plate(det, rows, out_dir, plate):
     """Save a QC overlay: dish outline + plaque hulls coloured green(clear)->red(turbid)."""
     img = det["orig"].copy()
     if det["dish_center"] is not None:
         cv2.circle(img, (int(round(det["dish_center"][0])), int(round(det["dish_center"][1]))),
                    int(round(det["dish_r"])), (0, 200, 255), 3)
-    for p, r in zip(det["plaques"], rows):
+    numbers = overlay_numbers(det["plaques"])
+    for p, r, number in zip(det["plaques"], rows, numbers):
         hull = np.asarray(p["hull"], dtype=np.int32)
         val = r.get("TURBIDITY")
         if isinstance(val, (int, float)):
@@ -641,7 +653,7 @@ def annotate_plate(det, rows, out_dir, plate):
             col = (0, 200, 0)
         cv2.drawContours(img, [hull], -1, col, 2)
         (cx, cy), _ = cv2.minEnclosingCircle(hull)
-        cv2.putText(img, str(r["PLATE_INDEX"]), (int(cx), int(cy)),
+        cv2.putText(img, str(number), (int(cx), int(cy)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     pst.imwrite_checked(os.path.join(out_dir, f"overlay_{plate}.png"), img)
 
