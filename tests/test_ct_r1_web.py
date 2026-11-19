@@ -238,3 +238,247 @@ def test_b_f9_browser_key_downloads_and_zip(browser_page, tmp_path):
     allz = zipfile.ZipFile(io.BytesIO(_download(page, srv.port, "dl_all"))).namelist()
     for suffix in ("_legend_key.png", "_legend_key.svg", "_legend_key.pdf", "_legend_text.txt"):
         assert sum(n.endswith(suffix) for n in allz) == 3, (suffix, allz)
+
+
+# =========================================================================== A: statistics app
+def _wide(groups=("T4", "T7", "lambda"), mus=(2.6, 1.8, 3.1), plates=3, n=12, seed=2):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for g, mu in zip(groups, mus):
+        for p_ in range(plates):
+            for v in rng.normal(mu + rng.normal(0, 0.1), 0.25, n):
+                rows.append({"group": g, "replicate": "plate%d" % (p_ + 1),
+                             "diameter_mm": round(float(v), 3), "area_mm2": round(float(v * v * 0.785), 3)})
+    return pd.DataFrame(rows)
+
+
+def _write(tmp_path, name, df=None, text=None, sep=",", decimal="."):
+    p = tmp_path / name
+    if text is not None:
+        p.write_text(text, encoding="utf-8")
+    else:
+        df.to_csv(p, index=False, sep=sep, decimal=decimal)
+    return str(p)
+
+
+def _sel(df, **kw):
+    d = A.picker_defaults(df)
+    s = dict(group=d["group"], value=d["value"], replicate=d["replicate"], subgroup=A.NONE,
+             control=None, order=A.group_levels(df, d["group"]), compare="all", unit="auto",
+             parametric="auto", equal_var="auto", center="mean", error="auto", violin_fill="auto",
+             brackets="auto", palette_name="", palette_custom="", show_points=True, show_n=True,
+             show_value=True, frame=False, log_y=False, log_drop=False, title="", ylabel="",
+             width=9, height=5.4, place_key=True)
+    s.update(kw)
+    return s
+
+
+def _read(tmp_path, name, df=None, **kw):
+    return A.read_upload(_write(tmp_path, name, df, **kw), name)
+
+
+def test_a_f1_second_file_with_other_columns_waits_then_runs(tmp_path):
+    """F1: the previous file's picker values never reach the engine (it used to raise SystemExit
+    and kill the session); the new file runs once its pickers are rebuilt."""
+    first = _wide()
+    df2, inf = _read(tmp_path, "toolkit.csv", first.rename(columns={
+        "group": "PHAGE", "replicate": "PLATE", "diameter_mm": "DIAMETER_MM", "area_mm2": "AREA_MM2"}))
+    stale = _sel(first)
+    with pytest.raises(A.Stale):
+        A.compute(df2, stale, inf)
+    a = A.compute(df2, _sel(df2), inf)
+    assert a["order"] == ["T4", "T7", "lambda"] and a["unit"] == "replicate"
+
+
+def test_a_f1_header_only_file_is_a_message(tmp_path):
+    df, inf = A.read_upload(_write(tmp_path, "h.csv", text="group,replicate,diameter_mm\n"))
+    with pytest.raises(ps.StatsError, match="no data rows"):
+        A.compute(df, _sel(df), inf)
+
+
+def test_a_f2_uppercase_long_file_is_long_and_not_pooled(tmp_path):
+    w = _wide()
+    long_ = w.melt(id_vars=["group", "replicate"], var_name="METRIC", value_name="VALUE") \
+             .rename(columns={"group": "GROUP", "replicate": "REPLICATE"})
+    df, inf = _read(tmp_path, "long_upper.csv", long_)
+    lay = A.layout_of(df)
+    assert lay["long"] and lay["metric_col"] == "METRIC" and lay["metrics"] == ["diameter_mm", "area_mm2"]
+    a = A.compute(df, _sel(df), inf)
+    assert a["metric"] == "diameter_mm"
+    assert len(a["d"]) == len(w)                                      # not 2 x pooled
+    assert a["d"]["value"].mean() == pytest.approx(w["diameter_mm"].mean())
+    with pytest.raises(ps.StatsError, match="holds 2 metrics"):       # VALUE itself is refused
+        A.compute(df, _sel(df, value="VALUE"), inf) if "VALUE" in A.value_choices(df) else \
+            ps.normalize(df, "GROUP", "VALUE", "REPLICATE", "metric")
+
+
+def test_a_f3_per_plate_without_plates_is_refused(tmp_path):
+    df, inf = _read(tmp_path, "noplate.csv", _wide().drop(columns=["replicate"]))
+    with pytest.raises(ps.StatsError) as ei:
+        A.compute(df, _sel(df, unit="replicate"), inf)
+    assert "Statistical unit = per plate needs a plate id" in A.message_of(ei.value)
+
+
+def test_a_f4_semicolon_decimal_comma_and_one_column(tmp_path):
+    w = _wide()
+    df, inf = _read(tmp_path, "euro.csv", w, sep=";", decimal=",")
+    assert inf["delimiter"] == ";" and inf["decimal"] == ","
+    a = A.compute(df, _sel(df), inf)
+    assert a["order"] == ["T4", "T7", "lambda"]
+    assert a["d"]["value"].mean() == pytest.approx(w["diameter_mm"].mean())
+    assert "semicolon-separated" in A.summary_lines(a)[0] and "WIDE" in A.summary_lines(a)[0]
+    with pytest.raises(ps.StatsError, match="ONE column"):
+        A.read_upload(_write(tmp_path, "one.csv", text="group|x\nT4|1\n".replace("|", " ")), "one.csv")
+
+
+def test_a_f5_replicate_none_means_none(tmp_path):
+    df, inf = _read(tmp_path, "w.csv", _wide())
+    a = A.compute(df, _sel(df, replicate=A.NONE), inf)
+    assert a["have_rep"] is False and a["unit"] == "plaque"
+    assert A.replicate_arg(A.NONE) == A.NO_REPLICATE
+
+
+def test_a_f8_samples_follow_the_picker_order(tmp_path):
+    df, inf = _read(tmp_path, "w.csv", _wide())
+    a = A.compute(df, _sel(df, order=["lambda", "T4"]), inf)
+    assert a["order"] == ["lambda", "T4"] and a["omni"]["test"].lower().startswith(("welch", "student", "t"))
+    assert any("not selected" in n for n in a["notes"])
+    with pytest.raises(A.Stale):                                     # a name not in this file
+        A.compute(df, _sel(df, order=["t4"]), inf)
+    with pytest.raises(ps.StatsError, match="No sample is selected"):
+        A.compute(df, _sel(df, order=[]), inf)
+
+
+def test_a_f10_sentence_is_the_engines(tmp_path):
+    df, inf = _read(tmp_path, "w.csv", _wide())
+    a = A.compute(df, _sel(df), inf)
+    assert "##" not in a["sentence"] and not a["sentence"].startswith(">")
+    assert "diameter_mm" in a["sentence"] and "p = < " not in a["sentence"]
+    o = ps._plot_opts(a["opts"])
+    assert a["sentence"] == ps.paste_sentence("diameter_mm", a["summ"], a["omni"], a["unit"], True,
+                                              a["opts"], centers=ps.center_table(a["d"], a["order"], o))
+
+
+def _grouped_df():
+    w = _wide(n=8)
+    parts = []
+    for i, host in enumerate(("WT", "dRecA")):
+        x = w.copy(); x["host"] = host; x["diameter_mm"] = x["diameter_mm"] - 0.3 * i
+        parts.append(x)
+    return pd.concat(parts, ignore_index=True)
+
+
+def test_a_f11_grouped_mode_passes_the_unit(tmp_path):
+    df, inf = _read(tmp_path, "g.csv", _grouped_df())
+    a = A.compute(df, _sel(df, subgroup="host"), inf)
+    assert a["mode"] == "grouped" and a["unit"] == "replicate"
+    b = A.compute(df, _sel(df, subgroup="host", unit="plaque"), inf)
+    assert b["unit"] == "plaque"
+    assert "plaques" in A.status_line(b)
+
+
+def test_a_f13_palette_validation_and_theme_hint():
+    pal, hint = A.palette_choice("", "ff0000; 00aa00 0000ff", 3)
+    assert pal == ["#ff0000", "#00aa00", "#0000ff"] and hint == ""
+    with pytest.raises(ps.StatsError, match="'zz' is not a colour"):
+        A.palette_choice("", "ff0000,zz,0000ff", 3)
+    with pytest.raises(ps.StatsError, match="needs 3"):
+        A.palette_choice("", "red", 3)
+    pal, hint = A.palette_choice("set2", "red", 3)
+    assert pal == list(ps.PALETTES["set2"]) and "not used while a colour theme" in hint
+    assert A.palette_choice("", ",,,", 3) == (list(ps.OKABE_ITO), "")
+
+
+def test_a_f18_value_without_metric_is_wide(tmp_path):
+    df, inf = _read(tmp_path, "v.csv", _wide().rename(columns={"diameter_mm": "value"}).drop(columns=["area_mm2"]))
+    assert A.layout_of(df)["long"] is False and A.value_choices(df) == ["value"]
+    assert A.compute(df, _sel(df), inf)["metric"] == "value"
+
+
+def test_a_median_offers_only_iqr_ci_none_and_cli_words_are_translated():
+    assert set(A.ERROR_CHOICES["median"]) == {"auto", "iqr", "ci95", "none"}
+    assert "--" not in A.app_words("choose --equal-var no (Welch), or pass --log-y-drop-nonpositive")
+
+
+def test_a_new_controls_dunnett_letters_variances(tmp_path):
+    df, inf = _read(tmp_path, "w.csv", _wide())
+    a = A.compute(df, _sel(df, compare="T7"), inf)
+    assert a["omni"]["posthoc"] == "Dunnett" and a["omni"]["control"] == "T7"
+    b = A.compute(df, _sel(df, equal_var="no"), inf)
+    assert b["omni"]["equal_var"] in (False, "no") and "Welch" in b["omni"]["test"]
+    c = A.compute(df, _sel(df, brackets="letters"), inf)
+    fig = A.make_figure(c)
+    assert "compact letter display" in getattr(fig, "annotation_note", "")
+    plt.close(fig)
+
+
+def test_a_log_y_nonpositive_message_and_drop(tmp_path):
+    w = _wide(); w.loc[:2, "diameter_mm"] = 0.0
+    df, inf = _read(tmp_path, "z.csv", w)
+    with pytest.raises(ps.StatsError, match="zero or negative"):
+        A.compute(df, _sel(df, log_y=True), inf)
+    a = A.compute(df, _sel(df, log_y=True, log_drop=True), inf)
+    assert any("not shown on the log axis" in n for n in a["notes"])
+
+
+def test_a_f25_status_line(tmp_path):
+    df, inf = _read(tmp_path, "w.csv", _wide())
+    line = A.status_line(A.compute(df, _sel(df), inf))
+    assert line.startswith("one-way ANOVA") and "plate means" in line
+    assert "Bar: mean of the 3 plate means." in line and "Whisker: SEM of the plate means." in line
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_a_f23_zip_matches_screen(tmp_path, grouped):
+    src = _grouped_df() if grouped else _wide()
+    path = _write(tmp_path, "mydata.csv", src)
+    df, inf = A.read_upload(path, "mydata.csv")
+    sel = _sel(df, subgroup="host") if grouped else _sel(df, order=["lambda", "T4", "T7"])
+    a = A.compute(df, sel, inf)
+    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, a, sel, "mydata.csv", open(path, "rb").read())))
+    names = z.namelist()
+    base = A.file_base(a)
+    assert "input_mydata.csv" in names
+    for f in ("png", "svg", "pdf"):
+        assert "%s.%s" % (base, f) in names and "%s_legend_key.%s" % (base, f) in names
+    assert "%s_legend_text.txt" % base in names
+    fig = A.make_figure(a)
+    kz = zipfile.ZipFile(io.BytesIO(A.key_zip_bytes(fig, base))).namelist()
+    plt.close(fig)
+    assert set(kz) <= set(names)                       # single key download == the ZIP's names
+    cfg = [n for n in names if n.startswith("run_config")]
+    txt = z.read(cfg[0]).decode()
+    assert str(tmp_path) not in txt and "/tmp" not in txt and "Temp" not in txt and '"out"' not in txt
+    import json as _json
+    c = _json.loads(txt)
+    assert c["data"] == "mydata.csv" and c["groups"] == a["order"]
+    rep = [n for n in names if "report" in n and n.endswith(".md")][0]
+    head = z.read(rep).decode().splitlines()[:3]
+    assert any("Plaque Toolkit" in h_ or "plaque_stats v" in h_ for h_ in head)
+    if grouped:
+        assert "grouped_table_diameter_mm.png" in names and "control_comparisons_table_diameter_mm.png" in names
+    else:
+        assert any(n.startswith("stats_table_") for n in names)
+
+
+def test_a_browser_preview_equals_download_and_failed_upload(browser_page, tmp_path):
+    """F12 (preview = PNG bytes), F19 (a failed upload clears results and stays), F24 (downloads
+    disabled with nothing to download), F1 (a second file with other columns: no disconnect)."""
+    import base64
+    page, srv = browser_page(os.path.join(PS_DIR, "app_py.py"), tmp_path)
+    off = "() => [...document.querySelectorAll('a.shiny-download-link.ct-off')].length"
+    assert page.evaluate(off) == 8
+    page.click("#load_example"); _idle(page, 3)
+    assert page.evaluate(off) == 0
+    src = page.get_attribute("#fig_preview img", "src")
+    assert base64.b64decode(src.split(",", 1)[1]) == _download(page, srv.port, "dl_png")
+    other = _write(tmp_path, "other.csv", _wide().rename(columns={
+        "group": "PHAGE", "replicate": "PLATE", "diameter_mm": "DIAMETER_MM", "area_mm2": "AREA_MM2"}))
+    page.set_input_files("#file", other); _idle(page, 3)
+    assert page.query_selector("#shiny-disconnected-overlay") is None
+    assert page.query_selector("#fig_preview img") is not None
+    bad = _write(tmp_path, "bad.csv", text="just one column\nx\ny\n")
+    page.set_input_files("#file", bad); _idle(page, 2)
+    assert "Could not use bad.csv" in page.inner_text("#messages")
+    assert page.query_selector("#fig_preview img") is None
+    assert page.evaluate(off) == 8
