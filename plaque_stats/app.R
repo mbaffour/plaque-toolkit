@@ -592,7 +592,9 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
     as.data.frame(d %>% filter(!is.na(replicate)) %>% group_by(group, replicate) %>%
                     summarise(value = mean(value), n_plaques = n(), .groups = "drop"))
   plates <- vapply(lev, function(g) if (is.null(rm)) 0L else sum(rm$group == g), 0L)
-  have_rep <- !is.null(rm) && min(plates) >= 2
+  # as plaque_stats.py (CT-R1 SM-F4): a plate column makes the plate the unit; a sample with a
+  # single plate stays n/a instead of flipping the whole analysis to per-plaque statistics
+  have_rep <- !is.null(rm)
   requested <- unit
   if (unit == "auto") unit <- if (have_rep) "replicate" else "plaque"
   warns <- character(0)
@@ -602,16 +604,23 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   if (unit == "replicate" && is.null(rm)) unit <- "plaque"
   src <- if (unit == "replicate") rm else d
   groups <- setNames(lapply(lev, function(g) src$value[src$group == g]), lev)
-  ns <- lengths(groups); min_n <- if (length(ns)) min(ns) else 0L
+  ns <- lengths(groups)
+  # the n that decides the method: the samples that can be tested (a 1-plate sample is n/a), as
+  # plaque_stats.py does
+  tg_n <- ns[ns >= 2]
+  min_n <- if (length(tg_n)) min(tg_n) else if (length(ns)) min(ns) else 0L
 
   normal <- vapply(groups, function(v) if (length(v) >= 3 && length(v) <= 5000)
     tryCatch(stats::shapiro.test(v)$p.value, error = function(e) NA_real_) else NA_real_, 0)
   lev_p <- levene_p(groups)
   all_normal <- all(is.na(normal) | normal > 0.05)
   # few replicates -> parametric on the plate means (Shapiro is uninformative and rank tests
-  # cannot reach p < 0.05 at 3 vs 3): SuperPlots, Lord 2020; Kenny & Schoen 2021
-  use_param <- if (parametric == "auto") { if (min_n < 8) TRUE else all_normal && (is.na(lev_p) || lev_p > 0.05) }
-               else parametric == "parametric"
+  # cannot reach p < 0.05 at 3 vs 3): SuperPlots, Lord 2020; Kenny & Schoen 2021. From 8 per
+  # sample on, Shapiro decides: parametric iff no sample rejects normality (a sample that cannot
+  # be tested counts as not rejected). Unequal variances alone do NOT send normal data to a rank
+  # test: Levene only picks Welch ANOVA + Games-Howell vs classic ANOVA + Tukey below. Same rule
+  # as plaque_stats.py.
+  use_param <- if (parametric == "auto") { if (min_n < 8) TRUE else all_normal } else parametric == "parametric"
 
   if (unit == "plaque") {
     one <- lev[plates < 2]
@@ -658,7 +667,12 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
     out$cohens_d <- cohens_d(a, b)
     padj[[pair_key(lev[1], lev[2])]] <- out$p
   } else if (k > 2) {
-    if (use_param) {
+    # omnibus on the samples that can be tested (>= 2 values), as plaque_stats.py; a sample with a
+    # single plate only gets n/a comparisons
+    gt <- groups[ns >= 2]
+    if (length(gt) < 2) {
+      out$test <- "n/a (need >=2 samples with >=2 values)"; out$p <- NA_real_
+    } else if (use_param) {
       sds <- vapply(groups[ns >= 2], stats::sd, 0)
       ratio <- if (length(sds) >= 2) { if (min(sds) > 0) max(sds) / min(sds) else if (max(sds) > 0) Inf else NA_real_ } else NA_real_
       out$sd_ratio <- ratio
@@ -668,13 +682,13 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       unequal <- if (equal_var == "no") TRUE else if (equal_var == "yes") FALSE
                  else !is.na(lev_p) && lev_p < 0.05 && min_n >= 2
       if (unequal) {
-        out$test <- "Welch ANOVA"; out$p <- welch_anova_p(groups); out$posthoc <- "Games-Howell"
+        out$test <- "Welch ANOVA"; out$p <- welch_anova_p(gt); out$posthoc <- "Games-Howell"
         padj <- games_howell_p(groups)
         warns <- c(warns, if (equal_var == "no")
           "Variances were set to 'unequal': Welch's ANOVA and Games-Howell (no equal-variance assumption) were used."
           else sprintf("Levene p = %.3f: group variances differ, so Welch's ANOVA and Games-Howell (no equal-variance assumption) were used.", lev_p))
       } else {
-        out$test <- "one-way ANOVA"; out$p <- anova_p(groups); out$posthoc <- "Tukey HSD"
+        out$test <- "one-way ANOVA"; out$p <- anova_p(gt); out$posthoc <- "Tukey HSD"
         padj <- tukey_p(groups)
         if (equal_var == "yes" && !is.na(lev_p) && lev_p < 0.05)
           warns <- c(warns, sprintf("Levene p = %.3f suggests the group variances differ, but Variances was set to 'equal', so the classic ANOVA and Tukey HSD were used.", lev_p))
@@ -684,9 +698,9 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       }
     } else {
       out$test <- "Kruskal–Wallis"; out$posthoc <- "Dunn (Holm-adjusted)"
-      gv <- groups[ns > 0]
+      gv <- gt
       out$p <- tryCatch(stats::kruskal.test(gv)$p.value, error = function(e) NA_real_)
-      padj <- dunn_holm_p(groups)
+      padj <- dunn_holm_p(gt)
     }
     if (is.nan(out$p)) out$p <- NA_real_
   } else {
