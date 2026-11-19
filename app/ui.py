@@ -2268,6 +2268,14 @@ class ValidateTab(QWidget):
             label = next(l for l, k, _ in MODES if k == key)
             cb = QCheckBox(label); cb.setChecked(default); self.mode_checks[key] = cb; modes_box.addWidget(cb)
         modes_box.addStretch()
+        # CT-R1 DA-F22: an engine that cannot run here is unticked and disabled, with the reason
+        self._unavailable = set()
+        ok, why = engine_api.precise_available()
+        if not ok:
+            cb = self.mode_checks["precise"]
+            cb.setChecked(False); cb.setEnabled(False)
+            cb.setToolTip("Precise is not available on this computer: %s" % why)
+            self._unavailable.add("precise")
 
         self.run_btn = QPushButton(" Run validation"); self.run_btn.setObjectName("Primary")
         self.run_btn.setIcon(_icon(QStyle.SP_DialogApplyButton)); self.run_btn.clicked.connect(self._run)
@@ -2278,6 +2286,14 @@ class ValidateTab(QWidget):
         self.status = QLabel("First build ground truth: in Measure, correct a few plates by hand, then "
                              "Export → Ground-truth labels. Point here at that folder and score the engines.")
         self.status.setObjectName("ModeHelp"); self.status.setWordWrap(True)
+        self._res = None
+        self.save_btn = QPushButton("Save results (CSV)…"); self.save_btn.clicked.connect(self._save)
+        self.save_btn.setToolTip("Write the per-engine and per-plate tables as two CSV files.")
+        self.sentence = QLineEdit(); self.sentence.setReadOnly(True)
+        self.sentence.setPlaceholderText("Run validation to get a sentence for your Methods/Results.")
+        self.sent_copy = QPushButton("Copy"); self.sent_copy.clicked.connect(self._copy_sentence)
+        for b in (self.save_btn, self.sent_copy):
+            b.setEnabled(False)
 
         self.mode_table = CopyableTableView(); self.mode_model = PandasTableModel()
         self.mode_table.setModel(self.mode_model); self.mode_table.setAlternatingRowColors(True)
@@ -2306,7 +2322,12 @@ class ValidateTab(QWidget):
         split.setChildrenCollapsible(False)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
-        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(split, 1)
+        srow = QHBoxLayout()
+        scap = QLabel("Paste-ready sentence"); scap.setObjectName("FieldLabel")
+        srow.addWidget(scap); srow.addWidget(self.sentence, 1); srow.addWidget(self.sent_copy)
+        srow.addWidget(self.save_btn)
+        lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addLayout(srow)
+        lay.addWidget(split, 1)
 
     def _pick(self):
         p = QFileDialog.getExistingDirectory(self, "Folder of ground-truth labels")
@@ -2320,6 +2341,14 @@ class ValidateTab(QWidget):
         modes = tuple(k for k, cb in self.mode_checks.items() if cb.isChecked())
         if not modes:
             QMessageBox.warning(self, "Pick engines", "Tick at least one engine to score."); return
+        files, skipped = validate.collect_label_files(d)
+        if not files:
+            QMessageBox.warning(self, "No label files",
+                                "No plaque label files were found in this folder%s. Make them in "
+                                "Measure: correct a plate by hand, then Export → Ground-truth labels."
+                                % (" (%d other JSON file%s skipped)" % (len(skipped), "" if len(skipped) == 1 else "s")
+                                   if skipped else ""))
+            return
         if "precise" in modes and not engine_api.precise_available()[0]:
             QMessageBox.information(self, "Precise unavailable", "Precise isn't available here; untick it."); return
         self._set_busy(True); self.window().statusBar().showMessage("Validating…")
@@ -2331,17 +2360,46 @@ class ValidateTab(QWidget):
 
     def _set_busy(self, on):
         self.progress.setVisible(on)
-        for x in (self.run_btn,) + tuple(self.mode_checks.values()):
+        for x in (self.run_btn,) + tuple(cb for k, cb in self.mode_checks.items()
+                                         if k not in self._unavailable):
             x.setEnabled(not on)
 
     def _done(self, res):
         self._set_busy(False)
+        self._res = res
         self.mode_model.set_dataframe(res["per_mode_df"])
         self.plate_model.set_dataframe(res["per_plate_df"])
-        n = len(res["per_plate_df"])
-        self.status.setText(f"Scored {n} (plate × engine) results. Higher F1 = closer to your gold "
-                            "standard. See the Validation guide (Help menu) for how to report this.")
+        self.status.setText(validate.summary_status(res) + " Higher F1 = closer to your gold "
+                            "standard; see the Validation guide (Help menu) for how to report it.")
+        names = {k: l for l, k, _h in MODES}
+        self.sentence.setText(validate.report_sentence(res, names, __version__))
+        self.save_btn.setEnabled(res["n_label_files"] > 0)
+        self.sent_copy.setEnabled(bool(self.sentence.text()))
         self.window().statusBar().showMessage("Validation done.")
+
+    def _copy_sentence(self):
+        QApplication.clipboard().setText(self.sentence.text())
+        self.window().statusBar().showMessage("Sentence copied to the clipboard.", 3000)
+
+    def _save(self, path=None):
+        """Per-engine + per-plate tables, as <name>_per_engine.csv and <name>_per_plate.csv."""
+        if not self._res:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Save validation results",
+                                                  "validation_results.csv", "CSV (*.csv)")
+        if not path:
+            return None
+        base = path[:-4] if path.lower().endswith(".csv") else path
+        out = (base + "_per_engine.csv", base + "_per_plate.csv")
+        try:
+            self._res["per_mode_df"].to_csv(out[0], index=False, float_format="%.6g")
+            self._res["per_plate_df"].to_csv(out[1], index=False, float_format="%.6g")
+        except OSError as e:
+            QMessageBox.warning(self, "Could not save", "Saving the results failed:\n%s" % e)
+            return None
+        self.window().statusBar().showMessage("Saved %s and %s" % out, 6000)
+        return out
 
     def _err(self, m):
         self._set_busy(False)

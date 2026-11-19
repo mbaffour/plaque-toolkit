@@ -501,3 +501,105 @@ def test_save_paired_csv_adds_csv_only_when_needed_and_rounds(agreement_tab, tmp
     text = open(p).read()
     assert "-0.03\n" in text and "000000000" not in text
     assert tab._save_csv(str(tmp_path / "kept.csv")).endswith("kept.csv")
+
+
+# =========================================================================== 6. DA-F22 Validate
+import json as _json   # noqa: E402
+
+PLAQUES = [(380, 380), (520, 400), (430, 540), (560, 550), (350, 500)]
+
+
+def _label_folder(tmp_path, img):
+    """A label folder: one good label file, one with a plaque lacking coordinates, one whose
+    image is missing, and a non-label JSON (run_metadata)."""
+    d = tmp_path / "labels"; d.mkdir()
+    mmpp = 90.0 / 760.0
+    recs = [{"index": i + 1, "x_px": float(x), "y_px": float(y), "r_px": 26.0,
+             "area_px": math.pi * 26 ** 2, "diam_mm": round(52 * mmpp, 3), "source": "auto",
+             "kind": "plaque"} for i, (x, y) in enumerate(PLAQUES)]
+    meta = {"image": os.path.basename(img), "image_path": img, "mm_per_px": mmpp,
+            "dish_diam_px": 760, "schema": "plaque-groundtruth-v1"}
+    (d / "labels_good.json").write_text(_json.dumps({"meta": meta, "plaques": recs}))
+    bad = [dict(r) for r in recs]; del bad[2]["x_px"]
+    (d / "labels_nocoords.json").write_text(_json.dumps({"meta": meta, "plaques": bad}))
+    gone = dict(meta, image="missing.tif", image_path=str(tmp_path / "missing.tif"))
+    (d / "labels_noimage.json").write_text(_json.dumps({"meta": gone, "plaques": recs}))
+    (d / "run_metadata.json").write_text(_json.dumps({"tool": "plaque toolkit", "meta": {}}))
+    return d
+
+
+def test_validate_scores_only_label_files_and_fails_bad_ones_with_reasons(neutral_plate_tif, tmp_path):
+    from app import validate as V
+    d = _label_folder(tmp_path, neutral_plate_tif)
+    res = V.validate(str(d), modes=("current",))
+    assert res["n_label_files"] == 3 and res["skipped"] == ["run_metadata.json"]
+    pp = res["per_plate_df"].set_index("label_file")
+    assert pp.loc["labels_good.json", "error"] == ""
+    assert "1 of 5 labelled plaques have no x_px/y_px" in pp.loc["labels_nocoords.json", "error"]
+    assert "could not locate the plate image" in pp.loc["labels_noimage.json", "error"]
+    pm = res["per_mode_df"].iloc[0]
+    good = pp.loc["labels_good.json"]
+    assert pm["n_plates"] == 1 and pm["tp"] == good["tp"] and pm["fn"] == good["fn"]   # failed rows excluded
+    assert V.summary_status(res) == ("Scored 3 plates x 1 engine; 2 failed (see the last column). "
+                                     "Skipped 1 JSON file that is not a plaque label file.")
+    sent = V.report_sentence(res, {"current": "Current (corrected)"}, "1.3.0")
+    assert sent.startswith("Against 1 hand-corrected plate (5 plaques), the Current (corrected) "
+                           "engine of Plaque Toolkit 1.3.0 detected plaques with precision")
+
+
+def test_validate_with_no_label_files_has_no_zero_row(tmp_path):
+    from app import validate as V
+    (tmp_path / "run_metadata.json").write_text("{}")
+    res = V.validate(str(tmp_path), modes=("current",))
+    assert res["n_label_files"] == 0 and res["per_mode_df"].empty and res["per_plate_df"].empty
+
+
+@pytest.fixture
+def validate_tab(qt, monkeypatch):
+    from PySide6.QtCore import QThreadPool
+    from PySide6.QtWidgets import QMainWindow
+    from app import ui as appui
+    monkeypatch.setattr(appui.engine_api, "precise_available", lambda: (False, "torch is not installed."))
+    win = QMainWindow()
+    tab = appui.ValidateTab(QThreadPool())
+    win.setCentralWidget(tab); qt.addWidget(win)
+    tab._test_window = win
+    yield tab
+    win.close()
+
+
+def test_unavailable_precise_is_unticked_disabled_and_stays_disabled(validate_tab):
+    cb = validate_tab.mode_checks["precise"]
+    assert not cb.isChecked() and not cb.isEnabled() and "torch is not installed" in cb.toolTip()
+    validate_tab._set_busy(True); validate_tab._set_busy(False)
+    assert not cb.isEnabled() and validate_tab.mode_checks["current"].isEnabled()
+
+
+def test_available_precise_stays_offered(qt, monkeypatch):
+    from PySide6.QtCore import QThreadPool
+    from app import ui as appui
+    monkeypatch.setattr(appui.engine_api, "precise_available", lambda: (True, ""))
+    tab = appui.ValidateTab(QThreadPool()); qt.addWidget(tab)
+    assert tab.mode_checks["precise"].isEnabled() and tab.mode_checks["precise"].isChecked()
+
+
+def test_validate_tab_warns_when_the_folder_has_no_label_files(validate_tab, tmp_path, no_dialogs):
+    (tmp_path / "run_metadata.json").write_text("{}")
+    validate_tab.labels.setText(str(tmp_path))
+    validate_tab._run()
+    assert no_dialogs and no_dialogs[0][0] == "warning" and no_dialogs[0][1] == "No label files"
+    assert "1 other JSON file skipped" in no_dialogs[0][2]
+    assert validate_tab.mode_model.rowCount() == 0 and not validate_tab.save_btn.isEnabled()
+
+
+def test_validate_tab_run_status_sentence_and_csv(validate_tab, qt, neutral_plate_tif, tmp_path, no_dialogs):
+    import pandas as pd
+    d = _label_folder(tmp_path, neutral_plate_tif)
+    validate_tab.labels.setText(str(d))
+    validate_tab._run()
+    qt.waitUntil(lambda: validate_tab._res is not None, timeout=120_000)
+    assert validate_tab.status.text().startswith("Scored 3 plates x 1 engine; 2 failed (see the last column).")
+    assert "Plaque Toolkit 1.3.0" in validate_tab.sentence.text()
+    out = validate_tab._save(str(tmp_path / "res.csv"))
+    assert out == (str(tmp_path / "res_per_engine.csv"), str(tmp_path / "res_per_plate.csv"))
+    assert len(pd.read_csv(out[1])) == 3 and len(pd.read_csv(out[0])) == 1
