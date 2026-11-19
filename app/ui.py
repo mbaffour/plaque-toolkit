@@ -1528,7 +1528,20 @@ class AgreementTab(QWidget):
             c.setObjectName("SummaryHeading")
         tb = QVBoxLayout(); tb.addWidget(tcap); tb.addWidget(self.tool_in)
         fb = QVBoxLayout(); fb.addWidget(fcap); fb.addWidget(self.fiji_in)
-        inrow = QHBoxLayout(); inrow.addLayout(tb); inrow.addLayout(fb)
+        # CT-R1 DA-F7: show what was actually read (the pairs + what was skipped / chosen), so a
+        # header digit or a row-number column can never shift the pairs unseen.
+        from PySide6.QtWidgets import QTableWidget
+        pcap = QLabel("Parsed pairs (preview)"); pcap.setObjectName("SummaryHeading")
+        self.parse_notes = QLabel("Compute to see the pairs as read."); self.parse_notes.setWordWrap(True)
+        self.parse_notes.setObjectName("ModeHelp")
+        self.preview = QTableWidget(0, 2)
+        self.preview.setHorizontalHeaderLabels(["Toolkit", "Fiji"])
+        self.preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview.setMaximumHeight(150); self.preview.setMinimumWidth(220)
+        self.preview.horizontalHeader().setStretchLastSection(True)
+        self.preview.setAccessibleName("Parsed pairs preview")
+        pb = QVBoxLayout(); pb.addWidget(pcap); pb.addWidget(self.parse_notes); pb.addWidget(self.preview)
+        inrow = QHBoxLayout(); inrow.addLayout(tb, 2); inrow.addLayout(fb, 2); inrow.addLayout(pb, 2)
 
         self.unit = QComboBox()
         self.unit.addItem("Diameter (mm)", "mm")
@@ -1590,14 +1603,23 @@ class AgreementTab(QWidget):
     def _compute(self):
         from app import agreement
         self.err.setText("")
-        tool = agreement.parse_column(self.tool_in.toPlainText())
-        fiji = agreement.parse_column(self.fiji_in.toPlainText())
+        parsed = {}
+        for key, box, name in (("tool", self.tool_in, "Plaque Toolkit"), ("fiji", self.fiji_in, "Fiji / ImageJ")):
+            try:
+                parsed[key] = agreement.parse_values(box.toPlainText())
+            except ValueError as e:
+                self._fail("%s box: %s" % (name, e)); return
+        (tool, tnotes), (fiji, fnotes) = parsed["tool"], parsed["fiji"]
+        self._show_preview(tool, fiji, tnotes, fnotes)
         if len(tool) < 3 or len(fiji) < 3:
-            self.err.setText("Enter at least 3 paired values in each box."); return
+            self._fail("Enter at least 3 paired values in each box (read %d Toolkit, %d Fiji)."
+                       % (len(tool), len(fiji))); return
         if len(tool) != len(fiji):
-            self.err.setText("Unequal counts: %d Toolkit vs %d Fiji — using the first %d pairs; "
-                             "check the rows line up (same plaque per line)."
-                             % (len(tool), len(fiji), min(len(tool), len(fiji))))
+            # CT-R1 DA-F7: refuse instead of silently pairing the first min(n) lines
+            self._fail("The two boxes hold different numbers of values: %d Plaque Toolkit vs %d "
+                       "Fiji / ImageJ. Each line must be the same plaque in both boxes; fix the "
+                       "lists (see the preview) and compute again." % (len(tool), len(fiji)))
+            return
         unit, what = "mm", "diameters"
         if self.unit.currentData() == "area":
             tool, fiji = agreement.area_to_diam(tool), agreement.area_to_diam(fiji)
@@ -1605,7 +1627,7 @@ class AgreementTab(QWidget):
         try:
             s = agreement.compute(tool, fiji)
         except Exception as e:
-            self.err.setText(str(e)); return
+            self._fail(str(e)); return
         self._last = (s, unit, what)
         m = self._metrics
         m["n"].setText(str(s["n"]))
@@ -1638,17 +1660,60 @@ class AgreementTab(QWidget):
         self.fig_layout.addWidget(self.canvas, 0, Qt.AlignHCenter | Qt.AlignTop)
         self.canvas.draw()
 
+    _PREVIEW_ROWS = 200
+
+    def _show_preview(self, tool, fiji, tnotes, fnotes):
+        """Fill the read-only preview with the pairs as parsed (first 200) + the parse notes."""
+        from PySide6.QtWidgets import QTableWidgetItem
+        n = max(len(tool), len(fiji))
+        shown = min(n, self._PREVIEW_ROWS)
+        self.preview.setRowCount(shown)
+        for i in range(shown):
+            for j, seq in enumerate((tool, fiji)):
+                it = QTableWidgetItem("%g" % seq[i] if i < len(seq) else "")
+                it.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
+                self.preview.setItem(i, j, it)
+        notes = ["Toolkit: " + " ".join(tnotes)] if tnotes else []
+        notes += ["Fiji: " + " ".join(fnotes)] if fnotes else []
+        head = "Read %d Toolkit and %d Fiji values." % (len(tool), len(fiji))
+        if n > shown:
+            head += " Showing the first %d rows." % shown
+        self.parse_notes.setText(" ".join([head] + notes))
+
+    def _reset_results(self):
+        """CT-R1 DA-F19: no stale result may survive a failed compute or Clear -- remove the
+        figure, chips, report and key text, and disable every save/copy button."""
+        self._last = None
+        if self.canvas is not None:
+            self.fig_layout.removeWidget(self.canvas); self.canvas.setParent(None)
+            self.canvas = None
+        if self.fig_placeholder is None:
+            self.fig_placeholder = QLabel("The method-comparison + Bland–Altman plot appears here.")
+            self.fig_placeholder.setObjectName("Placeholder"); self.fig_placeholder.setAlignment(Qt.AlignCenter)
+            self.fig_placeholder.setMinimumHeight(300); self.fig_layout.addWidget(self.fig_placeholder)
+        for v in self._metrics.values():
+            v.setText("—")
+        self.report.clear()
+        for b in self._result_buttons():
+            b.setEnabled(False)
+
+    def _result_buttons(self):
+        return [b for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn,
+                            getattr(self, "key_btn", None), getattr(self, "key_copy_btn", None)) if b]
+
+    def _fail(self, msg):
+        self._reset_results()
+        self.err.setText(msg)
+
     def _example(self):
         self.tool_in.setPlainText(self._EX_TOOL); self.fiji_in.setPlaceholderText("")
         self.fiji_in.setPlainText(self._EX_FIJI)
         self.unit.setCurrentIndex(0); self._compute()
 
     def _clear(self):
-        self.tool_in.clear(); self.fiji_in.clear(); self.report.clear(); self.err.setText("")
-        for v in self._metrics.values():
-            v.setText("—")
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
-            b.setEnabled(False)
+        self.tool_in.clear(); self.fiji_in.clear(); self.err.setText("")
+        self._reset_results()
+        self.preview.setRowCount(0); self.parse_notes.setText("Compute to see the pairs as read.")
 
     def _copy(self):
         QApplication.clipboard().setText(self.report.toPlainText())

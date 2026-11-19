@@ -7,33 +7,147 @@ import math
 import re
 
 
-_NUM = r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+# --------------------------------------------------------------------------- paste parser
+# CT-R1 DA-F7: the old parser pulled every digit out of every line with a regex, so a header
+# "AREA_MM2" became the value 2 (shifting every pair: ICC 0.998 -> -0.751), a Fiji table whose
+# row numbers start at 7 was read as the row numbers, ".62" was read as 62, "1,234.5" as 1, a
+# word in the middle of the column was silently dropped (shifting the rest), and values typed
+# on one line were rejected. It now reads the paste LINE BY LINE, cell by cell, says what it
+# did in plain notes, and refuses (naming the line) rather than guess.
+_NUM_RE = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
+_THOUSANDS_RE = re.compile(r"^[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")       # 1,234.5 / 1,234,567
+_EU_THOUSANDS_RE = re.compile(r"^[-+]?\d{1,3}(?:\.\d{3})+,\d+$")         # 1.234,5
+_DEC_COMMA_RE = re.compile(r"^[-+]?\d*,\d+$")                           # 1,27 / ,5
+
+
+def _num(cell):
+    """One cell -> float, or None when it is not a number."""
+    c = str(cell).strip().strip("\"'").strip().replace("−", "-")
+    if not c:
+        return None
+    if _NUM_RE.match(c):
+        return float(c)
+    if _DEC_COMMA_RE.match(c):                      # a lone comma is a decimal comma (1,27)
+        return float(c.replace(",", "."))
+    if "." in c and _THOUSANDS_RE.match(c) or (c.count(",") > 1 and _THOUSANDS_RE.match(c)):
+        return float(c.replace(",", ""))            # 1,234.5 (unambiguous thousands)
+    if _EU_THOUSANDS_RE.match(c):
+        return float(c.replace(".", "").replace(",", "."))
+    return None
+
+
+def _cells(line):
+    """Split one line into cells: tab, then semicolon, then comma-separated when the commas
+    cannot be decimal commas (a '.' elsewhere, or ', '), else whitespace."""
+    s = line.strip()
+    for sep in ("\t", ";"):
+        if sep in s:
+            cells = [c.strip() for c in s.split(sep)]
+            while cells and not cells[-1]:          # a trailing tab is not a cell
+                cells.pop()
+            return cells
+    if "," in s and (", " in s or ("." in s and _num(s) is None)):
+        return [c.strip() for c in s.split(",")]
+    toks = s.split()
+    if len(toks) == 1 and "," in s and _num(s) is None:
+        return [c.strip() for c in s.split(",")]      # 1,2,3 -> three values
+    return toks
+
+
+def _count(k):
+    return "%d value%s" % (k, "" if k == 1 else "s")
+
+
+def _clip(s, n=40):
+    s = str(s).strip()
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def parse_values(text):
+    """Parse a pasted column (or a pasted table) of measurements.
+
+    Returns ``(values, notes)``; ``notes`` are plain sentences saying what was skipped or
+    chosen. Raises ``ValueError`` naming the line when a line in the middle is not a number
+    or the rows have different numbers of cells (never a silent drop).
+
+    * A first line that is not purely numbers is a header (digits inside a header such as
+      ``AREA_MM2`` are not data) and is skipped.
+    * In a table, a first column of consecutive increasing integers (1, 2, 3 ... or 7, 8, 9 ...)
+      is a row number; the measurement column next to it is used. With several measurement
+      columns left, the one whose header names area/diameter wins, else the first one.
+    * Decimal commas (``1,27``), ``.62`` = 0.62, ``1,234.5`` = 1234.5, and values typed on
+      ONE line (tab / space / semicolon / comma separated) all read as a column.
+    """
+    notes = []
+    lines = [(i + 1, l) for i, l in enumerate(str(text).splitlines())]
+    lines = [(no, l) for no, l in lines if any(c for c in _cells(l))]
+    if not lines:
+        return [], notes
+    header = None
+    first_no, first = lines[0]
+    if any(_num(c) is None for c in _cells(first) if c):
+        header = _cells(first)
+        notes.append('Skipped the header line "%s".' % _clip(first))
+        lines = lines[1:]
+    rows = []
+    for no, l in lines:
+        cells = _cells(l)
+        if any(not c for c in cells):
+            raise ValueError('Line %d ("%s") has an empty cell. Remove it or fill it in; '
+                             'nothing was computed.' % (no, _clip(l)))
+        vals = [_num(c) for c in cells]
+        if any(v is None for v in vals):
+            bad = next(c for c, v in zip(cells, vals) if v is None)
+            what = "" if bad.strip() == l.strip() else ' ("%s" is not a number)' % _clip(bad, 20)
+            raise ValueError('Line %d ("%s") is not a number%s. Remove or fix that line; '
+                             'nothing was computed.' % (no, _clip(l), what))
+        rows.append((no, vals))
+    if not rows:
+        return [], notes
+    if len(rows) == 1 and len(rows[0][1]) > 1:      # values typed on one line = a column
+        notes.append("Read the %d values on line %d as one column." % (len(rows[0][1]), rows[0][0]))
+        return list(rows[0][1]), notes
+    ncols = len(rows[0][1])
+    for no, vals in rows[1:]:
+        if len(vals) != ncols:
+            raise ValueError("Line %d has %s but line %d has %s. Every line must have the same "
+                             "columns; nothing was computed."
+                             % (no, _count(len(vals)), rows[0][0], _count(ncols)))
+    if ncols == 1:
+        return [v[0] for _no, v in rows], notes
+    cols = [[v[j] for _no, v in rows] for j in range(ncols)]
+    c0 = cols[0]
+    is_index = (len(c0) >= 2 and all(float(x).is_integer() for x in c0)
+                and all(b - a == 1 for a, b in zip(c0, c0[1:])))
+    cand = list(range(1, ncols)) if is_index else list(range(ncols))
+    names = None
+    if header is not None:
+        h = list(header)
+        if len(h) == ncols - 1:                      # Fiji's row-number column has no name
+            h = [""] + h
+        if len(h) == ncols:
+            names = h
+    pick = cand[0]
+    if names and len(cand) > 1:
+        for j in cand:
+            if re.search(r"area|diam", names[j], re.I):
+                pick = j
+                break
+    if is_index:
+        notes.append("The first column (%g, %g, %g …) is a row number, not a measurement."
+                     % tuple(c0[:3]) if len(c0) >= 3 else
+                     "The first column (%s) is a row number, not a measurement."
+                     % ", ".join("%g" % x for x in c0))
+    if len(cand) > 1 or is_index:
+        nm = (' "%s"' % names[pick]) if names and names[pick] else ""
+        notes.append("Used column %d%s of %d. To use another column, paste only that column."
+                     % (pick + 1, nm, ncols))
+    return cols[pick], notes
 
 
 def parse_column(text):
-    """Parse a pasted/typed column of values.
-
-    Tolerates blank lines, headers and extra columns. Two things the old parser got
-    wrong (AUDIT-2026-10.md, PT-35): a pasted Fiji *Results* table starts every row with
-    its row number, and the parser took that (1, 2, 3 ...) instead of the measurement; and
-    a European decimal comma ("1,24") was read as 1. Now: when every line carries two or
-    more numbers and the first ones count 1..n, the second number is used; a lone comma
-    between digits is a decimal point."""
-    rows = []
-    for line in str(text).splitlines():
-        t = line.strip()
-        if not t:
-            continue
-        if re.fullmatch(r"-?\d+,\d+", t):             # "1,24" -> 1.24
-            t = t.replace(",", ".")
-        nums = [float(x) for x in re.findall(_NUM, t.replace(",", " "))]
-        if nums:
-            rows.append(nums)
-    if not rows:
-        return []
-    multi = all(len(r) >= 2 for r in rows)
-    looks_indexed = multi and all(r[0] == i for i, r in enumerate(rows, start=1))
-    return [r[1] if looks_indexed else r[0] for r in rows]
+    """Parse a pasted/typed column of values (see :func:`parse_values`); the values only."""
+    return parse_values(text)[0]
 
 
 def area_to_diam(areas):
