@@ -31,12 +31,15 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **R Shiny app, statistical unit.** A file with no plate column, or UPPER-CASE headers, used to
   be tested per plaque while the report said "per plate". The unit is now detected
   case-insensitively and the report names the unit that was actually tested.
+  A sample with a single plate no longer switches the whole analysis to per-plaque statistics:
+  the plate stays the unit, that sample's comparisons are n/a, and the omnibus test covers the
+  samples that can be tested (as in the Python engine).
 * **Statistics engine (`plaque_stats.py`), test choice with 8 or more plates per sample.** When
   the plate means look normal but Levene's test rejects equal variances, **auto** now runs Welch
   ANOVA + Games-Howell; before, it switched to Kruskal-Wallis. Below 8 plates per sample (the
   usual case) nothing changes, and the shipped example gives the same p-values and summary
-  numbers as before (`tests/test_ct_r1_stats_engine.py::test_gate_*`). (The R app still goes to
-  Kruskal-Wallis in that case; it will be aligned.)
+  numbers as before (`tests/test_ct_r1_stats_engine.py::test_gate_*`). The R app follows the
+  same rule.
 * **Statistics engine, files that were read wrongly.** Sample names such as `None`, `NA`, `nan`,
   `007`, `1.0` or `phage #3` used to be dropped, renamed or cut at the `#`; they are now kept as
   typed, so analyses of such files gain the samples they were missing. `--unit replicate` on a
@@ -202,6 +205,9 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
   sans and says so; a key too large for the figure is not placed and the app says so (the
   stand-alone key is complete).
 * `Run R App.bat` installs `jsonlite` and `zip`.
+* **Same answer in R and Python.** `tests/test_ct_r1_parity.py` runs the R app's statistics and
+  the Python engine on 8 data sets × 9 option combinations and requires the same test, the same
+  unit and the same p-values (omnibus to 1e-6, pairwise to 1e-5).
 
 ---
 
