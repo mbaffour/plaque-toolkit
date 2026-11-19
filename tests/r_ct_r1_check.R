@@ -46,7 +46,8 @@ PY_A_OMNI <- 8.664450118784204e-06
 PY_A_PAIR <- c("T4|T7" = 0.00014846125892786777, "T4|lambda" = 0.0011220469260948551,
                "T7|lambda" = 6.985589097507905e-06)
 # ct_r1_E_oneplate_group.csv with --unit replicate (solo has ONE plate -> n/a):
-PY_E_OMNI <- 0.0008799125772243469
+# omnibus over the two samples that can be tested (WT, mutA); solo (1 plate) is n/a, as run_stats does
+PY_E_OMNI <- 0.0014053424138857433
 PY_E_PAIR <- c("WT|mutA" = 0.0014053424138855686, "WT|solo" = NA, "mutA|solo" = NA)
 # ct_r1_D_two_12v14.csv: Welch t on plate means / Mann-Whitney U (scipy auto = asymptotic here)
 PY_D_WELCH <- 0.0036614047047386056
@@ -74,6 +75,12 @@ chk("F1_spread_warning_when_significant", any(grepl("more than chance explains",
     paste(st8$warnings, collapse = " | "))
 stAuto8 <- plaque_run_stats(d8, parametric = "parametric", equal_var = "auto")
 chk("F1_spread_warning_does_not_switch_auto", identical(stAuto8$test == "Welch ANOVA", levene_p(stAuto8$groups) < 0.05))
+# parity with plaque_stats.py: at >= 8 plates auto = parametric iff every sample passes Shapiro; a failed
+# Levene test then picks Welch + Games-Howell, it no longer sends normal data to Kruskal-Wallis
+stFull8 <- plaque_run_stats(d8)
+chk("F1_auto_8_plates_normal_unequal_is_welch", all(stFull8$normality_p > 0.05) && levene_p(stFull8$groups) < 0.05 &&
+      isTRUE(stFull8$parametric_used) && stFull8$test == "Welch ANOVA" && stFull8$posthoc == "Games-Howell",
+    paste(stFull8$test, signif(levene_p(stFull8$groups), 3)))
 stEx <- plaque_run_stats(tidy(fx("../../plaque_stats/example_data_wide.csv")))
 chk("F1_example_has_note_not_warning", grepl("assume the groups have similar spread", stEx$spread_note) &&
       grepl("With 3 plates per group", stEx$spread_note) && !any(grepl("chance explains|largest group SD", stEx$warnings)),
@@ -91,8 +98,11 @@ chk("F2_E_unit_replicate", stE$unit == "replicate" && near(stE$p, PY_E_OMNI), sp
 chk("F2_E_pairwise_na_for_solo", near(pw_p(stE), PY_E_PAIR), paste(sprintf("%.8g", pw_p(stE)), collapse = " "))
 chk("F2_E_warning_names_solo", any(grepl("solo", stE$warnings)) && any(grepl("n/a", stE$warnings)))
 stE2 <- plaque_run_stats(tidy(fx("ct_r1_E_oneplate_group.csv")), unit = "auto")
-chk("F2_E_auto_falls_back_with_warning", stE2$unit == "plaque" && any(grepl("pseudoreplication", stE2$warnings)) &&
-      any(grepl("solo", stE2$warnings)))
+# parity with plaque_stats.py (SM-F4): auto keeps the plate as the unit; the one-plate sample is n/a
+chk("F2_E_auto_keeps_plate_unit_with_warning", stE2$unit == "replicate" && near(stE2$p, PY_E_OMNI) &&
+      near(pw_p(stE2), PY_E_PAIR) && any(grepl("solo", stE2$warnings)) && !any(grepl("pseudoreplication", stE2$warnings)))
+stE3 <- plaque_run_stats(tidy(fx("ct_r1_E_oneplate_group.csv")), unit = "plaque")
+chk("F2_E_plaque_unit_still_warns", stE3$unit == "plaque" && any(grepl("pseudoreplication", stE3$warnings)))
 dN <- tidy(fx("ct_r1_B_unequal.csv"), replicate = "(none)")
 stN <- plaque_run_stats(dN, unit = "replicate")
 chk("F2_no_plate_column_reports_plaque", stN$unit == "plaque" && !grepl("replicate = plate", omnibus_text(stN)) &&
