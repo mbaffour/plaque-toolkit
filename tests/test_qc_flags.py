@@ -28,7 +28,7 @@ def test_flags_on_synthetic_geometry():
         _p(10, 500, 20),                        # off the image border
         _p(500, 900, 20),                       # at the lawn edge (400 + 20 >= 0.93*450 = 418.5)
         _p(300, 300, 70),                       # area 12x the median, round -> LARGE?
-        _p(700, 300, 20, encl_diam_px=28),      # below the standard gate -> TINY
+        _p(700, 300, 5),                        # 10 px across: too few pixels -> TINY (D9)
         _p(700, 700, 20, solidity=0.7),         # not one convex blob -> MERGED? (CT-R1 F12)
         _p(300, 700, 20, p_plaque=0.3),         # low classifier score
     ]

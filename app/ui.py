@@ -984,6 +984,20 @@ class MeasureTab(QWidget):
         extras = ["⚠ " + w for w in (det.get("dish_warnings") or [])]
         if not plate and det.get("dish_reason"):
             extras.append("⚠ No dish found: " + det["dish_reason"] + ".")
+        # CT-R1 detection D8: how Auto found each plaque's edge
+        src = det.get("sources")
+        if src:
+            parts = ["%d standard" % src.get("standard", 0)]
+            if src.get("split"):
+                parts.append("%d split from clusters" % src["split"])
+            if src.get("standard-relaxed"):
+                parts.append("%d standard-relaxed" % src["standard-relaxed"])
+            parts.append("%d small" % src.get("small", 0))
+            line = "Edges: " + ", ".join(parts) + "."
+            if src.get("core"):
+                line += (" ⚠ %d plaque%s measured at the dark centre only (CORE?): halo "
+                         "not separable." % (src["core"], "" if src["core"] == 1 else "s"))
+            extras.append(line)
         n_out = int(det.get("n_outside_dish") or 0)
         if n_out:
             extras.append("%d detection%s outside the dish %s left out." % (
@@ -1413,6 +1427,11 @@ BATCH_COLUMNS = {
                              "are unreliable.", "count"),
     "n_merged": ("Merged?", "Plaques that look like two counted as one (QC flag MERGED?: far "
                             "larger than the plate median, or far from round).", "count"),
+    # CT-R1 detection D8 (Auto plaque size)
+    "n_split": ("Split", "Plaques separated from a touching neighbour (QC flag SPLIT): their "
+                         "sizes are less certain.", "count"),
+    "n_core": ("Core only", "Plaques whose halo could not be separated (QC flag CORE?): their "
+                            "size is the dark centre's, smaller than the halo.", "count"),
     "error": ("Problem", "Why this image could not be measured.", None),
 }
 

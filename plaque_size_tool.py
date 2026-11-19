@@ -116,8 +116,9 @@ def parse_args():
                          "and -small plaques are added only outside them (SOURCE = small). Adds a "
                          "SOURCE column; ignored in --published mode (the desktop app's 'Auto')")
     ap.add_argument("--qc", dest="qc", required=False, action="store_true",
-                    help="add QC_FLAG / QC_REASON columns (EDGE, MERGED?, TINY, OVERLAP) to every CSV; "
-                         "purely additive -- no measurement changes (see plaque_qc.py)")
+                    help="add QC_FLAG / QC_REASON columns (EDGE, LARGE?, MERGED?, NESTED, TINY, BRIGHT, "
+                         "OVERLAP) to every CSV; purely additive -- no measurement changes "
+                         "(see plaque_qc.py)")
     ap.add_argument("-o", "--out", required=False, default=None,
                     help="output folder for the CSVs, annotated images and run_metadata.json "
                          "(default: ./out inside the current working directory)")

@@ -240,8 +240,10 @@ def _tick_names(name):
 def test_qc_flag_counts_per_plate():
     from app import batch_measure
     df = pd.DataFrame({"QC_FLAG": ["OK", "EDGE|OVERLAP", "MERGED?", "OVERLAP", "", "TINY|MERGED?"]})
-    assert batch_measure.qc_flag_counts(df) == {"n_edge": 1, "n_overlap": 2, "n_merged": 2}
-    assert batch_measure.qc_flag_counts(pd.DataFrame()) == {"n_edge": 0, "n_overlap": 0, "n_merged": 0}
+    assert batch_measure.qc_flag_counts(df) == {"n_edge": 1, "n_overlap": 2, "n_merged": 2,
+                                                "n_split": 0, "n_core": 0}   # + CT-R1 D8
+    assert batch_measure.qc_flag_counts(pd.DataFrame()) == {"n_edge": 0, "n_overlap": 0, "n_merged": 0,
+                                                             "n_split": 0, "n_core": 0}
 
 
 def test_batch_error_text_names_the_file_then_the_reason_then_the_path():
@@ -314,11 +316,11 @@ def test_batch_csv_has_whole_counts_flag_counts_and_only_applied_options(neutral
     res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="published", watershed=True)
     text = open(os.path.join(res["out_dir"], "per_plate.csv")).read().splitlines()
     assert text[0] == ("image,n_plaques,mm_per_px,median_diam_mm,mean_diam_mm,axis_ratio,"
-                       "tilt_flag,n_edge,n_overlap,n_merged,error")
-    bad, good = text[1].split(",", 10), text[2].split(",")
-    assert bad[0] == "bad.png" and bad[1:10] == [""] * 9          # blanks, not "nan"
-    assert bad[10].strip('"').startswith("bad.png: not a readable image")
-    assert bad[10].strip('"').endswith("[%s]" % (folder / "bad.png"))
+                       "tilt_flag,n_edge,n_overlap,n_merged,n_split,n_core,error")   # + D8 counts
+    bad, good = text[1].split(",", 12), text[2].split(",")
+    assert bad[0] == "bad.png" and bad[1:12] == [""] * 11         # blanks, not "nan"
+    assert bad[12].strip('"').startswith("bad.png: not a readable image")
+    assert bad[12].strip('"').endswith("[%s]" % (folder / "bad.png"))
     assert good[0] == "P_2.tif" and good[1] == "5"                 # "5", not "5.0"
     assert [int(v) for v in good[7:10]] == [0, 0, 0]
     allp = pd.read_csv(os.path.join(res["out_dir"], "all_plaques.csv"))
@@ -747,12 +749,13 @@ def test_batch_table_is_readable(window, qtbot, neutral_plate_tif, tmp_path, dia
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     hdr, rows = _table(tab.table)
     assert hdr == ["Image", "Plaques", "mm/pixel", "Median (mm)", "Mean (mm)", "Axis ratio",
-                   "Tilted?", "Edge", "Overlap", "Merged?", "Problem"]
+                   "Tilted?", "Edge", "Overlap", "Merged?", "Split", "Core only",   # + CT-R1 D8
+                   "Problem"]
     assert [r[0] for r in rows] == ["bad.png", "Plate_2.tif", "Plate_10.tif"]     # natural, ascending
-    assert rows[0][1:10] == [""] * 9
-    assert rows[0][10].startswith("not a readable image")                          # reason first
-    assert rows[1][1] == "5" and rows[1][6] == "no" and rows[1][7:10] == ["0", "0", "0"]
-    assert rows[1][10] == ""
+    assert rows[0][1:12] == [""] * 11
+    assert rows[0][12].startswith("not a readable image")                          # reason first
+    assert rows[1][1] == "5" and rows[1][6] == "no" and rows[1][7:12] == ["0"] * 5
+    assert rows[1][12] == ""
     per = pd.read_csv(os.path.join(tab.last_out, "per_plate.csv"))
     good = per[per["image"] == "Plate_2.tif"].iloc[0]
     assert rows[1][2] == "%.4g" % good["mm_per_px"] and len(rows[1][2]) <= 8      # 4 significant digits

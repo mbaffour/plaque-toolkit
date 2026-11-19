@@ -51,12 +51,19 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **Desktop app, engines Current and Sensitive: plaque sizes and the mm scale.** (Published in
   the app and on the command line, the command-line default, and Precise are unchanged.)
   * The app used to run these two engines with the small-plaque threshold only, which outlines
-    any plaque wider than about 50 px roughly 30 px too small. A new **Plaque size** choice
-    (Auto / Standard / Small; Auto is the default) runs both thresholds, keeps the standard
-    outline wherever the standard pass finds the plaque and adds the plaques only the small pass
-    finds. Medians on plates with large plaques rise toward the command-line values (bundled
-    Plate_8: 3.89 → 4.97 mm; `sample.tif`: 2.81 → 3.12 mm). Choose **Small** for the old
-    behaviour.
+    any plaque wider than about 50 px roughly 30 px too small, and outlines a plaque that has a
+    dark centre and a paler halo at the dark centre. A new **Plaque size** choice (Auto /
+    Standard / Small; Auto is the default) runs both thresholds and gives every plaque the
+    standard (halo) edge where it can: the standard outline where the standard pass finds the
+    plaque; touching halos divided between their plaques (`SOURCE` = `split`, flag `SPLIT`);
+    plaques only the small pass finds added as they are. A haloed plaque whose halo could not be
+    separated keeps its dark-centre outline and is flagged **`CORE?`**. Medians on plates with
+    large or haloed plaques rise toward the command-line values (old app → Auto: `sample.tif`
+    2.81 → 5.35 mm, 42 → 41 plaques; Plate_8 3.89 → 5.17 mm; Plate_6 1.87 → 2.57 mm). Choose
+    **Small** for the old behaviour. `CORE?` rows are a different size definition from the rest
+    of the plate (10 of 41 plaques on `sample.tif`, 26 of 89 on Plate_6): check the flag before
+    pooling sizes. The thresholds behind the halo rule were set on the bundled plates and have
+    not been validated on other images.
   * The dish, and so the mm scale, now comes from the standard pass. On four bundled plates the
     old dish was a threshold halo 4–5 % too wide (Plate_8, 11, 14, 17), so every mm size on them
     grows by about that much; Plate_2, which had no dish, now gets one.
@@ -80,7 +87,9 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
   far from round (low solidity or an elongated outline). `EDGE` is measured against the lawn
   edge (0.93 of the dish radius), so it now fires for plaques at the rim. New flags `NESTED`
   (an outline inside another) and `BRIGHT` (brighter than its surroundings: a bubble or glare,
-  not a plaque). No measurement column changes.
+  not a plaque). `TINY` now means an outline under 12 px across (too few pixels for a reliable
+  size), not "found only by the small pass" (the `SOURCE` column says that). Batch
+  `per_plate.csv` gains `n_split` and `n_core`. No measurement column changes.
 
 ### Desktop app: Compare and Batch tabs
 

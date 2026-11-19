@@ -95,7 +95,7 @@ def qc_flag_counts(df):
     """How many of a plate's plaques carry each 'look at me' QC flag: EDGE (touches the dish
     rim / image border), OVERLAP (touches another plaque) and MERGED? (probably two plaques
     counted as one). Tells the user WHICH plates to open in Measure (CT-R1, idea 8)."""
-    out = {"n_edge": 0, "n_overlap": 0, "n_merged": 0}
+    out = {"n_edge": 0, "n_overlap": 0, "n_merged": 0, "n_split": 0, "n_core": 0}
     if df is None or "QC_FLAG" not in getattr(df, "columns", ()):
         return out
     for flags in df["QC_FLAG"].fillna("").astype(str):
@@ -103,6 +103,8 @@ def qc_flag_counts(df):
         out["n_edge"] += "EDGE" in parts
         out["n_overlap"] += "OVERLAP" in parts
         out["n_merged"] += "MERGED?" in parts
+        out["n_split"] += "SPLIT" in parts           # CT-R1 detection D8 (Auto)
+        out["n_core"] += "CORE?" in parts
     return {k: int(v) for k, v in out.items()}
 
 
@@ -225,7 +227,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             # how the dish was found and what was dropped, for run_metadata.json (D2-D4)
             det_info[os.path.basename(path)] = {
                 k: det[k] for k in ("dish_source", "dish_reason", "n_outside_dish",
-                                    "dish_warnings") if k in det}
+                                    "dish_warnings", "sources") if det.get(k) is not None}
 
             # ---- save annotated image + per-image CSV -------------------- #
             # save_results creates ``perimg`` itself; it writes the overlay and
@@ -296,6 +298,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 "n_edge": None,
                 "n_overlap": None,
                 "n_merged": None,
+                "n_split": None,
+                "n_core": None,
                 "error": message,
             })
             if progress:
@@ -304,14 +308,14 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # ---- assemble + write the combined CSVs ------------------------------ #
     plate_cols = ["image", "n_plaques", "mm_per_px", "median_diam_mm",
                   "mean_diam_mm", "axis_ratio", "tilt_flag",
-                  "n_edge", "n_overlap", "n_merged"]
+                  "n_edge", "n_overlap", "n_merged", "n_split", "n_core"]   # + CT-R1 D8
     if any("error" in r for r in plate_rows):
         plate_cols = plate_cols + ["error"]
     summary_df = pd.DataFrame(plate_rows, columns=plate_cols)
     # Counts are whole numbers. One failed plate (None) used to turn the whole column into
     # floats, so the CSV and the table read "44.0" and "nan" (CT-R1 F18). The nullable
     # integer type writes 44 and an empty cell.
-    for col in ("n_plaques", "n_edge", "n_overlap", "n_merged"):
+    for col in ("n_plaques", "n_edge", "n_overlap", "n_merged", "n_split", "n_core"):
         summary_df[col] = pd.array(summary_df[col].tolist(), dtype="Int64")
 
     if all_frames:
