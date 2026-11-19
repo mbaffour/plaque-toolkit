@@ -1748,7 +1748,7 @@ class PlaqueCanvas(QWidget):
         meta = {"image": os.path.basename(self.image_path),
                 "image_path": os.path.abspath(self.image_path),
                 "mm_per_px": self.ppm, "n_plaques": len(recs),
-                "n_manual": sum(1 for r in recs if r["source"] != "auto"),
+                "n_manual": sum(1 for r in recs if r["source"] not in pgui.DETECTOR_SOURCES),
                 "dish_diam_px": (self.plate or {}).get("diam_px"),
                 "dish_center_px": (self.plate or {}).get("center"),
                 "schema": "plaque-groundtruth-v1"}
