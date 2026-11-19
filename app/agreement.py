@@ -4,7 +4,13 @@ ICC(A,1) absolute agreement, Pearson r, and a regression slope (proportional-bia
 
 Pure Python for the maths (easy to test); matplotlib only for the optional figure."""
 import math
+import os
 import re
+
+try:                                    # the one legend-key helper (CT-R1 DA-F4)
+    from plaque_stats import legend_key as _lk
+except Exception:                       # pragma: no cover - figure still draws, without a key
+    _lk = None
 
 
 # --------------------------------------------------------------------------- paste parser
@@ -514,59 +520,257 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                 "individual %s; a similar group MEAN does not imply agreement, and any "
                 "per-plaque claim needs a method that does agree." % what)
     return out
-# <<< SHARED AGREEMENT CORE <<<
+
+# --------------------------------------------------------------------------- figure + legend key
+# CT-R1 DA-F4/F18: ONE style table. The two panels, the legend key embedded on the figure and the
+# stand-alone key are all drawn from it, so "within limits" has one colour in both panels and the
+# key always shows exactly what is drawn. The figure is built (and saved) inside figure_rc(), a
+# clean rc context with explicit sizes, so another plot changing plt.rcParams cannot alter it.
+_TEAL, _AMB, _BLU, _OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
+FIG_STYLE = {
+    "within": {"label": "within the limits of agreement", "kind": "marker", "colour": _TEAL,
+               "edge": "#ffffff", "s": 20, "alpha": 0.72, "lw": 0.4},
+    "outside": {"label": "outside the 95% limits of agreement", "kind": "marker", "colour": _OUT,
+                "edge": "#ffffff", "s": 34, "alpha": 0.95, "lw": 0.5},
+    "identity": {"label": "line of identity (y = x)", "kind": "line", "colour": "#7f8c8d",
+                 "ls": "--", "lw": 1.1},
+    "fit": {"label": "least-squares fit", "kind": "line", "colour": _BLU, "ls": "-", "lw": 1.6},
+    "zero": {"label": "zero difference", "kind": "line", "colour": "#c8d2ce", "ls": "-", "lw": 0.8},
+    "bias": {"label": "mean bias", "kind": "line", "colour": _TEAL, "ls": "-", "lw": 1.7},
+    "loa": {"label": "95% limits of agreement", "kind": "line", "colour": _AMB, "ls": "--", "lw": 1.3},
+}
+FIG_FONT = "DejaVu Sans"         # ships with matplotlib: the same font on every machine
+FIG_RC = {"font.family": "sans-serif", "font.sans-serif": [FIG_FONT], "font.size": 9.0,
+          "axes.titlesize": 10.0, "axes.labelsize": 9.0, "xtick.labelsize": 8.0,
+          "ytick.labelsize": 8.0, "legend.fontsize": 8.0, "axes.linewidth": 0.8,
+          "svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42}
+KEY_FONTSIZE = 8.0
 
 
-def make_figure(s, unit="mm", title="Plaque Toolkit vs Fiji/ImageJ"):
-    """Two-panel method-comparison + Bland-Altman matplotlib Figure."""
-    from matplotlib.figure import Figure
-    tool, fiji = s["tool"], s["fiji"]
-    fig = Figure(figsize=(9.6, 4.5), layout="constrained")
-    ax1, ax2 = fig.subplots(1, 2)
-    TEAL, AMB, BLU, OUT = "#0e7d5b", "#b45309", "#3f5b8c", "#d1495b"
+class figure_rc:
+    """Context: matplotlib defaults + FIG_RC, whatever the caller's rcParams are."""
+
+    def __enter__(self):
+        import matplotlib
+        self._ctx = matplotlib.rc_context()
+        self._ctx.__enter__()
+        matplotlib.rcdefaults()
+        matplotlib.rcParams.update(FIG_RC)
+        return self
+
+    def __exit__(self, *exc):
+        return self._ctx.__exit__(*exc)
+
+
+def _fix_ticks(ax):
+    """Tick labels are created lazily at draw time; pin their look so a later draw outside
+    figure_rc() (e.g. the Qt canvas) cannot pick up someone else's rcParams."""
+    kw = dict(labelsize=FIG_RC["xtick.labelsize"], length=3.5, width=0.8, pad=3.5,
+              direction="out", color="black", labelcolor="black")
+    try:
+        ax.tick_params(labelfontfamily=FIG_FONT, **kw)
+    except (TypeError, ValueError, AttributeError):    # matplotlib < 3.8
+        ax.tick_params(**kw)
+
+
+def _key_entry(name):
+    st_ = FIG_STYLE[name]
+    if st_["kind"] == "marker":
+        return _lk.entry(st_["label"], st_["colour"], kind="marker", marker="o", filled=True,
+                         edge=st_["edge"], alpha=st_["alpha"], size=math.sqrt(st_["s"]) + 1.0)
+    return _lk.entry(st_["label"], st_["colour"], kind="line", linestyle=st_["ls"],
+                     linewidth=st_["lw"])
+
+
+def key_entries(s, which="both"):
+    """Names (FIG_STYLE keys) of every encoding drawn, in key order: points, then lines.
+    ``which`` = 'both', 'scatter' (panel A) or 'bland' (panel B)."""
+    _diff, _keep, n_out = _out_split(s)
+    names = ["within"] + (["outside"] if n_out else [])
+    if which in ("both", "scatter"):
+        names += ["identity"] + (["fit"] if _finite(s.get("slope")) else [])
+    if which in ("both", "bland"):
+        names += ["zero", "bias", "loa"]
+    return names
+
+
+def figure_key(s, which="both"):
+    """The legend key of the agreement figure (legend_key format), or None when the
+    legend_key helper is not available."""
+    if _lk is None:
+        return None
+    return _lk.make_key([_key_entry(n) for n in key_entries(s, which)], fontsize=KEY_FONTSIZE,
+                        frameon=False, font_family=FIG_FONT)
+
+
+def _out_split(s):
+    """Flag which paired differences fall outside the 95% limits of agreement."""
     diff = s["diff"]
-    # a plaque is an "outlier" when its Toolkit−Fiji difference falls OUTSIDE the 95% limits
     out = [d < s["loa_lo"] or d > s["loa_hi"] for d in diff]
     keep = lambda seq, flag: [seq[i] for i in range(len(seq)) if out[i] == flag]
-    n_out = sum(out)
+    return diff, keep, sum(out)
 
+
+def _scatter(ax, xs, ys, name):
+    st_ = FIG_STYLE[name]
+    return ax.scatter(xs, ys, s=st_["s"], color=st_["colour"], alpha=st_["alpha"],
+                      edgecolor=st_["edge"], linewidth=st_["lw"], zorder=4 if name == "outside" else 3)
+
+
+def _line_kw(name):
+    st_ = FIG_STYLE[name]
+    return dict(color=st_["colour"], ls=st_["ls"], lw=st_["lw"])
+
+
+def _fmt3(v):
+    return "%.3f" % v if _finite(v) else "n/a"
+
+
+def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=True):
+    """Panel A - method-comparison scatter with identity + least-squares lines."""
+    import numpy as _np
+    tool, fiji = s["tool"], s["fiji"]
+    _diff, keep, n_out = _out_split(s)
     lo, hi = min(tool + fiji), max(tool + fiji)
     pad = (hi - lo) * 0.06 or 0.1
     lim = [lo - pad, hi + pad]
-    ax1.plot(lim, lim, "--", color="#9fb3ab", lw=1, zorder=1)
-    ax1.scatter(keep(fiji, False), keep(tool, False), s=20, color=TEAL, alpha=.72,
-                edgecolor="white", linewidth=.4, zorder=3, label="within limits")
+    ax1.plot(lim, lim, zorder=1, **_line_kw("identity"))
+    if _finite(s.get("slope")):
+        xl = _np.array(lim)
+        ax1.plot(xl, s["slope"] * xl + s["intercept"], zorder=2, **_line_kw("fit"))
+    _scatter(ax1, keep(fiji, False), keep(tool, False), "within")
     if n_out:
-        ax1.scatter(keep(fiji, True), keep(tool, True), s=34, color=OUT, alpha=.95,
-                    edgecolor="white", linewidth=.5, zorder=4, label="outside 95% limits")
-        ax1.legend(loc="lower right", fontsize=7.5, framealpha=.92)
+        _scatter(ax1, keep(fiji, True), keep(tool, True), "outside")
     ax1.set_xlim(lim); ax1.set_ylim(lim); ax1.set_aspect("equal", "box")
-    # identity plot: force the SAME tick values on both axes so both sides read alike
     _tk = [t for t in ax1.get_xticks() if lim[0] <= t <= lim[1]]
-    if _tk:
-        ax1.set_xticks(_tk); ax1.set_yticks(_tk)
-        ax1.set_xlim(lim); ax1.set_ylim(lim)   # re-apply (setting ticks can nudge the view)
-    ax1.set_xlabel("Fiji / ImageJ (%s)" % unit); ax1.set_ylabel("Plaque Toolkit (%s)" % unit)
+    if _tk:                                  # same tick values on both axes of an identity plot
+        ax1.set_xticks(_tk); ax1.set_yticks(_tk); ax1.set_xlim(lim); ax1.set_ylim(lim)
+    ax1.set_xlabel("%s (%s)" % (label_manual, unit))
+    ax1.set_ylabel("%s (%s)" % (label_tool, unit))
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
-    ax1.text(.04, .96, "n=%d\nr=%.3f\nICC=%.3f" % (s["n"], s["r"], s["icc"]),
-             transform=ax1.transAxes, va="top", ha="left", fontsize=8, family="monospace",
-             bbox=dict(boxstyle="round,pad=0.3", fc="#f0f5f2", ec="#cfe0d8"))
-    ax2.axhline(0, color="#c8d2ce", lw=.8)
-    ax2.axhline(s["bias"], color=TEAL, lw=1.7, label="bias  %+.3f" % s["bias"])
-    ax2.axhline(s["loa_hi"], color=AMB, lw=1.3, ls="--", label="+1.96 SD  %+.3f" % s["loa_hi"])
-    ax2.axhline(s["loa_lo"], color=AMB, lw=1.3, ls="--", label="−1.96 SD  %+.3f" % s["loa_lo"])
-    ax2.scatter(keep(s["avg"], False), keep(diff, False), s=20, color=BLU, alpha=.72,
-                edgecolor="white", linewidth=.4, zorder=3)
+    if show_stats:
+        ax1.text(.035, .965,
+                 "n = %d\nr = %s    R² = %s\nICC = %s    CCC = %s\ny = %s x %+.3f"
+                 % (s["n"], _fmt3(s["r"]), _fmt3(s.get("r2", s["r"] ** 2)), _fmt3(s["icc"]),
+                    _fmt3(s.get("ccc", float("nan"))), _fmt3(s["slope"]), s["intercept"]),
+                 transform=ax1.transAxes, va="top", ha="left", fontsize=8.5, family="monospace",
+                 color="#103027", fontweight="bold",
+                 bbox=dict(boxstyle="round,pad=0.45", fc="#ffffff", ec="#5f9484", lw=1.0, alpha=0.96))
+    _fix_ticks(ax1)
+
+
+def _draw_bland(ax2, s, unit, label_tool, label_manual):
+    """Panel B - Bland-Altman difference plot; the bias and limits carry their values."""
+    diff, keep, n_out = _out_split(s)
+    ax2.axhline(0, **_line_kw("zero"))
+    ax2.axhline(s["bias"], **_line_kw("bias"))
+    ax2.axhline(s["loa_hi"], **_line_kw("loa"))
+    ax2.axhline(s["loa_lo"], **_line_kw("loa"))
+    _scatter(ax2, keep(s["avg"], False), keep(diff, False), "within")
     if n_out:
-        ax2.scatter(keep(s["avg"], True), keep(diff, True), s=34, color=OUT, alpha=.95,
-                    edgecolor="white", linewidth=.5, zorder=4)
+        _scatter(ax2, keep(s["avg"], True), keep(diff, True), "outside")
     ax2.set_xlabel("Mean of the two methods (%s)" % unit)
-    ax2.set_ylabel("Toolkit − Fiji (%s)" % unit)
-    ax2.set_title("B  Bland–Altman", loc="left", fontsize=10, fontweight="bold")
-    # give the differences vertical headroom, and label the lines in a legend BELOW the panel
-    # (so the numbers never overlap the points or the axis)
-    yspan = max(abs(s["loa_hi"]), abs(s["loa_lo"]), max(abs(d) for d in s["diff"])) * 1.15 or 0.1
+    ax2.set_ylabel("%s - %s (%s)" % (label_tool, label_manual, unit))
+    ax2.set_title("B  Bland-Altman", loc="left", fontsize=10, fontweight="bold")
+    yspan = max(abs(s["loa_hi"]), abs(s["loa_lo"]), max(abs(d) for d in diff)) * 1.25 or 0.1
     ax2.set_ylim(-yspan, yspan)
-    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
-               fontsize=8, handlelength=1.6, columnspacing=1.4, prop={"family": "monospace"})
+    if s.get("loa_method") == "t prediction":
+        up, dn = "upper limit", "lower limit"
+    else:
+        up, dn = "+1.96 SD", "-1.96 SD"
+    tr = ax2.get_yaxis_transform()
+    for y, txt, va in ((s["loa_hi"], "%s  %+.3f" % (up, s["loa_hi"]), "bottom"),
+                       (s["bias"], "bias  %+.3f" % s["bias"], "bottom"),
+                       (s["loa_lo"], "%s  %+.3f" % (dn, s["loa_lo"]), "top")):
+        ax2.text(0.985, y, txt, transform=tr, ha="right", va=va, fontsize=7.5, family="monospace",
+                 color="#1f2430", zorder=5,
+                 bbox=dict(boxstyle="square,pad=0.15", fc="#ffffff", ec="none", alpha=0.75))
+    _fix_ticks(ax2)
+
+
+def _finish(fig, s, which, show_key):
+    key = figure_key(s, which)
+    if key is not None:
+        _lk.attach(fig, key)
+        if show_key:
+            ncol = 4 if which == "both" else 2
+            _lk.embed(fig, key, loc="outside lower center", ncol=ncol, columnspacing=1.4,
+                      handlelength=2.2)
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    if fig.canvas is None or type(fig.canvas).__name__ == "FigureCanvasBase":
+        FigureCanvasAgg(fig)
+    fig.canvas.draw()                      # resolve every lazy text/tick inside figure_rc()
     return fig
+
+
+def make_figure(s, unit="mm", label_tool="Plaque Toolkit", label_manual="Fiji / ImageJ",
+                title=None, show_key=True, show_stats=True):
+    """Two-panel method-comparison + Bland-Altman figure. ``show_key`` places the legend key
+    (the same entries as the stand-alone key, ``legend_key.from_figure(fig)``) below the panels."""
+    from matplotlib.figure import Figure
+    with figure_rc():
+        fig = Figure(figsize=(9.6, 5.0), layout="constrained")
+        if title:
+            fig.suptitle(title, fontsize=12, fontweight="bold")
+        ax1, ax2 = fig.subplots(1, 2)
+        _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=show_stats)
+        _draw_bland(ax2, s, unit, label_tool, label_manual)
+        return _finish(fig, s, "both", show_key)
+
+
+def make_panel(s, which, unit="mm", label_tool="Plaque Toolkit", label_manual="Fiji / ImageJ",
+               title=None, show_key=True, show_stats=True):
+    """Single-panel figure - which = 'scatter' (Panel A) or 'bland' (Panel B); its own key."""
+    from matplotlib.figure import Figure
+    which = "scatter" if which == "scatter" else "bland"
+    with figure_rc():
+        fig = Figure(figsize=(5.0, 5.2), layout="constrained")
+        if title:
+            fig.suptitle(title, fontsize=12, fontweight="bold")
+        ax = fig.subplots(1, 1)
+        if which == "scatter":
+            _draw_scatter(ax, s, unit, label_tool, label_manual, show_stats=show_stats)
+        else:
+            _draw_bland(ax, s, unit, label_tool, label_manual)
+        return _finish(fig, s, which, show_key)
+
+
+def save_figure(fig, path, dpi=300):
+    """Save a figure made here (format from the extension) inside figure_rc(); text stays text
+    in SVG/PDF/EPS."""
+    import os as _os
+    ext = _os.path.splitext(path)[1].lower()
+    kw = {"dpi": dpi, "bbox_inches": "tight", "facecolor": "white"}
+    if ext in (".tif", ".tiff"):
+        kw["pil_kwargs"] = {"compression": "tiff_lzw"}
+    with figure_rc():
+        fig.savefig(path, **kw)
+    return path
+
+
+def save_key_files(fig, base, formats=("png",), dpi=300):
+    """Write <base>_legend_key.<fmt> for each format + <base>_legend_text.txt for a figure
+    made here. Returns the paths ([] when the legend_key helper is unavailable)."""
+    key = _lk.from_figure(fig) if _lk is not None else None
+    if not key:
+        return []
+    with figure_rc():
+        return _lk.write_key_files(key, base, formats, dpi=dpi)
+# <<< SHARED AGREEMENT CORE <<<
+
+
+# --------------------------------------------------------------------------- app-only helpers
+FIG_EXTS = (".png", ".svg", ".pdf", ".tif", ".tiff", ".eps")
+
+
+def resolve_save_path(path, filter_ext, known=FIG_EXTS):
+    """CT-R1 DA-F20: the extension the user TYPED wins over the dialog's filter, and a dotted
+    name keeps its dots: ``pairs_0.5x`` + PNG filter -> ``pairs_0.5x.png`` (was ``pairs_0.png``),
+    ``typed.pdf`` under the PNG filter stays ``typed.pdf``. ``filter_ext`` is the filter's
+    extension (with the dot), used only when the name has no known extension."""
+    if not path:
+        return path
+    ext = os.path.splitext(path)[1].lower()
+    if ext in known:
+        return path
+    return path + (filter_ext or known[0])

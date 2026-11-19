@@ -258,3 +258,132 @@ def test_small_n_wording_is_softened():
     sent = ap.report_sentence(s, "mm", "plaque diameters")
     assert sent.startswith("With only 6 pairs (too few for precise estimates), plaque diameters")
     assert "appeared to agree" in sent
+
+
+# =========================================================================== 3. figure + legend key
+from plaque_stats import legend_key as LK   # noqa: E402
+from matplotlib import colors as mcolors    # noqa: E402
+
+
+def _outlier_stats(mod=ap):
+    rng = np.random.default_rng(1)
+    f = rng.uniform(0.5, 2.5, 30); t = f + rng.normal(0, .03, 30); t[3] += .25; t[17] -= .2
+    return mod.full_stats(list(t), list(f))
+
+
+def _drawn_styles(fig):
+    """(colour hex, kind) of every point set and line actually drawn on the axes."""
+    out = set()
+    for ax in fig.axes:
+        for coll in ax.collections:
+            out.add((mcolors.to_hex(coll.get_facecolor()[0]).upper(), "marker"))
+        for ln in ax.lines:
+            out.add((mcolors.to_hex(ln.get_color()).upper(), "line", ln.get_linestyle()))
+    return out
+
+
+@pytest.mark.parametrize("mod", [ap, cli_ag], ids=["desktop", "cli"])
+def test_key_lists_every_encoding_drawn_and_nothing_else(mod):
+    s = _outlier_stats(mod)
+    fig = mod.make_figure(s, "mm", show_key=False)
+    key = LK.from_figure(fig)
+    labels = [e["label"] for e in key["entries"]]
+    assert labels == ["within the limits of agreement", "outside the 95% limits of agreement",
+                      "line of identity (y = x)", "least-squares fit", "zero difference",
+                      "mean bias", "95% limits of agreement"]
+    drawn = _drawn_styles(fig)
+    keyed = set()
+    for e in key["entries"]:
+        if e["kind"] == "marker":
+            keyed.add((e["colour"], "marker"))
+        else:
+            keyed.add((e["colour"], "line", e["linestyle"]))
+    assert drawn == keyed
+    # one colour for 'within limits' in both panels (DA-F4)
+    within = {mcolors.to_hex(ax.collections[0].get_facecolor()[0]) for ax in fig.axes}
+    assert len(within) == 1
+    # no outliers -> no 'outside' row
+    s2 = mod.full_stats(EX_TOOL, EX_FIJI)
+    assert "outside the 95% limits of agreement" not in [e["label"] for e in LK.from_figure(mod.make_figure(s2))["entries"]]
+
+
+def test_embedded_key_equals_standalone_key():
+    s = _outlier_stats()
+    fig = ap.make_figure(s, "mm", show_key=True)
+    key = LK.from_figure(fig)
+    leg = fig.legends[0]
+    assert [t.get_text() for t in leg.get_texts()] == [e["label"] for e in key["entries"]]
+    kf = LK.key_figure(key)
+    assert [t.get_text() for t in kf.legends[0].get_texts()] == [t.get_text() for t in leg.get_texts()]
+    for h_emb, h_std in zip(leg.legend_handles, kf.legends[0].legend_handles):
+        assert mcolors.to_hex(h_emb.get_color() if hasattr(h_emb, "get_color") else h_emb.get_facecolor()) == \
+            mcolors.to_hex(h_std.get_color() if hasattr(h_std, "get_color") else h_std.get_facecolor())
+    assert leg.get_texts()[0].get_fontfamily() == kf.legends[0].get_texts()[0].get_fontfamily()
+    assert not ap.make_figure(s, "mm", show_key=False).legends
+    # panel keys are subsets
+    a = [e["label"] for e in LK.from_figure(ap.make_panel(s, "scatter"))["entries"]]
+    b = [e["label"] for e in LK.from_figure(ap.make_panel(s, "bland"))["entries"]]
+    assert "mean bias" not in a and "least-squares fit" in a
+    assert "least-squares fit" not in b and "mean bias" in b
+
+
+def _render(fig, tmp_path, name):
+    p = str(tmp_path / name)
+    ap.save_figure(fig, p, dpi=100)
+    agg = fig.canvas.__class__.__name__
+    fig.canvas.draw()                       # a redraw OUTSIDE figure_rc (as the Qt canvas does)
+    return open(p, "rb").read(), bytes(fig.canvas.buffer_rgba()), agg
+
+
+def test_figure_is_identical_before_and_after_other_plots_change_rcparams(tmp_path):
+    import matplotlib
+    import matplotlib.pyplot as plt
+    s = _outlier_stats()
+    before = _render(ap.make_figure(s), tmp_path, "a.png")
+    saved = dict(matplotlib.rcParams)
+    try:
+        # what plaque_stats.plot_violin does, and worse
+        plt.rcParams.update({"font.size": 12, "font.family": "serif", "axes.linewidth": 2.5,
+                             "lines.linewidth": 4, "xtick.labelsize": 15, "xtick.major.size": 9,
+                             "axes.facecolor": "#eeeeee", "figure.facecolor": "#ffeeee"})
+        after = _render(ap.make_figure(s), tmp_path, "b.png")
+    finally:
+        matplotlib.rcParams.update(saved)
+    assert before[0] == after[0]            # saved PNG bytes
+    assert before[1] == after[1]            # canvas pixels after a redraw outside the context
+
+
+def test_cli_writes_key_files_beside_every_figure(tmp_path):
+    src = tmp_path / "pairs.csv"
+    src.write_text("id,toolkit_mm,manual_mm\n" + "".join(
+        "%d,%.3f,%.3f\n" % (i + 1, t, f) for i, (t, f) in enumerate(zip(EX_TOOL, EX_FIJI))))
+    out = tmp_path / "out"
+    cli_ag.main([str(src), "--out", str(out), "--formats", "png,svg", "--legend-key", "--key-on-figure"])
+    names = set(os.listdir(out))
+    for base in ("agreement_diameters", "agreement_diameters_A_method_comparison",
+                 "agreement_diameters_B_bland_altman"):
+        assert {base + ".png", base + "_legend_key.png", base + "_legend_key.svg",
+                base + "_legend_text.txt"} <= names
+    txt = (out / "agreement_diameters_legend_text.txt").read_text()
+    assert txt.startswith("within the limits of agreement (bluish green, filled circles")
+    out2 = tmp_path / "out2"
+    cli_ag.main([str(src), "--out", str(out2), "--formats", "png", "--no-legend-key"])
+    assert not [n for n in os.listdir(out2) if "legend" in n]
+
+
+def test_agreement_tab_key_controls_follow_the_current_figure(agreement_tab, tmp_path):
+    tab = agreement_tab
+    tab._example()
+    assert tab.key_btn.isEnabled() and tab.key_text.text().startswith("within the limits of agreement (")
+    assert "outside" not in tab.key_text.text()
+    assert tab.canvas.figure.legends                      # placed on the figure by default
+    tab.key_cb.setChecked(False)
+    assert not tab.canvas.figure.legends
+    p = tab._save_key(str(tmp_path / "k.svg"))
+    assert p and os.path.exists(p) and "within the limits of agreement" in open(p).read()
+    # the stand-alone key follows the CURRENT data (an outlier appears)
+    s = _outlier_stats()
+    tab.tool_in.setPlainText("\n".join("%.6f" % v for v in s["tool"]))
+    tab.fiji_in.setPlainText("\n".join("%.6f" % v for v in s["fiji"]))
+    tab._compute()
+    assert "outside the 95% limits of agreement (" in tab.key_text.text()

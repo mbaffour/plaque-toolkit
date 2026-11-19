@@ -1539,6 +1539,7 @@ class AgreementTab(QWidget):
         self.preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview.setMaximumHeight(150); self.preview.setMinimumWidth(220)
         self.preview.horizontalHeader().setStretchLastSection(True)
+        self.preview.verticalHeader().setDefaultSectionSize(20)
         self.preview.setAccessibleName("Parsed pairs preview")
         pb = QVBoxLayout(); pb.addWidget(pcap); pb.addWidget(self.parse_notes); pb.addWidget(self.preview)
         inrow = QHBoxLayout(); inrow.addLayout(tb, 2); inrow.addLayout(fb, 2); inrow.addLayout(pb, 2)
@@ -1577,15 +1578,32 @@ class AgreementTab(QWidget):
         self.savefig_btn.setToolTip("Save the figure as PNG/TIFF (high-res raster) or SVG/PDF/EPS "
                                     "(vector — open and edit in Illustrator, Inkscape or PowerPoint).")
         self.savecsv_btn = QPushButton("Save paired CSV…"); self.savecsv_btn.clicked.connect(self._save_csv)
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+        # CT-R1 DA-F4: the figure rule -- legend key (same formats as the figure), a legend text
+        # starter with Copy, and one "place on figure" switch; all read from the CURRENT figure.
+        self.key_btn = QPushButton("Legend key…"); self.key_btn.clicked.connect(self._save_key)
+        self.key_btn.setToolTip("Save the figure's legend key: every point and line style with its "
+                                "exact colour, in the figure's font and format.")
+        self.key_cb = QCheckBox("Place key on figure"); self.key_cb.setChecked(True)
+        self.key_cb.setToolTip("Draw the legend key below the two panels (the same entries as the "
+                               "stand-alone key from “Legend key…”).")
+        self.key_cb.toggled.connect(self._redraw)
+        self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
+        self.key_text.setPlaceholderText("Compute to get a sentence listing every point and line style.")
+        self.key_copy_btn = QPushButton("Copy"); self.key_copy_btn.clicked.connect(self._copy_key_text)
+        self._fig_ext = ".png"        # the format last chosen in "Save figure…" (the key follows it)
+        for b in self._result_buttons():
             b.setEnabled(False)
         rrow = QHBoxLayout(); rrow.addWidget(self.copy_btn); rrow.addWidget(self.savefig_btn)
+        rrow.addWidget(self.key_btn); rrow.addWidget(self.key_cb)
         rrow.addWidget(self.savecsv_btn); rrow.addStretch()
+        krow = QHBoxLayout()
+        kcap = QLabel("Legend text starter"); kcap.setObjectName("FieldLabel")
+        krow.addWidget(kcap); krow.addWidget(self.key_text, 1); krow.addWidget(self.key_copy_btn)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(intro); lay.addWidget(learn); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
         lay.addWidget(self.stats_card); lay.addWidget(self.fig_holder, 1)
-        lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow)
+        lay.addWidget(rep_cap); lay.addWidget(self.report); lay.addLayout(rrow); lay.addLayout(krow)
 
     def _build_stats_card(self):
         card = QFrame(); card.setObjectName("SummaryCard"); _shadow(card)
@@ -1644,14 +1662,20 @@ class AgreementTab(QWidget):
         self.report.setPlainText(agreement.report_sentence(s, unit, what))
         self.report.setToolTip("ICC(A,1) 95% CI: McGraw & Wong (1996) exact F interval; "
                                "limits-of-agreement CI: Bland & Altman (1999).")
-        for b in (self.copy_btn, self.savefig_btn, self.savecsv_btn):
+        for b in self._result_buttons():
             b.setEnabled(True)
         self.window().statusBar().showMessage("Agreement computed on %d plaque pairs." % s["n"], 4000)
 
-    def _draw(self, s, unit):
+    def _make_fig(self):
+        """The CURRENT figure (current pairs + the 'Place key on figure' switch)."""
         from app import agreement
+        s, unit, _what = self._last
+        return agreement.make_figure(s, unit, show_key=self.key_cb.isChecked())
+
+    def _draw(self, s, unit):
+        from plaque_stats import legend_key
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-        fig = agreement.make_figure(s, unit)
+        fig = self._make_fig()
         new = FigureCanvas(fig)
         # pin to the figure's native pixel size so the scroll area can't stretch/distort it
         w_in, h_in = fig.get_size_inches()
@@ -1664,7 +1688,17 @@ class AgreementTab(QWidget):
             self.fig_placeholder = None
         self.canvas = new
         self.fig_layout.addWidget(self.canvas, 0, Qt.AlignHCenter | Qt.AlignTop)
+        # the card must hold the whole canvas: the scroll wrapper pinned this tab's minimum size
+        # to its first size hint (300 px placeholder), which clipped the figure's lower half
+        self.fig_holder.setMinimumHeight(self.canvas.height() + 14)
+        self.setMinimumHeight(max(self.minimumHeight(), self.sizeHint().height()))
         self.canvas.draw()
+        key = legend_key.from_figure(fig)
+        self.key_text.setText(legend_key.text_starter(key) if key else "")
+
+    def _redraw(self, *_):
+        if self._last is not None:
+            self._draw(self._last[0], self._last[1])
 
     _PREVIEW_ROWS = 200
 
@@ -1700,6 +1734,8 @@ class AgreementTab(QWidget):
         for v in self._metrics.values():
             v.setText("—")
         self.report.clear()
+        if hasattr(self, "key_text"):
+            self.key_text.clear()
         for b in self._result_buttons():
             b.setEnabled(False)
 
@@ -1725,53 +1761,92 @@ class AgreementTab(QWidget):
         QApplication.clipboard().setText(self.report.toPlainText())
         self.window().statusBar().showMessage("Report copied to the clipboard.", 3000)
 
-    def _save_fig(self):
-        if not self._last:
-            return
-        path, sel = QFileDialog.getSaveFileName(
-            self, "Save figure", "PlaqueToolkit_vs_Fiji.png",
-            "PNG image — 300 dpi (*.png);;"
-            "SVG — vector, editable in Illustrator/Inkscape (*.svg);;"
-            "PDF — vector, editable (*.pdf);;"
-            "TIFF — 600 dpi for journals (*.tiff);;"
-            "EPS — vector (*.eps)")
-        if not path:
-            return
-        # the format filter the user chose is the source of truth — set the extension to match
-        ext_for = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
-        want = next((e for k, e in ext_for.items() if (sel or "").startswith(k)), None)
-        if want:
-            path = os.path.splitext(path)[0] + want
-        ext = os.path.splitext(path)[1].lower()
+    _FIG_FILTERS = ("PNG image — 300 dpi (*.png);;"
+                    "SVG — vector, editable in Illustrator/Inkscape (*.svg);;"
+                    "PDF — vector, editable (*.pdf);;"
+                    "TIFF — 600 dpi for journals (*.tiff);;"
+                    "EPS — vector (*.eps)")
+    _EXT_FOR = {"PNG": ".png", "SVG": ".svg", "PDF": ".pdf", "TIFF": ".tiff", "EPS": ".eps"}
+
+    def _ask_path(self, title, default_stem):
+        """Save dialog in the figure formats; the typed extension wins over the filter and
+        dotted names keep their dots (CT-R1 DA-F20)."""
         from app import agreement
-        import matplotlib as mpl
-        mpl.rcParams["svg.fonttype"] = "none"   # keep SVG text as real text (editable), not outlines
-        mpl.rcParams["pdf.fonttype"] = 42        # embed TrueType so PDF/EPS text stays editable
-        mpl.rcParams["ps.fonttype"] = 42
-        dpi = 600 if ext in (".tif", ".tiff") else 300
-        save_kw = {"dpi": dpi, "bbox_inches": "tight", "facecolor": "white"}
-        if ext in (".tif", ".tiff"):
-            save_kw["pil_kwargs"] = {"compression": "tiff_lzw"}   # lossless, ~10x smaller file
-        fig = agreement.make_figure(self._last[0], self._last[1])
+        first = next((k for k, e in self._EXT_FOR.items() if e == self._fig_ext), "PNG")
+        filters = self._FIG_FILTERS.split(";;")
+        sel0 = next((f for f in filters if f.startswith(first)), filters[0])
+        path, sel = QFileDialog.getSaveFileName(self, title, default_stem + self._fig_ext,
+                                                self._FIG_FILTERS, sel0)
+        if not path:
+            return None
+        want = next((e for k, e in self._EXT_FOR.items() if (sel or "").startswith(k)), ".png")
+        return agreement.resolve_save_path(path, want)
+
+    @staticmethod
+    def _dpi_for(ext):
+        return 600 if ext in (".tif", ".tiff") else 300
+
+    def _save_fig(self, path=None):
+        if not self._last:
+            return None
+        from app import agreement
+        path = path or self._ask_path("Save figure", "PlaqueToolkit_vs_Fiji")
+        if not path:
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        dpi = self._dpi_for(ext)
         try:
-            fig.savefig(path, **save_kw)
+            agreement.save_figure(self._make_fig(), path, dpi=dpi)
         except Exception as e:
             QMessageBox.warning(self, "Could not save figure", "Saving %s failed:\n%s" % (ext, e))
-            return
+            return None
+        self._fig_ext = ".tiff" if ext == ".tif" else ext
         vec = ext in (".svg", ".pdf", ".eps")
         self.window().statusBar().showMessage(
             "Figure saved (%s%s): %s" % (ext.lstrip("."),
                                          ", vector/editable" if vec else ", %d dpi" % dpi, path), 6000)
+        return path
 
-    def _save_csv(self):
+    def _save_key(self, path=None):
+        """Save the legend key of the CURRENT figure, in the figure's format."""
         if not self._last:
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Save paired data", "app_vs_fiji_pairs.csv", "CSV (*.csv)")
-        if path:
-            s = self._last[0]
-            df = pd.DataFrame({"toolkit": s["tool"], "fiji": s["fiji"], "difference": s["diff"]})
-            df.to_csv(path, index=False)
-            self.window().statusBar().showMessage("Saved %d pairs: %s" % (s["n"], path), 4000)
+            return None
+        from plaque_stats import legend_key
+        path = path or self._ask_path("Save legend key", "PlaqueToolkit_vs_Fiji_legend_key")
+        if not path:
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            key = legend_key.from_figure(self._make_fig())
+            legend_key.save_key(key, path, dpi=self._dpi_for(ext))
+        except Exception as e:
+            QMessageBox.warning(self, "Could not save the legend key", "Saving %s failed:\n%s" % (ext, e))
+            return None
+        self.window().statusBar().showMessage("Legend key saved: %s" % path, 6000)
+        return path
+
+    def _copy_key_text(self):
+        QApplication.clipboard().setText(self.key_text.text())
+        self.window().statusBar().showMessage("Legend text copied to the clipboard.", 3000)
+
+    def _save_csv(self, path=None):
+        if not self._last:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Save paired data", "app_vs_fiji_pairs.csv",
+                                                  "CSV (*.csv)")
+        if not path:
+            return None
+        from app import agreement
+        # CT-R1 DA-F20: add .csv only when the name has no data extension (pairs_0.5x ->
+        # pairs_0.5x.csv), and write 6 significant digits (not -0.030000000000000027)
+        path = agreement.resolve_save_path(path, ".csv", known=(".csv", ".tsv", ".txt"))
+        s = self._last[0]
+        df = pd.DataFrame({"toolkit": s["tool"], "fiji": s["fiji"], "difference": s["diff"]})
+        df.to_csv(path, index=False, float_format="%.6g",
+                  sep="\t" if path.lower().endswith(".tsv") else ",")
+        self.window().statusBar().showMessage("Saved %d pairs: %s" % (s["n"], path), 4000)
+        return path
 
 
 # --------------------------------------------------------------------------- #
