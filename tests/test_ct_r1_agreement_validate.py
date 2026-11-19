@@ -458,3 +458,46 @@ def test_a_poor_match_warns_and_cannot_be_saved(qt, tmp_path, monkeypatch):
     assert dlg.result["summary"]["low_match"]
     assert not dlg.save_btn.isEnabled()
     assert "probably wrong and cannot be saved" in dlg.summary.text()
+
+
+# =========================================================================== 5. DA-F19/F20 agreement part
+def test_clear_and_failed_compute_leave_no_stale_result(agreement_tab):
+    tab = agreement_tab
+    tab._example()
+    assert tab.canvas is not None and tab.report.toPlainText()
+    tab._clear()
+    assert tab.canvas is None and tab.fig_placeholder is not None
+    assert tab.report.toPlainText() == "" and tab.key_text.text() == ""
+    assert all(v.text() == "—" for v in tab._metrics.values())
+    assert not any(b.isEnabled() for b in tab._result_buttons())
+    tab._example()
+    tab.tool_in.setPlainText("1.5\n1.5\n1.5"); tab.fiji_in.setPlainText("1.0\n1.2\n1.4")
+    tab._compute()
+    assert "Every tool value is the same" in tab.err.text()
+    assert tab.canvas is None and tab._last is None and not tab.savefig_btn.isEnabled()
+
+
+@pytest.mark.parametrize("typed,filt,expected", [
+    ("pairs_0.5x", "PNG image — 300 dpi (*.png)", "pairs_0.5x.png"),
+    ("typed.pdf", "PNG image — 300 dpi (*.png)", "typed.pdf"),
+    ("fig_0.5MOI", "SVG — vector, editable in Illustrator/Inkscape (*.svg)", "fig_0.5MOI.svg"),
+])
+def test_save_figure_honours_a_typed_extension_and_keeps_dotted_names(agreement_tab, tmp_path,
+                                                                     monkeypatch, typed, filt, expected):
+    from PySide6.QtWidgets import QFileDialog
+    tab = agreement_tab
+    tab._example()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(tmp_path / typed), filt)))
+    p = tab._save_fig()
+    assert p == str(tmp_path / expected) and os.path.exists(p)
+
+
+def test_save_paired_csv_adds_csv_only_when_needed_and_rounds(agreement_tab, tmp_path):
+    tab = agreement_tab
+    tab._example()
+    p = tab._save_csv(str(tmp_path / "pairs_0.5x"))
+    assert p.endswith("pairs_0.5x.csv")
+    text = open(p).read()
+    assert "-0.03\n" in text and "000000000" not in text
+    assert tab._save_csv(str(tmp_path / "kept.csv")).endswith("kept.csv")
