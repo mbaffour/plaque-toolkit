@@ -27,7 +27,9 @@ ALLOWED = {
     os.path.join("tests", "test_no_hardcoded_paths.py"),
 }
 
-SKIP_DIRS = {".git", "__pycache__", "build", "dist", "_plaqseg", "_research",
+# ".claude" holds agent worktrees (full copies of the repo): scanning them reports every
+# documented exemption once per copy.
+SKIP_DIRS = {".git", ".claude", "__pycache__", "build", "dist", "_plaqseg", "_research",
              "training_data", "Test_plates", "Manual_images", "plates"}
 TEXT_EXTS = {".bat", ".ps1", ".sh", ".command", ".py", ".md", ".html", ".json",
              ".cff", ".yml", ".yaml", ".spec", ".txt", ".iss"}
