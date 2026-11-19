@@ -603,3 +603,24 @@ def test_validate_tab_run_status_sentence_and_csv(validate_tab, qt, neutral_plat
     out = validate_tab._save(str(tmp_path / "res.csv"))
     assert out == (str(tmp_path / "res_per_engine.csv"), str(tmp_path / "res_per_plate.csv"))
     assert len(pd.read_csv(out[1])) == 3 and len(pd.read_csv(out[0])) == 1
+
+
+# =========================================================================== 7. DA-F11 table display
+def test_table_shows_4_significant_digits_but_sorts_and_copies_raw_values(qt):
+    import pandas as pd
+    from PySide6.QtCore import Qt
+    from app.widgets import PandasTableModel, NumericSortProxy, CopyableTableView
+    df = pd.DataFrame({"pair": ["A-B", "A-C", "B-C"], "p_adj": [0.0004, 0.0234567, float("nan")],
+                       "f1": [0.3751082334679884, 12.5, 15234.7], "tp": [5, 12, 3]})
+    m = PandasTableModel(); m.set_dataframe(df)
+    shown = [[m.data(m.index(r, c), Qt.DisplayRole) for c in range(4)] for r in range(3)]
+    assert shown == [["A-B", "< 0.001", "0.3751", "5"], ["A-C", "0.02346", "12.5", "12"],
+                     ["B-C", "", "15235", "3"]]
+    proxy = NumericSortProxy(); proxy.setSourceModel(m)
+    view = CopyableTableView(); view.setModel(proxy); qt.addWidget(view)
+    proxy.sort(2, Qt.DescendingOrder)
+    assert [proxy.data(proxy.index(r, 0)) for r in range(3)] == ["B-C", "A-C", "A-B"]
+    text, n = view.selection_tsv(all_rows=True)
+    lines = text.split("\r\n")
+    assert n == 3 and lines[0] == "pair\tp_adj\tf1\ttp"
+    assert lines[1] == "B-C\t\t15234.7\t3" and lines[3] == "A-B\t0.0004\t0.3751082334679884\t5"
