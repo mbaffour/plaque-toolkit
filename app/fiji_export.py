@@ -26,7 +26,7 @@ def _contour_xy(p):
     return c[:, 0], c[:, 1]
 
 
-def app_match_frame(plaques, orig_bgr, plate, ppm):
+def app_match_frame(plaques, orig_bgr, plate, ppm, published=None):
     """Return the app side for fiji_match.match(): INDEX, X, Y, DIAMETER in the CROP frame.
 
     Coordinates are millimetres when calibrated (ppm set), else crop pixels. This is the
@@ -36,7 +36,7 @@ def app_match_frame(plaques, orig_bgr, plate, ppm):
     rows = []
     for i, p in enumerate(plaques, start=1):
         cx, cy = p["center"]
-        dia_px, _amm, dia_mm = _measure(p["area_pxl"], ppm)
+        dia_px, _amm, dia_mm = _measure(p["area_pxl"], ppm, published)
         # Uncalibrated plate: report the PIXEL diameter rather than 0.0 mm, which made the
         # comparison show bias = -Fiji diameter (AUDIT-2026-10.md). X/Y are already px then.
         rows.append({"INDEX": i,
@@ -45,12 +45,12 @@ def app_match_frame(plaques, orig_bgr, plate, ppm):
     return pd.DataFrame(rows, columns=["INDEX", "X", "Y", "DIAMETER"])
 
 
-def _measure(area_pxl, ppm):
+def _measure(area_pxl, ppm, published=None):
     import plaque_gui as pgui
-    return pgui.measure(area_pxl, ppm)
+    return pgui.measure(area_pxl, ppm, published)   # CT-R1 F7: the result's own engine flag
 
 
-def save_bundle(plaques, orig_bgr, plate, ppm, lawn_gray, out_dir, base_name):
+def save_bundle(plaques, orig_bgr, plate, ppm, lawn_gray, out_dir, base_name, published=None):
     """Write the full Fiji registration bundle. Returns a dict of output paths + metadata."""
     import cv2
     os.makedirs(out_dir, exist_ok=True)
@@ -62,7 +62,7 @@ def save_bundle(plaques, orig_bgr, plate, ppm, lawn_gray, out_dir, base_name):
     info = plate_crop.save_plate_crop(orig_bgr, plate, mm_per_px, tiff_path, write_readme=False)
 
     # 2) measurements in the app's order/INDEX
-    df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray)
+    df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray, published=published, plate=plate)
 
     # 3) ROIs (crop frame) + registration rows + a numbered map
     crop = np.ascontiguousarray(orig_bgr[y0:y1, x0:x1]).copy()

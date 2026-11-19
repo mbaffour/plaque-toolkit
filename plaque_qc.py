@@ -11,9 +11,11 @@ table and batch exports they are always present as a `QC_FLAG` column.
 Flags (several may apply, joined with `|`; `OK` when none):
 
 * ``EDGE``     the plaque's area-equivalent disk touches the image border or the dish rim.
-* ``MERGED?``  area is more than ``merged_factor`` × the plate's median plaque area, or the
-               shape is far from round (circularity below ``min_circularity``) -- likely two
-               plaques counted as one.
+* ``LARGE?``   area is more than ``merged_factor`` × the plate's median plaque area while the
+               shape is normal (round) -- a big plaque, worth a look, not necessarily two.
+* ``MERGED?``  the shape is far from round (circularity below ``min_circularity``) -- likely
+               two plaques counted as one. (Until 2026-11 a round plaque that was only large
+               was flagged ``MERGED?`` as well.)
 * ``TINY``     the enclosing diameter is at or below the standard (non-``-small``) gate, so
                the plaque exists only because of ``-small`` / ``--sensitive``.
 * ``OVERLAP``  its disk overlaps another plaque's disk (sizes of both are unreliable).
@@ -62,14 +64,20 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
             cx, cy, dr = dish
             if dr and math.hypot(x - cx, y - cy) + r >= rim_frac * dr:
                 flags.append("EDGE"); why.append("touches the dish rim")
-        merged = []
-        if median_area > 0 and n >= 4 and a > merged_factor * median_area:
-            merged.append("area %.1fx the plate median" % (a / median_area))
+        # Size and shape are separate questions (click-through round 1, F24): a ROUND plaque
+        # that is merely big used to be called "MERGED?" too, which sent users looking for a
+        # second plaque that is not there. Big + normal shape = LARGE?; far from round = MERGED?
+        # (its reason also says how big it is, when it is big as well).
+        big = median_area > 0 and n >= 4 and a > merged_factor * median_area
         circ = p.get("circularity")
-        if circ is not None and circ < min_circularity:
-            merged.append("circularity %.2f" % float(circ))
-        if merged:
-            flags.append("MERGED?"); why.append("; ".join(merged))
+        irregular = circ is not None and circ < min_circularity
+        if irregular:
+            why_m = "circularity %.2f" % float(circ)
+            if big:
+                why_m = "area %.1fx the plate median; " % (a / median_area) + why_m
+            flags.append("MERGED?"); why.append(why_m)
+        elif big:
+            flags.append("LARGE?"); why.append("area %.1fx the plate median" % (a / median_area))
         ed = p.get("encl_diam_px")
         if ed is not None and float(ed) <= standard_encl_diam_min:
             flags.append("TINY"); why.append("enclosing diameter %.0f px is at/below the standard gate (%d px)" % (float(ed), standard_encl_diam_min))

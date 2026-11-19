@@ -716,21 +716,154 @@ def phage_colours(phages):
     return {p: cyc[i % len(cyc)] for i, p in enumerate(phages)}
 
 
-def write_plots(df, out_dir, legend_key=True):
+# The figures this tool writes: compare_<METRIC> (box plots) and hist_<METRIC> (overlaid
+# histograms), each as PNG + SVG + PDF with its legend key in the same formats (CT-R1 F13).
+PLOT_METRICS = ("DIAMETER_MM", "TURBIDITY", "TRANSMITTANCE")
+FIGURE_FORMATS = ("png", "svg", "pdf")
+FIGURE_DPI = 200
+BOX_MARK_COLOUR = "#000000"      # mean triangle, median line, outlier rings (never a phage colour)
+_OWN_FIGURE_METRICS = ("DIAMETER_MM", "TURBIDITY", "TRANSMITTANCE", "OD")
+_HIST_ALPHA = 0.5
+
+
+def metric_label(metric, df=None):
+    """Axis label a reader understands, with the unit, instead of the raw column name
+    (CT-R1 F21). TRANSMITTANCE means two different things: I / I0 against the blank agar
+    when a blank was given (OD filled in), otherwise plaque / lawn -- so the label says
+    which one these rows are."""
+    if metric == "DIAMETER_MM":
+        return "Plaque diameter (mm)"
+    if metric == "OD":
+        return "Optical density (OD)"
+    if metric == "TURBIDITY":
+        return "Turbidity (0 = clear, 1 = lawn)"
+    if metric == "TRANSMITTANCE":
+        n_abs = n_all = 0
+        if df is not None and "OD" in getattr(df, "columns", ()):
+            n_all = len(df)
+            n_abs = int(pd.to_numeric(df["OD"], errors="coerce").notna().sum())
+        if n_all and n_abs == n_all:
+            return "Transmittance (relative to blank agar)"
+        if n_abs:
+            return "Transmittance (mixed references: see qc.csv)"
+        return "Transmittance (relative to lawn)"
+    return str(metric)
+
+
+def metric_title(metric):
+    """Short figure-title name of a metric ('Plaque diameter')."""
+    return {"DIAMETER_MM": "Plaque diameter", "OD": "Optical density", "TURBIDITY": "Turbidity",
+            "TRANSMITTANCE": "Transmittance"}.get(metric, str(metric))
+
+
+def own_figure_files(out_dir):
+    """Every figure / legend-key / legend-text file in `out_dir` that THIS tool writes
+    (exactly its own name patterns, nothing else a user may have put in the folder)."""
+    import re
+    pat = re.compile(r"^(compare|hist)_(%s)(\.(png|svg|pdf)|_legend_key\.(png|svg|pdf)|"
+                     r"_legend_text\.txt)$" % "|".join(_OWN_FIGURE_METRICS))
+    try:
+        names = sorted(os.listdir(out_dir))
+    except OSError:
+        return []
+    return [os.path.join(out_dir, n) for n in names if pat.match(n)]
+
+
+def hist_key_entries(lk, phages, pcol):
+    """Key entries of an overlaid histogram: one translucent bar patch per phage."""
+    return [lk.entry(str(p), pcol[p], kind="patch", edge="none", alpha=_HIST_ALPHA, shape="bars")
+            for p in phages]
+
+
+def box_key_entries(lk, phages, pcol, outliers=True):
+    """Key entries of a box plot: one box per phage (the SAME phage -> colour map as the
+    histograms) plus what the marks inside every box mean -- the triangle is the mean, the
+    line the median, the rings the outliers (CT-R1 F13: the marks were never explained)."""
+    ents = [lk.entry(str(p), pcol[p], kind="patch", alpha=_HIST_ALPHA, shape="box", section="Phage")
+            for p in phages]
+    ents.append(lk.entry("mean", BOX_MARK_COLOUR, kind="marker", marker="^", size=6.0,
+                         section="Box plot marks"))
+    ents.append(lk.entry("median", BOX_MARK_COLOUR, kind="line", linestyle="-", linewidth=1.5,
+                         section="Box plot marks"))
+    if outliers:
+        ents.append(lk.entry("outlier", BOX_MARK_COLOUR, kind="marker", marker="o", filled=False,
+                             size=5.0, section="Box plot marks"))
+    return ents
+
+
+def _save_figure(fig, base, formats, lk):
+    """Write `fig` as <base>.<fmt> for every format; text stays text in SVG/PDF."""
+    import matplotlib
+    rc = dict(getattr(lk, "VECTOR_RC", None) or {"svg.fonttype": "none", "pdf.fonttype": 42})
+    out = []
+    with matplotlib.rc_context(rc):
+        for fmt in formats:
+            path = "%s.%s" % (base, fmt)
+            fig.savefig(path, dpi=FIGURE_DPI, bbox_inches="tight", pad_inches=0.08,
+                        facecolor="white")
+            out.append(path)
+    return out
+
+
+def write_plots(df, out_dir, legend_key=True, key_on_figure=True, formats=FIGURE_FORMATS):
     """Per-phage comparison box plots + overlaid histograms for size & turbidity.
-    The histograms colour each phage, so each one also gets its legend key
-    (hist_<metric>_legend_key.png + hist_<metric>_legend_text.txt); the box plots carry no
-    phage colour (the phage is the x-axis label), so they need none."""
-    if df.empty:
-        return
+
+    Returns one record per figure written, in display order (box plots, then histograms):
+    ``{"metric", "kind" ("compare" | "hist"), "title", "png", "files", "key_files", "key",
+    "legend_text"}``; ``[]`` when there is nothing to plot. Callers show exactly this list.
+
+    * Both figure families draw each phage from ONE phage -> colour map (phage_colours) and
+      carry a legend key built from that same map by plaque_stats/legend_key.py: the
+      stand-alone key is written beside every figure in the figure's formats
+      (<figure>_legend_key.png/.svg/.pdf + <figure>_legend_text.txt), and with
+      `key_on_figure` the SAME key is drawn on the figure, outside the axes so it never
+      covers data (CT-R1 F13).
+    * The histograms of one figure share ONE set of bin edges computed from all phages, so
+      bar heights are comparable between phages (CT-R1 F21).
+    * This tool's own previous figure / key files in `out_dir` are removed first: a run in
+      which TURBIDITY is no longer available (blank removed), or with no plaques at all,
+      must not leave an earlier run's figures looking current (CT-R1 F4).
+    """
+    for old in own_figure_files(out_dir):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    written = []
+    if df is None or df.empty or "PHAGE" not in df.columns:
+        return written
     try:
         # Use bare Figure objects (NOT pyplot / matplotlib.use) so this is thread-safe and
         # never switches the global backend -- important when called from inside a Qt app.
         from matplotlib.figure import Figure
     except Exception:
-        return
+        return written
     lk = _legend_key_module() if legend_key else None
-    for metric in ("DIAMETER_MM", "TURBIDITY", "TRANSMITTANCE"):
+    formats = tuple(str(f).lstrip(".").lower() for f in (formats or ("png",))) or ("png",)
+    if "png" not in formats:
+        formats = ("png",) + formats             # the app shows the PNG
+    # ONE colour per phage for the whole run, so a phage keeps its colour in every figure
+    # even when it has no values for one metric.
+    all_phages = [p for p, _g in df.groupby("PHAGE")]
+    pcol = phage_colours(all_phages)
+
+    def _finish(fig, ax, entries, kind, metric, title):
+        base = os.path.join(out_dir, "%s_%s" % (kind, metric))
+        key = None
+        if lk is not None:
+            key = lk.attach(fig, lk.make_key(entries, fontsize=9, frameon=False))
+            if key_on_figure:
+                lk.embed(ax, key)                 # outside the top-right corner of the axes
+        elif key_on_figure and kind == "hist":
+            ax.legend(fontsize=9)
+        files = _save_figure(fig, base, formats, lk)
+        key_files = lk.write_key_files(key, base, formats, dpi=300) if lk is not None else []
+        written.append({"metric": metric, "kind": kind, "title": title, "png": base + ".png",
+                        "files": files, "key_files": key_files, "key": key,
+                        "legend_text": lk.text_starter(key) if lk is not None else ""})
+
+    plans = []
+    for metric in PLOT_METRICS:
         if metric not in df.columns:
             continue
         groups = {}
@@ -738,39 +871,102 @@ def write_plots(df, out_dir, legend_key=True):
             v = pd.to_numeric(g[metric], errors="coerce").dropna()
             if len(v):
                 groups[phage] = v.values
-        if not groups:
-            continue
-        try:
-            fig = Figure(figsize=(max(5, 1.3 * len(groups)), 4))
-            ax = fig.add_subplot(111)
-            ax.boxplot(list(groups.values()), tick_labels=list(groups.keys()), showmeans=True)
-            ax.set_ylabel(metric)
-            ax.set_title(f"{metric} by phage")
-            fig.tight_layout()
-            fig.savefig(os.path.join(out_dir, f"compare_{metric}.png"), dpi=120)
+        if groups:
+            plans.append((metric, groups))
 
-            fig = Figure(figsize=(6, 4))
+    for metric, groups in plans:                     # box plots first, as the app lists them
+        try:
+            phages = list(groups)
+            label = metric_label(metric, df)
+            title = "%s by phage" % metric_title(metric)
+            fig = Figure(figsize=(max(4.6, 1.25 * len(phages) + 1.6), 4.0))
             ax = fig.add_subplot(111)
-            pcol = phage_colours(list(groups))
-            for phage, v in groups.items():
-                ax.hist(v, bins=20, alpha=0.5, label=str(phage), color=pcol[phage])
-            ax.set_xlabel(metric)
-            ax.set_ylabel("plaque count")
-            ax.set_title(f"{metric} distribution")
-            base = os.path.join(out_dir, f"hist_{metric}")
-            if lk is not None:                       # key from the same phage -> colour dict
-                key = lk.attach(fig, lk.make_key(
-                    [lk.entry(str(p), pcol[p], kind="patch", edge="none", alpha=0.5, shape="bars")
-                     for p in groups], fontsize=8, frameon=True))
-                lk.embed(ax, key, loc="best")        # the plot's own legend convention
-            else:
-                ax.legend(fontsize=8)
-            fig.tight_layout()
-            fig.savefig(base + ".png", dpi=120)
-            if lk is not None:
-                lk.write_key_files(lk.from_figure(fig), base, ("png",), dpi=120)
+            bp = ax.boxplot(
+                [groups[p] for p in phages], showmeans=True, patch_artist=True, widths=0.55,
+                medianprops={"color": BOX_MARK_COLOUR, "linewidth": 1.5, "linestyle": "-"},
+                meanprops={"marker": "^", "markerfacecolor": BOX_MARK_COLOUR,
+                           "markeredgecolor": BOX_MARK_COLOUR, "markeredgewidth": 0.0,
+                           "markersize": 6.0},
+                flierprops={"marker": "o", "markerfacecolor": "none",
+                            "markeredgecolor": BOX_MARK_COLOUR, "markeredgewidth": 1.0,
+                            "markersize": 5.0})
+            for patch, p in zip(bp["boxes"], phages):   # drawn FROM the phage -> colour map
+                patch.set_facecolor(pcol[p]); patch.set_edgecolor(pcol[p])
+                patch.set_alpha(_HIST_ALPHA); patch.set_linewidth(0.9)
+            names = ["%s\n(n = %d)" % (p, len(groups[p])) for p in phages]
+            long_names = max(len(str(p)) for p in phages) > 10 or len(phages) > 8
+            ax.set_xticks(range(1, len(phages) + 1))
+            ax.set_xticklabels(names, rotation=30 if long_names else 0,
+                               ha="right" if long_names else "center")
+            ax.set_ylabel(label)
+            ax.set_title(title)
+            has_fliers = any(len(f.get_ydata()) for f in bp.get("fliers", []))
+            entries = box_key_entries(lk, phages, pcol, outliers=has_fliers) if lk else []
+            _finish(fig, ax, entries, "compare", metric, title)
         except Exception as e:
-            print(f"  (plot failed for {metric}: {e})")
+            print(f"  (box plot failed for {metric}: {e})")
+
+    for metric, groups in plans:
+        try:
+            phages = list(groups)
+            title = "%s distribution" % metric_title(metric)
+            fig = Figure(figsize=(5.6, 4.0))
+            ax = fig.add_subplot(111)
+            # ONE set of bin edges from every phage's values: with per-phage bins=20 a narrow
+            # distribution got narrow bins and looked taller than a wide one (CT-R1 F21).
+            edges = np.histogram_bin_edges(np.concatenate([groups[p] for p in phages]), bins=20)
+            for p in phages:
+                ax.hist(groups[p], bins=edges, alpha=_HIST_ALPHA, label=str(p), color=pcol[p])
+            ax.set_xlabel(metric_label(metric, df))
+            ax.set_ylabel("Number of plaques")
+            ax.set_title(title)
+            entries = hist_key_entries(lk, phages, pcol) if lk else []
+            _finish(fig, ax, entries, "hist", metric, title)
+        except Exception as e:
+            print(f"  (histogram failed for {metric}: {e})")
+    return written
+
+
+def _poisson_cdf(k, mu):
+    """P(X <= k) for X ~ Poisson(mu), summed in log space (k < 0 -> 0)."""
+    if k < 0:
+        return 0.0
+    if mu <= 0:
+        return 1.0
+    log_mu = math.log(mu)
+    return min(1.0, math.fsum(math.exp(i * log_mu - mu - math.lgamma(i + 1)) for i in range(k + 1)))
+
+
+def poisson_ci95(n, alpha=0.05):
+    """Exact (Garwood) two-sided confidence limits for a Poisson count `n`, as counts.
+
+    lower = chi2.ppf(alpha/2, 2n) / 2      (0 when n = 0)
+    upper = chi2.ppf(1 - alpha/2, 2n + 2) / 2
+    computed here by bisection on the Poisson CDF, which is the same definition (the lower
+    limit L has P(X >= n | L) = alpha/2, the upper U has P(X <= n | U) = alpha/2), so the
+    engine needs no scipy. For n = 0 this is [0, 3.689]; for n = 3, [0.619, 8.767]."""
+    n = int(n)
+    if n < 0:
+        raise ValueError("a count cannot be negative (got %r)" % (n,))
+    half = alpha / 2.0
+
+    def solve(f, a, b):                           # f is decreasing in mu; root in [a, b]
+        for _ in range(200):
+            mid = 0.5 * (a + b)
+            if f(mid) > 0:
+                a = mid
+            else:
+                b = mid
+            if b - a <= 1e-13 * max(1.0, b):
+                break
+        return 0.5 * (a + b)
+
+    spread = 6.0 * math.sqrt(n + 1.0) + 8.0       # generous bracket around n
+    upper = solve(lambda mu: _poisson_cdf(n, mu) - half, float(n), n + spread)
+    if n == 0:
+        return 0.0, upper
+    lower = solve(lambda mu: _poisson_cdf(n - 1, mu) - (1.0 - half), max(n - spread, 0.0), float(n))
+    return lower, upper
 
 
 def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
@@ -784,6 +980,16 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
         # make every titer 10^12 too small with no warning (AUDIT-2026-09.md, PT-18).
         raise SystemExit("--dilution must be the reciprocal dilution factor, e.g. 1e6 for a "
                          "10^-6 dilution (got %s)" % dilution)
+    if dilution is not None and not math.isfinite(float(dilution)):
+        raise SystemExit("--dilution must be a finite number, e.g. 1e6 (got %s)" % dilution)
+    if volume_ul is not None and not (0 < float(volume_ul) < float("inf")):
+        # A zero volume silently gave no titer and a negative one a NEGATIVE PFU/mL whose
+        # "95 % interval" ran from high to low (CT-R1 F3).
+        raise SystemExit("--volume-ul must be the plated volume in microlitres, greater than 0 "
+                         "(got %s)" % volume_ul)
+    if (dilution is None) != (volume_ul is None):
+        print("WARNING: PFU/mL needs BOTH --dilution and --volume-ul; only one was given, so "
+              "no titer is computed.")
     os.makedirs(out_dir, exist_ok=True)
     labels = plate_labels(images, directory)
 
@@ -824,10 +1030,13 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
             per_ml = 1.0 / (volume_ul / 1000.0) * dilution
             qc["PFU_PER_ML"] = round(n * per_ml, 1)
             # Counting (Poisson) uncertainty on the titer, and the conventional countable
-            # range: a titer from 3 plaques carries a +/-115 % interval (PT-18, additive).
-            half = 1.96 * math.sqrt(n)
-            qc["PFU_PER_ML_CI95_LO"] = round(max(n - half, 0.0) * per_ml, 1)
-            qc["PFU_PER_ML_CI95_HI"] = round((n + half) * per_ml, 1)
+            # range (PT-18, additive). The limits are the EXACT (Garwood) Poisson limits on
+            # the count: the earlier n +/- 1.96*sqrt(n) gave [0, 0] for a plate with no
+            # plaques and covered the true titer only 63-89 % of the time below 10 plaques
+            # (CT-R1, statistics tester).
+            lo_n, hi_n = poisson_ci95(n)
+            qc["PFU_PER_ML_CI95_LO"] = round(lo_n * per_ml, 1)
+            qc["PFU_PER_ML_CI95_HI"] = round(hi_n * per_ml, 1)
             qc["COUNT_IN_RANGE_30_300"] = bool(30 <= n <= 300)
         all_rows.extend(rows)
         qc_rows.append(qc)
