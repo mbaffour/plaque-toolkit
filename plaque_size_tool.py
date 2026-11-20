@@ -114,7 +114,8 @@ def parse_args():
                     help="opt-in: the desktop app's 'Auto' plaque size, by the same code: both "
                          "scales (standard and -small), every haloed plaque measured at the standard "
                          "halo edge, touching clusters split (SOURCE auto / small / split / "
-                         "standard-relaxed; with --qc the app's flags incl. SPLIT and CORE?), "
+                         "standard-relaxed; always with the app's QC_FLAG / QC_REASON incl. SPLIT, "
+                         "CORE? and NO_SIZE, which say whose size is used), "
                          "detections outside the dish dropped. Ignored in --published mode")
     ap.add_argument("--qc", dest="qc", required=False, action="store_true",
                     help="add QC_FLAG / QC_REASON columns (EDGE, LARGE?, MERGED?, NESTED, TINY, BRIGHT, "
@@ -882,6 +883,10 @@ def _process_one(image_path, plate_size, run_images, args):
             _dish_warn = plaque_qc.dish_plausibility(_dd, image_size)
             for _w in _dish_warn:
                 print("  WARNING: " + _w)
+            if _dd is None:
+                # CT-R2 detection N7: the no-dish warning above already says it; do not print
+                # calculate_size_mm's "-p was given but no Petri dish" line as well
+                last_calibration['warned_no_dish'] = True
         except Exception:
             _dish_warn = []
 
@@ -933,22 +938,13 @@ def _process_one(image_path, plate_size, run_images, args):
                 image, orig_image, high_contrast, plate_size, plate_df, green_df_copy)
         green_df_copy = renumerate_df(green_df_copy)
         green_df_copy = add_turbidity(orig_image, plate_df, green_df_copy)
-        if args.get('qc') and len(green_df_copy) and ms_plaques is not None:
-            # --multiscale --qc: flag the rows with the app's own function on the same plaque
-            # dicts, so the CSV's QC_FLAG equals the app's table (CT-R1 detection D10b)
-            try:
-                import plaque_qc
-                import plaque_scales
-                circs = [plaque_scales.circularity(d) for d in ms_plaques]
-                res = plaque_qc.flags_for_plaque_dicts(
-                    ms_plaques, image_size, plate=ms_plate, circularities=circs,
-                    gray=cv2.cvtColor(orig_image, cv2.COLOR_BGR2GRAY),
-                    mm_per_px=last_calibration.get('mm_per_px'))
-                green_df_copy = green_df_copy.copy()
-                green_df_copy['QC_FLAG'] = [f for f, _ in res]
-                green_df_copy['QC_REASON'] = [w for _, w in res]
-            except Exception as exc:             # QC must never break a measurement run
-                print("  (QC flags skipped: %s)" % exc)
+        if ms_plaques is not None:
+            # --multiscale: flag the rows with the app's own function on the same plaque dicts,
+            # so the CSV's QC_FLAG equals the app's table (CT-R1 detection D10b). ALWAYS, not
+            # only with --qc (CT-R2 N1): without QC_FLAG the rows whose size is not used
+            # (CORE?, NO_SIZE) cannot be told apart and every summary sized them again.
+            green_df_copy = _multiscale_flags(green_df_copy, ms_plaques, ms_plate, image_size,
+                                              orig_image)
         elif args.get('qc') and len(green_df_copy):
             try:
                 import plaque_qc
@@ -968,6 +964,25 @@ def _process_one(image_path, plate_size, run_images, args):
                 print("  (QC flags skipped: %s)" % exc)
         renumerate_df(red_df)
         renumerate_df(other_df)
+
+        # CT-R2 detection N2 (Part 3): plaques near the size where the standard pass outlines
+        # a haloed plaque at its dark centre -- stdout and run_metadata.json only, every mode
+        _plate_warn = []
+        try:
+            import plaque_qc
+            if len(green_df_copy):
+                _dpx = [2.0 * float(np.sqrt(float(a) / np.pi)) for a in green_df_copy['AREA_PXL']]
+                _flags = (green_df_copy['QC_FLAG'].tolist() if 'QC_FLAG' in green_df_copy.columns
+                          else None)
+                _plate_warn = plaque_qc.plate_warnings(_dpx, last_calibration.get('mm_per_px'), _flags)
+                # Part 4: "sizes from N of M plaques" -- a warning under half, else a note
+                if _flags is not None and not plaque_qc.few_sized_warning(_flags):
+                    for _l in plaque_qc.size_summary_lines(_flags):
+                        print("  " + _l)
+            for _w in _plate_warn:
+                print("  WARNING: " + _w)
+        except Exception:
+            _plate_warn = []
 
         output = draw_contours(clr_high_contrast, green_df_copy, red_df_copy, other_df_copy, plate_df_copy)
 
@@ -989,6 +1004,7 @@ def _process_one(image_path, plate_size, run_images, args):
                 "mm_per_px": last_calibration['mm_per_px'],
                 "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
                 "dish_warnings": list(_dish_warn),
+                "plate_warnings": list(_plate_warn),
                 "csv": "data-green-%s.csv" % output_stem(image_path),
             })
         except Exception as exc:         # pragma: no cover - defensive only
@@ -1058,6 +1074,34 @@ def _merge_small_pass(image, orig_image, high_contrast, plate_size, plate_df, gr
     out = (pd.concat(rows, ignore_index=True) if rows else green_df.iloc[0:0].copy())
     out = out[[c for c in cols if c in out.columns] + [c for c in out.columns if c not in cols]]
     return out, plaques, plate
+
+
+def _multiscale_flags(green_df, plaques, plate, image_size, orig_image):
+    """--multiscale: QC_FLAG / QC_REASON on every row (CT-R2 detection N1), from the app's own
+    flagging of the same plaque dicts (the "sizes from N of M plaques" line is printed with the
+    plate's warnings). A zero-plaque
+    plate still gets the two (empty) columns. If flagging fails, the rows still say which sizes
+    are not used (CORE? / NO_SIZE from the Auto resolution), so no summary sizes them again."""
+    import plaque_qc
+    green_df = green_df.copy()
+    if not len(green_df):
+        green_df['QC_FLAG'] = []
+        green_df['QC_REASON'] = []
+        return green_df
+    try:
+        import plaque_scales
+        circs = [plaque_scales.circularity(d) for d in plaques]
+        res = plaque_qc.flags_for_plaque_dicts(
+            plaques, image_size, plate=plate, circularities=circs,
+            gray=cv2.cvtColor(orig_image, cv2.COLOR_BGR2GRAY),
+            mm_per_px=last_calibration.get('mm_per_px'))
+    except Exception as exc:                     # QC must never break a measurement run
+        print("  (QC flags incomplete: %s)" % exc)
+        res = [("CORE?" if d.get("core_only") else "NO_SIZE" if d.get("size_unreliable") else "OK",
+                "QC flags could not be computed (%s)" % exc) for d in plaques]
+    green_df['QC_FLAG'] = [f for f, _ in res]
+    green_df['QC_REASON'] = [w for _, w in res]
+    return green_df
 
 
 def renumerate_df(df):
