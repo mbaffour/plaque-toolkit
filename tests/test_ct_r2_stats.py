@@ -567,7 +567,11 @@ def test_g8d_no_global_matplotlib_settings_leak(tmp_path):
         ps.run(_args(tmp_path, _units(g), formats=["png", "svg", "pdf", "tiff"], stats_table=True,
                      legend_key=True))
     after = dict(matplotlib.rcParams)
-    changed = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+    # 'backend' is not a setting the engine leaks: after rcdefaults() it is matplotlib's
+    # "pick one when first needed" sentinel, which resolves to whatever GUI toolkit an earlier
+    # test in the same process imported (QtAgg once PySide6 is loaded) and to Agg otherwise.
+    changed = {k: (before[k], after[k]) for k in before
+               if k != "backend" and before[k] != after[k]}
     assert changed == {}
 
 
