@@ -2911,7 +2911,7 @@ class AgreementTab(QWidget):
         self.fig_placeholder.setMinimumHeight(300); self.fig_layout.addWidget(self.fig_placeholder)
 
         rep_cap = QLabel("Report — paste into your Methods/Results"); rep_cap.setObjectName("SummaryHeading")
-        self.report = QPlainTextEdit(); self.report.setReadOnly(True); self.report.setMaximumHeight(96)
+        self.report = QPlainTextEdit(); self.report.setReadOnly(True); self.report.setMaximumHeight(150)  # CT-R3: the sentence is longer
         self.report.setStyleSheet("QPlainTextEdit{background:#ffffff;color:#1f2430;"
                                   "border:1px solid #c7ccd6;border-radius:8px;padding:8px;}")
         self.copy_btn = QPushButton("Copy report"); self.copy_btn.clicked.connect(self._copy)
@@ -2928,7 +2928,9 @@ class AgreementTab(QWidget):
         self.key_cb.setToolTip("Draw the legend key below the two panels (the same entries as the "
                                "stand-alone key from “Legend key…”).")
         self.key_cb.toggled.connect(self._redraw)
-        self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
+        # CT-R3 F11: the text starter is several lines long: a wrapping box, not one clipped line
+        self.key_text = QPlainTextEdit(); self.key_text.setReadOnly(True)
+        self.key_text.setFixedHeight(66); self.key_text.setAccessibleName("Legend text starter")
         self.key_text.setPlaceholderText("Compute to get a sentence listing every point and line style.")
         self.key_copy_btn = QPushButton("Copy"); self.key_copy_btn.clicked.connect(self._copy_key_text)
         self._fig_ext = ".png"        # the format last chosen in "Save figure…" (the key follows it)
@@ -2939,7 +2941,8 @@ class AgreementTab(QWidget):
         rrow.addWidget(self.savecsv_btn); rrow.addStretch()
         krow = QHBoxLayout()
         kcap = QLabel("Legend text starter"); kcap.setObjectName("FieldLabel")
-        krow.addWidget(kcap); krow.addWidget(self.key_text, 1); krow.addWidget(self.key_copy_btn)
+        krow.addWidget(kcap, 0, Qt.AlignTop); krow.addWidget(self.key_text, 1)
+        krow.addWidget(self.key_copy_btn, 0, Qt.AlignTop)
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(intro); lay.addWidget(learn); lay.addLayout(inrow); lay.addLayout(optrow); lay.addWidget(self.err)
@@ -2971,25 +2974,33 @@ class AgreementTab(QWidget):
                 self.parse_notes.setText("Nothing was read: see the message below.")
                 self._fail("%s box: %s" % (name, e)); return
         (tool, tnotes), (fiji, fnotes) = parsed["tool"], parsed["fiji"]
-        self._show_preview(tool, fiji, tnotes, fnotes)
-        if len(tool) < 3 or len(fiji) < 3:
-            self._fail("Enter at least 3 paired values in each box (read %d Toolkit, %d Fiji)."
-                       % (len(tool), len(fiji))); return
-        if len(tool) != len(fiji):
-            # CT-R1 DA-F7: refuse instead of silently pairing the first min(n) lines
+        # CT-R3 F3: a blank line inside a column is a missing value that KEEPS its position, so the
+        # rows stay paired; the pairs with a missing value are dropped and counted
+        n_drop = sum(1 for a, b in zip(tool, fiji) if a is None or b is None)
+        self._show_preview(tool, fiji, tnotes, fnotes, n_drop)
+        if tool and fiji and len(tool) != len(fiji):
+            # CT-R1 DA-F7: refuse instead of silently pairing the first min(n) lines; CT-R3 F9:
+            # BEFORE the "at least 3" check, so 3 vs 2 says so (like 7 vs 6)
             self._fail("The two boxes hold different numbers of values: %d Plaque Toolkit vs %d "
                        "Fiji / ImageJ. Each line must be the same plaque in both boxes; fix the "
                        "lists (see the preview) and compute again." % (len(tool), len(fiji)))
             return
-        unit, what = "mm", "plaque diameters"
+        pairs = [(a, b) for a, b in zip(tool, fiji) if a is not None and b is not None]
+        if len(pairs) < 3:
+            self._fail("Enter at least 3 paired values in each box (read %d complete pair%s: %d Toolkit, "
+                       "%d Fiji)." % (len(pairs), "" if len(pairs) == 1 else "s",
+                                      sum(v is not None for v in tool), sum(v is not None for v in fiji)))
+            return
+        tool, fiji = [a for a, _b in pairs], [b for _a, b in pairs]
+        unit, what = "mm", agreement.DEFAULT_WHAT        # CT-R3 F9: the CLI's and the web app's wording
         if self.unit.currentData() == "area":
             tool, fiji = agreement.area_to_diam(tool), agreement.area_to_diam(fiji)
-            what = "plaque diameters (area-equivalent)"
         try:
             # CT-R1 SM-F16/F17: the same statistics + sentence as the CLI and the web app
             s = agreement.full_stats(tool, fiji)
         except Exception as e:
             self._fail("Cannot compute agreement: %s" % e); return
+        self._dropped = n_drop
         self._last = (s, unit, what)
         m = self._metrics
         m["n"].setText(str(s["n"]))
@@ -3001,17 +3012,20 @@ class AgreementTab(QWidget):
             if s["pred_lo"] == s["pred_lo"] else ""))
         note = agreement.icc_interval_note(s, unit)
         self.icc_note.setText(note); self.icc_note.setVisible(bool(note))
-        m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] else "—")
-        m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] else "—")
-        m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] else "—")
+        few = s["n"] < agreement.VERDICT_MIN_N     # CT-R3 F7: no r, ICC or slope from 3-4 pairs
+        m["icc"].setText("%.3f" % s["icc"] if s["icc"] == s["icc"] and not few else "—")
+        m["r"].setText("%.3f" % s["r"] if s["r"] == s["r"] and not few else "—")
+        m["slope"].setText("%.3f" % s["slope"] if s["slope"] == s["slope"] and not few else "—")
         self._draw(s, unit)
         self.report.setPlainText(agreement.report_sentence(s, unit, what)
-                                 + (("\n\nNote: " + note) if note else ""))
+                                 + (("\n\nNote: " + note) if note else "")
+                                 + (("\n\nNote: " + self._drop_text(n_drop) + ".") if n_drop else ""))
         self.report.setToolTip("ICC(A,1) 95% CI: McGraw & Wong (1996) exact F interval; "
                                "limits-of-agreement CI: Bland & Altman (1999).")
         for b in self._result_buttons():
             b.setEnabled(True)
-        self.window().statusBar().showMessage("Agreement computed on %d plaque pairs." % s["n"], 4000)
+        self.window().statusBar().showMessage("Agreement computed on %d plaque pairs%s." % (
+            s["n"], ("; " + self._drop_text(n_drop)) if n_drop else ""), 4000)
 
     def _make_fig(self):
         """The CURRENT figure (current pairs + the 'Place key on figure' switch)."""
@@ -3041,7 +3055,7 @@ class AgreementTab(QWidget):
         self.setMinimumHeight(max(self.minimumHeight(), self.sizeHint().height()))
         self.canvas.draw()
         key = legend_key.from_figure(fig)
-        self.key_text.setText(legend_key.text_starter(key) if key else "")
+        self.key_text.setPlainText(legend_key.text_starter(key) if key else "")
 
     def _redraw(self, *_):
         if self._last is not None:
@@ -3049,7 +3063,12 @@ class AgreementTab(QWidget):
 
     _PREVIEW_ROWS = 200
 
-    def _show_preview(self, tool, fiji, tnotes, fnotes):
+    @staticmethod
+    def _drop_text(k):
+        """CT-R3 F3: '2 pairs dropped: a value missing'."""
+        return "%d pair%s dropped: a value missing" % (k, "" if k == 1 else "s")
+
+    def _show_preview(self, tool, fiji, tnotes, fnotes, n_drop=0):
         """Fill the read-only preview with the pairs as parsed (first 200) + the parse notes."""
         from PySide6.QtWidgets import QTableWidgetItem
         n = max(len(tool), len(fiji))
@@ -3057,12 +3076,15 @@ class AgreementTab(QWidget):
         self.preview.setRowCount(shown)
         for i in range(shown):
             for j, seq in enumerate((tool, fiji)):
-                it = QTableWidgetItem("%g" % seq[i] if i < len(seq) else "")
+                it = QTableWidgetItem("%g" % seq[i] if i < len(seq) and seq[i] is not None else "")
                 it.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
                 self.preview.setItem(i, j, it)
         notes = ["Toolkit: " + " ".join(tnotes)] if tnotes else []
         notes += ["Fiji: " + " ".join(fnotes)] if fnotes else []
-        head = "Read %d Toolkit and %d Fiji values." % (len(tool), len(fiji))
+        head = "Read %d Toolkit and %d Fiji values." % (sum(v is not None for v in tool),
+                                                         sum(v is not None for v in fiji))
+        if n_drop:
+            head += " " + self._drop_text(n_drop) + "."
         if n > shown:
             head += " Showing the first %d rows." % shown
         self.parse_notes.setText(" ".join([head] + notes))
@@ -3175,7 +3197,7 @@ class AgreementTab(QWidget):
         return path
 
     def _copy_key_text(self):
-        QApplication.clipboard().setText(self.key_text.text())
+        QApplication.clipboard().setText(self.key_text.toPlainText())
         self.window().statusBar().showMessage("Legend text copied to the clipboard.", 3000)
 
     def _save_csv(self, path=None):

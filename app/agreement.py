@@ -102,6 +102,9 @@ def parse_values(text):
 
     * A first line that is not purely numbers is a header (digits inside a header such as
       ``AREA_MM2`` are not data) and is skipped.
+    * A blank line INSIDE the column is a MISSING VALUE that keeps its position (``None`` in the
+      returned list: the pair on that row is dropped and counted by the tab, CT-R3 F3); blank
+      lines before the first and after the last value are ignored.
     * In a table, a first column of consecutive increasing integers (1, 2, 3 ... or 7, 8, 9 ...)
       is a row number; the measurement column next to it is used. With several measurement
       columns left, the one whose header names area/diameter wins, else the first one.
@@ -110,7 +113,11 @@ def parse_values(text):
     """
     notes = []
     lines = [(i + 1, l) for i, l in enumerate(str(text).splitlines())]
-    lines = [(no, l) for no, l in lines if any(c for c in _cells(l))]
+    is_blank = lambda l: not any(c for c in _cells(l))                 # noqa: E731
+    while lines and is_blank(lines[0][1]):
+        lines.pop(0)
+    while lines and is_blank(lines[-1][1]):
+        lines.pop()
     if not lines:
         return [], notes
     header = None
@@ -119,8 +126,13 @@ def parse_values(text):
         header = _cells(first)
         notes.append('Skipped the header line "%s".' % _clip(first))
         lines = lines[1:]
-    rows = []
+        while lines and is_blank(lines[0][1]):          # blank lines between the header and the data
+            lines.pop(0)
+    rows = []                                           # (line no, values) or (line no, None) = blank
     for no, l in lines:
+        if is_blank(l):
+            rows.append((no, None))
+            continue
         cells = _cells(l)
         if any(not c for c in cells):
             raise ValueError('Line %d ("%s") has an empty cell. Remove it or fill it in; '
@@ -132,21 +144,26 @@ def parse_values(text):
             raise ValueError('Line %d ("%s") is not a number%s. Remove or fix that line; '
                              'nothing was computed.' % (no, _clip(l), what))
         rows.append((no, vals))
-    if not rows:
+    data = [r for r in rows if r[1] is not None]
+    n_blank = len(rows) - len(data)
+    if not data:
         return [], notes
+    if n_blank:
+        notes.append("%d blank line%s inside the column read as missing value%s (the position is kept)."
+                     % (n_blank, "" if n_blank == 1 else "s", "" if n_blank == 1 else "s"))
     if len(rows) == 1 and len(rows[0][1]) > 1:      # values typed on one line = a column
         notes.append("Read the %d values on line %d as one column." % (len(rows[0][1]), rows[0][0]))
         return list(rows[0][1]), notes
-    ncols = len(rows[0][1])
-    for no, vals in rows[1:]:
+    ncols = len(data[0][1])
+    for no, vals in data[1:]:
         if len(vals) != ncols:
             raise ValueError("Line %d has %s but line %d has %s. Every line must have the same "
                              "columns; nothing was computed."
-                             % (no, _count(len(vals)), rows[0][0], _count(ncols)))
+                             % (no, _count(len(vals)), data[0][0], _count(ncols)))
     if ncols == 1:
-        return [v[0] for _no, v in rows], notes
-    cols = [[v[j] for _no, v in rows] for j in range(ncols)]
-    c0 = cols[0]
+        return [None if v is None else v[0] for _no, v in rows], notes
+    cols = [[None if v is None else v[j] for _no, v in rows] for j in range(ncols)]
+    c0 = [x for x in cols[0] if x is not None]
     is_index = (len(c0) >= 2 and all(float(x).is_integer() for x in c0)
                 and all(b - a == 1 for a, b in zip(c0, c0[1:])))
     cand = list(range(1, ncols)) if is_index else list(range(ncols))
@@ -234,6 +251,20 @@ def _finite(v):
         return v is not None and math.isfinite(float(v))
     except (TypeError, ValueError):
         return False
+
+
+def _plain(v, nd=3):
+    """'%.{nd}f' that never prints '-0.000' (CT-R3 F7): a tiny negative number reads 0.000."""
+    t = "%.*f" % (nd, v)
+    return t[1:] if t.startswith("-") and not t.strip("-0.") else t
+
+
+def _signed(v, nd=3):
+    """'%+.{nd}f' that never prints '-0.000' (a zero reads +0.000); 'n/a' when not a number."""
+    if not _finite(v):
+        return "n/a"
+    t = "%+.*f" % (nd, v)
+    return "+" + t[1:] if not t.strip("+-0.") else t
 
 
 def pearson(x, y):
@@ -376,6 +407,24 @@ def _constant_difference(diff, tool, fiji):
     return (max(diff) - min(diff)) <= 1e-9 * scale
 
 
+def pct_bias_defined(bias, tool, fiji):
+    """CT-R3 F2: the percentage bias divides the bias by the mean of the two methods; when that
+    mean is near zero (|mean| < 10 % of the spread of all the values) the percentage is
+    meaningless, so it is left out EVERYWHERE (sentence, tables, CSV, screen): compute() returns
+    NaN for it. The rule lives here so the command line, the desktop tab and the web app agree."""
+    g = (_mean(tool) + _mean(fiji)) / 2.0
+    spread = _sd(list(tool) + list(fiji))
+    return g != 0 and abs(g) >= 0.1 * spread
+
+
+PCT_NA = "n/a: mean near zero"
+
+
+def pct_bias_text(s):
+    """The percentage bias as a table shows it: '-1.8%' or 'n/a: mean near zero'."""
+    return "%s%%" % _plain(s["pct_bias"], 1) if _finite(s.get("pct_bias")) else PCT_NA
+
+
 def compute(tool, fiji):
     """`tool` = the method under test, `fiji` = the reference. Bias is tool - fiji.
     Returns a dict of agreement statistics; raises ValueError (plain message) on input that
@@ -398,7 +447,7 @@ def compute(tool, fiji):
         "bias": bias, "sd": sd, "loa_lo": bias - 1.96 * sd, "loa_hi": bias + 1.96 * sd,
         "pred_lo": pred_lo, "pred_hi": pred_hi,
         "rmse": math.sqrt(_mean([d * d for d in diff])),
-        "pct_bias": (bias / grand * 100.0) if grand else float("nan"),
+        "pct_bias": (bias / grand * 100.0) if pct_bias_defined(bias, tool, fiji) else float("nan"),
         "mae": _mean([abs(d) for d in diff]),
         "r": pearson(tool, fiji), "icc": icc_a1(fiji, tool),
         "slope": slope, "intercept": intercept, "diff": diff, "avg": avg,
@@ -481,17 +530,28 @@ def icc_grade_interval(lo, hi):
 # --- Honest wording bands (PT-4) ------------------------------------------- #
 # The adjectives in the "paste-ready" sentence are derived from the statistics they describe
 # (a committed artefact once read "closely agreed ... ICC(A,1) = -0.012 (poor agreement)").
+# CT-R3 F6: the verb comes from the band of the LOWER LIMIT of the ICC interval, the same grade
+# the sentence prints for the interval, so "agreed well ... poor to excellent" cannot occur.
+_VERBS = {"excellent": "agreed closely with", "good": "agreed well with",
+          "moderate": "agreed moderately with", "poor": "did not agree reliably with"}
+
+
 def agreement_phrase(icc):
-    """Verb phrase for the ICC(A,1) band (Koo & Li 2016). Matches icc_grade()."""
+    """Verb phrase for an ICC(A,1) point estimate (Koo & Li 2016 band). Matches icc_grade()."""
     if icc != icc:
         return "could not be compared with"
-    if icc < 0.5:
-        return "did NOT agree at the individual level with"
-    if icc < 0.75:
-        return "agreed only moderately with"
-    if icc < 0.90:
-        return "agreed well with"
-    return "agreed closely with"
+    return _VERBS[icc_grade(icc)]
+
+
+def verdict_phrase(s):
+    """The verb of the sentence: the band of the LOWER limit of the 95% CI of the ICC (the
+    interval is what the sentence grades); only when there is no interval (a perfect or
+    constant-offset ICC, or a statistics dict without one) the point estimate's band."""
+    icc = s.get("icc", float("nan"))
+    if not _finite(icc):
+        return "could not be compared with"
+    lo, hi = s.get("icc_lo"), s.get("icc_hi")
+    return _VERBS[icc_grade(lo) if _finite(lo) and _finite(hi) else icc_grade(icc)]
 
 
 def correlation_phrase(r, p=float("nan")):
@@ -523,69 +583,125 @@ def icc_interval_note(s, unit="mm"):
     if not (_finite(icc) and _finite(lo) and _finite(tp)) or tp >= 0.05 or icc - lo <= 0.10:
         return ""
     return ("The ICC interval is wide because the two methods differ by a systematic offset "
-            "(bias %+.3f %s): with two methods that offset is estimated from a single contrast. "
-            "Judge agreement from the bias and the limits of agreement." % (s["bias"], unit))
+            "(bias %s %s): with two methods that offset is estimated from a single contrast. "
+            "Judge agreement from the bias and the limits of agreement." % (_signed(s["bias"]), unit))
 
 
 SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
 VERDICT_MIN_N = 5          # below this no verdict at all: numbers only (CT-R2 N8)
+LOW_POWER_N = 20           # below this "no evidence of a proportional bias" carries a power caveat
+NARROW_RANGE = 1.5         # max/min of the pair means below this: the sizes span too little to see one
+DEFAULT_WHAT = "diameters"  # what the sentence calls the values, in every front-end
+NEGLIGIBLE_SPREAD = 0.0005  # limits of agreement narrower than this (3 decimals) are one number
 
 
-def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
+def spread_negligible(s):
+    """True when the differences have (almost) no spread: every difference the same, or the
+    95% limits of agreement identical at the three decimals the report prints (CT-R3 F7)."""
+    if s.get("constant_difference"):
+        return True
+    sd = s.get("sd")
+    return _finite(sd) and 1.96 * sd < NEGLIGIBLE_SPREAD
+
+
+def prediction_clause(bias, sd, n, unit):
+    """' With only 12 pairs, a new difference is expected within -0.1 to +0.1 mm (95% prediction
+    interval).' ('' from 20 pairs on). The ONE caveat for few pairs: the sentence and the Fiji
+    comparison dialog both use it (CT-R3 F9)."""
+    lo, hi = prediction_interval(bias, sd, n)
+    if not (_finite(lo) and _finite(hi)):
+        return ""
+    return (" With only %d pairs, a new difference is expected within %s to %s %s "
+            "(95%% prediction interval)." % (n, _signed(lo), _signed(hi), unit))
+
+
+def _bias_qualifier(s, unit):
+    """CT-R3 F7: a bias the reader must not miss: the 95% limits of agreement exclude zero (the
+    typical difference is larger than the scatter around it) and it is significant, or the
+    methods differ by a constant. '' when the bias is small or not significant."""
+    bias = s.get("bias", float("nan"))
+    if not _finite(bias) or abs(bias) < NEGLIGIBLE_SPREAD:
+        return ""
+    lo, hi = s.get("loa_lo"), s.get("loa_hi")
+    if not (_finite(lo) and _finite(hi)) or not (lo > 0 or hi < 0):
+        return ""
+    tp = s.get("t_p", float("nan"))
+    if not (s.get("constant_difference") or (_finite(tp) and tp < 0.05)):
+        return ""
+    if spread_negligible(s):
+        return "a constant offset of %s %s" % (_signed(bias), unit)
+    return "a systematic bias of %s %s (the limits of agreement exclude zero)" % (_signed(bias), unit)
+
+
+def report_sentence(s, unit="mm", what=DEFAULT_WHAT, label_tool="Plaque Toolkit",
                     label_manual="Fiji / ImageJ"):
     """THE paste-ready sentence (desktop tab, CLI report and web app all call this one).
 
     Adjectives follow the statistics; a statistic missing from ``s`` leaves its clause out,
     and a p-value that is NaN reads "not testable" (never "significantly different ... p = nan").
-    r and ICC are given to three decimals; below 10 pairs the wording is softened."""
+    r and ICC are given to three decimals; below 10 pairs the wording is softened; below 5 pairs
+    only descriptive numbers are given (bias, SD of the differences, their range)."""
     nan = float("nan")
     n = int(s["n"])
     icc, r = s.get("icc", nan), s.get("r", nan)
-    phrase = agreement_phrase(icc)
     what = str(what).strip() or "measurements"
     lead = what[:1].upper() + what[1:]
-    verdict = n >= VERDICT_MIN_N
-    if not verdict:
-        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs
+    if n < VERDICT_MIN_N:
+        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs. CT-R3 F7: and no
+        # Pearson p, ICC or slope either: with 3-4 pairs those are not estimates, only numbers.
         out = ("With only %d pairs (too few pairs for a verdict), %s measured with %s were compared "
-               "with %s (n = %d)" % (n, what, label_tool, label_manual, n))
-    else:
-        if n < SMALL_N:
-            phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
-                           .replace("agreed", "appeared to agree")
-            lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
-        out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+               "with %s (n = %d): mean bias %s %s" % (n, what, label_tool, label_manual, n,
+                                                       _signed(s["bias"]), unit))
+        if _finite(s.get("sd")):
+            out += ", SD of the differences %s %s" % (_plain(s["sd"]), unit)
+        diff = s.get("diff")
+        if diff:
+            out += ", differences from %s to %s %s" % (_signed(min(diff)), _signed(max(diff)), unit)
+        return out + (". Pearson r, the ICC and the proportional-bias test need at least %d pairs."
+                      % VERDICT_MIN_N)
+    phrase = verdict_phrase(s)
+    if n < SMALL_N:
+        phrase = phrase.replace("did not agree", "did not appear to agree") \
+                       .replace("agreed", "appeared to agree")
+        lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
+    out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+    # CT-R3 F7: a significant proportional bias or a large systematic bias is part of the
+    # opening, next to the verb, not a later clause the reader may skip
+    bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
+    quals = []
+    if _finite(bs) and _finite(bp) and bp < 0.05:
+        quals.append("a proportional bias (Bland-Altman slope %s, %s)" % (_signed(bs), _pstr(bp)))
+    bq = _bias_qualifier(s, unit)
+    if bq:
+        quals.append(bq)
+    if quals:
+        out += "%s%s" % (", with " if phrase.startswith(("did not", "could not")) else ", but with ",
+                         " and ".join(quals))
     # correlation
     if _finite(r):
         p = s.get("pearson_p")
-        corr = "Pearson r = %.3f, R² = %.3f" % (r, s.get("r2", r * r))
+        corr = "Pearson r = %s, R² = %s" % (_plain(r), _plain(s.get("r2", r * r)))
         if "pearson_p" in s:
             corr += ", " + _pstr(p)
-        if verdict:
-            out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
-        else:
-            out += ": %s" % corr
+        out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
     else:
         out += ": Pearson r could not be computed"
     # ICC (+ CI, graded on the CI) and CCC
     if _finite(icc):
         grade = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
         if grade:
-            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (95%% CI %.3f-%.3f): "
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %s (95%% CI %s to %s): "
                     "%s agreement, graded on the interval (Koo & Li 2016)"
-                    % (icc, s["icc_lo"], s["icc_hi"], grade))
-        elif "icc_lo" in s and n < ICC_CI_MIN_N:
-            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (n too small for an "
-                    "interval, so no agreement grade)" % icc)
+                    % (_plain(icc), _plain(s["icc_lo"]), _plain(s["icc_hi"]), grade))
         else:
-            out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f" % icc
+            out += ", with an intraclass correlation coefficient ICC(A,1) = %s" % _plain(icc)
         if _finite(s.get("ccc")):
-            out += ", and Lin's concordance correlation CCC = %.3f" % s["ccc"]
+            out += ", and Lin's concordance correlation CCC = %s" % _plain(s["ccc"])
     out += "."
     # Bland-Altman bias
     bits = []
     if _finite(s.get("pct_bias")):
-        bits.append("%.1f%%" % s["pct_bias"])
+        bits.append("%s%%" % _plain(s["pct_bias"], 1))
     if "t_p" in s:
         tp = s["t_p"]
         if _finite(tp):
@@ -594,37 +710,43 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                                                   _pstr(tp)))
         else:
             bits.append("difference from zero not testable")
-    if s.get("constant_difference"):
-        bits.append("every difference was the same, so their spread is zero")
-    out += " Bland-Altman analysis showed a mean bias of %+.3f %s%s" \
-           % (s["bias"], unit, (" (%s)" % "; ".join(bits)) if bits else "")
-    loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
-    extra = []
-    if _finite(s.get("loa_ci_halfwidth")):
-        # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
-        extra.append("each limit ±%.3f %s, %s95%% CI" % (s["loa_ci_halfwidth"], unit,
-                                                         "approximate " if n < SMALL_N else ""))
-    if extra:
-        loa += " (%s)" % "; ".join(extra)
-    out += " " + loa
+    negligible = spread_negligible(s)
+    if negligible:
+        # CT-R3 F7: no "limits +0.200 to +0.200 (each limit ±0.000)": one number, said once
+        bits.append("every difference was the same" if s.get("constant_difference") else
+                    "the differences varied by less than %.3f %s" % (NEGLIGIBLE_SPREAD * 2, unit))
+        out += " Bland-Altman analysis showed that the two methods differ by a constant %s %s%s" \
+               % (_signed(s["bias"]), unit, (" (%s)" % "; ".join(bits)) if bits else "")
+    else:
+        out += " Bland-Altman analysis showed a mean bias of %s %s%s" \
+               % (_signed(s["bias"]), unit, (" (%s)" % "; ".join(bits)) if bits else "")
+        loa = "with 95%% limits of agreement of %s to %s %s" % (_signed(s["loa_lo"]), _signed(s["loa_hi"]), unit)
+        if _finite(s.get("loa_ci_halfwidth")):
+            # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
+            loa += " (each limit ±%s %s, %s95%% CI)" % (_plain(s["loa_ci_halfwidth"]), unit,
+                                                        "approximate " if n < SMALL_N else "")
+        out += " " + loa
     if _finite(s.get("slope")):
-        out += ", and a regression slope of %.2f (1.0 = no proportional bias)" % s["slope"]
+        out += ", and a regression slope of %s (1.0 = no proportional bias)" % _plain(s["slope"], 2)
     out += "."
-    if _finite(s.get("pred_lo")) and _finite(s.get("pred_hi")):
-        out += (" With only %d pairs, a new difference is expected within %+.3f to %+.3f %s "
-                "(95%% prediction interval)." % (n, s["pred_lo"], s["pred_hi"], unit))
-    bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
+    if not negligible:
+        out += prediction_clause(s.get("bias", nan), s.get("sd", nan), n, unit)
     if _finite(bs) and _finite(bp):
         if bp < 0.05:
-            out += (" The difference depended on plaque size (Bland-Altman slope %+.3f %s per %s, %s): "
+            out += (" The difference depended on plaque size (Bland-Altman slope %s %s per %s, %s): "
                     "a proportional bias, so a single bias value does not describe the whole range."
-                    % (bs, unit, unit, _pstr(bp)))
+                    % (_signed(bs), unit, unit, _pstr(bp)))
         else:
-            # CT-R2 N8: a non-significant slope is no evidence of no bias, least of all at small n
-            out += (" No proportional bias was detected (Bland-Altman slope %+.3f, %s%s)."
-                    % (bs, _pstr(bp), "; with %d pairs there is little power to detect one" % n
-                       if n < SMALL_N else ""))
-    if verdict and _finite(icc) and icc < 0.5:
+            # CT-R2 N8 / CT-R3 F7: a non-significant slope is no evidence of no bias: least of all
+            # with few pairs (< 20) or when the sizes span a narrow range
+            power = "; with %d pairs there is little power to detect one" % n if n < LOW_POWER_N else ""
+            out += (" There is no evidence of a proportional bias (Bland-Altman slope %s, %s%s)."
+                    % (_signed(bs), _pstr(bp), power))
+            avg = s.get("avg")
+            if avg and min(avg) > 0 and max(avg) / min(avg) < NARROW_RANGE:
+                out += (" The sizes span a narrow range (%s to %s %s), so a proportional bias could "
+                        "not be seen." % (_plain(min(avg)), _plain(max(avg)), unit))
+    if _finite(icc) and icc < 0.5:
         out += (" These two methods therefore cannot be used interchangeably for "
                 "individual %s; a similar group MEAN does not imply agreement, and any "
                 "per-plaque claim needs a method that does agree." % what)
@@ -732,7 +854,7 @@ def _line_kw(name):
 
 
 def _fmt3(v):
-    return "%.3f" % v if _finite(v) else "n/a"
+    return _plain(v) if _finite(v) else "n/a"
 
 
 def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=True):
@@ -759,9 +881,9 @@ def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=True):
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
     if show_stats:
         ax1.text(.035, .965,
-                 "n = %d\nr = %s    R² = %s\nICC = %s    CCC = %s\ny = %s x %+.3f"
+                 "n = %d\nr = %s    R² = %s\nICC = %s    CCC = %s\ny = %s x %s"
                  % (s["n"], _fmt3(s["r"]), _fmt3(s.get("r2", s["r"] ** 2)), _fmt3(s["icc"]),
-                    _fmt3(s.get("ccc", float("nan"))), _fmt3(s["slope"]), s["intercept"]),
+                    _fmt3(s.get("ccc", float("nan"))), _fmt3(s["slope"]), _signed(s["intercept"])),
                  transform=ax1.transAxes, va="top", ha="left", fontsize=8.5, family="monospace",
                  color="#103027", fontweight="bold",
                  bbox=dict(boxstyle="round,pad=0.45", fc="#ffffff", ec="#5f9484", lw=1.0, alpha=0.96))
@@ -785,9 +907,9 @@ def _draw_bland(ax2, s, unit, label_tool, label_manual):
     ax2.set_ylim(-yspan, yspan)
     up, dn = "+1.96 SD", "-1.96 SD"
     tr = ax2.get_yaxis_transform()
-    for y, txt, va in ((s["loa_hi"], "%s  %+.3f" % (up, s["loa_hi"]), "bottom"),
-                       (s["bias"], "bias  %+.3f" % s["bias"], "bottom"),
-                       (s["loa_lo"], "%s  %+.3f" % (dn, s["loa_lo"]), "top")):
+    for y, txt, va in ((s["loa_hi"], "%s  %s" % (up, _signed(s["loa_hi"])), "bottom"),
+                       (s["bias"], "bias  %s" % _signed(s["bias"]), "bottom"),
+                       (s["loa_lo"], "%s  %s" % (dn, _signed(s["loa_lo"])), "top")):
         ax2.text(0.985, y, txt, transform=tr, ha="right", va=va, fontsize=7.5, family="monospace",
                  color="#1f2430", zorder=5,
                  bbox=dict(boxstyle="square,pad=0.15", fc="#ffffff", ec="none", alpha=0.75))
