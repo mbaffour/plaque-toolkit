@@ -74,6 +74,33 @@ def size_ok(flag_string):
     return not any(has_flag(flag_string, f) for f in SIZE_EXCLUDING_FLAGS)
 
 
+def sized_rows(df):
+    """Boolean list: which rows of a per-plaque table may enter a size summary, or None when
+    the table has no QC_FLAG column (then every row is sized, as before; CT-R2 detection N1).
+    summarize_plates.py, compile_excel.py and make_figure.py all use this."""
+    if df is None or "QC_FLAG" not in getattr(df, "columns", ()):
+        return None
+    return [size_ok(f) for f in df["QC_FLAG"].tolist()]
+
+
+def sizes_from_phrase(n_sized, n_all):
+    """'sizes from 22 of 44 plaques' -- the one wording every tool prints (CT-R2 N1)."""
+    return "sizes from %d of %d plaques" % (int(n_sized), int(n_all))
+
+
+def size_summary_lines(flag_strings):
+    """Lines a run prints under a plate's count: always "sizes from N of M plaques" when some
+    rows are not sized (and why)."""
+    flags = list(flag_strings)
+    n = len(flags)
+    n_ok = sum(1 for f in flags if size_ok(f))
+    if n == 0 or n_ok == n:
+        return []
+    line = sizes_from_phrase(n_ok, n)
+    why = left_out_phrase(size_left_out_counts(flags))
+    return [line + ((" (left out: %s)" % why) if why else "")]
+
+
 def size_left_out_counts(flag_strings):
     """{'core': n with CORE?, 'no_size': n with NO_SIZE (and not CORE?)} over many rows."""
     core = sum(1 for f in flag_strings if has_flag(f, "CORE?"))
@@ -258,6 +285,8 @@ DISH_MIN_FRAC = 0.30        # dish diameter below this fraction of the short sid
 DISH_OFFCENTRE_FRAC = 0.25  # dish centre further than this fraction of the short side from the centre
 DISH_CLIPPED_FRAC = 0.02    # dish circle past the frame by more than this fraction of its diameter
 MIN_SHORT_SIDE_PX = 600     # below this the pixel size gates swallow most plaques (CT-R1 F23)
+NO_DISH_WARNING = ("No dish found: sizes are in pixels only; make sure the whole dish is in the "
+                   "frame (or set the plate by hand in the app).")
 
 
 def _dish_tuple(dish):
@@ -294,6 +323,9 @@ def dish_plausibility(dish, image_shape):
                    "detected and the dish may be missed. Use a higher-resolution photo." % short)
     d = _dish_tuple(dish)
     if d is None:
+        # CT-R2 detection N7: a 3 % crop or a dark border lost the dish with no word at all
+        # (Batch then wrote a median of 0.0 mm)
+        out.append(NO_DISH_WARNING)
         return out
     cx, cy, r = d
     if dish_too_small(d, image_shape):

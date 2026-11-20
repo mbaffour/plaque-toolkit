@@ -63,6 +63,21 @@ FONT = 12
 # --------------------------------------------------------------------------- #
 
 
+SIZE_METRICS = ("DIAMETER_MM", "AREA_MM2", "DIAMETER_PXL", "AREA_PXL")
+
+
+def _size_rows(df, metric):
+    """Which rows may be plotted as a SIZE (CT-R2 detection N1), or None for all rows: tables
+    without QC_FLAG and non-size metrics (turbidity) keep every row."""
+    if metric not in SIZE_METRICS:
+        return None
+    try:
+        import plaque_qc
+    except Exception:                       # pragma: no cover - a standalone copy of this script
+        return None
+    return plaque_qc.sized_rows(df)
+
+
 def sample_colours(samples):
     """The one sample -> colour mapping: the violins are drawn from it and the key built from it."""
     return {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(samples)}
@@ -107,6 +122,14 @@ def main():
     else:                                          # already a single-mode file (plot_data_<mode>.csv)
         df = df.copy()
     df[a.metric] = pd.to_numeric(df[a.metric], errors="coerce")
+    # CT-R2 detection N1: with a QC_FLAG column, plotted SIZES come only from plaque_qc.size_ok
+    # rows (CORE? / NO_SIZE plaques count but their size is not this plate's edge definition)
+    keep = _size_rows(df, a.metric)
+    if keep is not None:
+        n_all = len(df)
+        df = df[keep]
+        print("Sizes from %d of %d plaques (the rest are flagged CORE? / NO_SIZE in QC_FLAG)"
+              % (len(df), n_all))
     df = df[df[a.metric] > 0]
 
     samples = [s for s in ORDER if s in set(df["SAMPLE"])]

@@ -18,6 +18,11 @@ import re
 
 import pandas as pd
 
+try:
+    import plaque_qc                        # the ONE size rule (size_ok); CT-R2 detection N1
+except Exception:                           # pragma: no cover - a standalone copy of this script
+    plaque_qc = None
+
 PREFIX, SUFFIX = "data-green-", ".csv"
 APP_PREFIX = "data_"            # the desktop app's "Export all" CSV (same columns, INDEX not INDEX_COL)
 IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
@@ -28,9 +33,22 @@ def _natural_key(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
 
 
+def _sized(d):
+    """(rows whose size may be summarised, n_sized or None). A table with a QC_FLAG column
+    (the app's CSVs, --multiscale) sizes only plaque_qc.size_ok rows; one without sizes every
+    row, exactly as before (CT-R2 detection N1)."""
+    if d is None:
+        return d, None
+    keep = plaque_qc.sized_rows(d) if plaque_qc is not None else None
+    if keep is None:
+        return d, None
+    return d[keep], int(sum(keep))
+
+
 def _stats_row(plate, d, csv_found=True):
-    dm = pd.to_numeric(d.get("DIAMETER_MM"), errors="coerce").dropna() if d is not None else []
-    am = pd.to_numeric(d.get("AREA_MM2"), errors="coerce").dropna() if d is not None else []
+    s, n_sized = _sized(d)
+    dm = pd.to_numeric(s.get("DIAMETER_MM"), errors="coerce").dropna() if d is not None else []
+    am = pd.to_numeric(s.get("AREA_MM2"), errors="coerce").dropna() if d is not None else []
     # A plate with no detected dish has mm columns of 0 (Current) or nan (Published). Zero
     # is a placeholder, not a diameter: averaging it in gave DIAM_MM_MEAN = 0.0 for a plate
     # with real plaques (AUDIT-2026-10.md). Leave the mm cells blank instead, as for nan.
@@ -38,7 +56,7 @@ def _stats_row(plate, d, csv_found=True):
         dm = dm[dm > 0]
     if len(am):
         am = am[am > 0]
-    return {
+    row = {
         "PLATE": plate,
         "N_PLAQUES": len(d) if d is not None else 0,
         "DIAM_MM_MEAN": round(dm.mean(), 3) if len(dm) else "",
@@ -49,6 +67,9 @@ def _stats_row(plate, d, csv_found=True):
         "MM_CALIBRATED": bool(len(dm)) if d is not None and len(d) else "",
         "CSV_FOUND": bool(csv_found),
     }
+    if n_sized is not None:
+        row["N_SIZED"] = n_sized
+    return row
 
 
 def _image_stems(images_dir):
@@ -107,11 +128,23 @@ def summarize(out_dir, images_dir=None, recursive=False):
         print("No %s*%s files found in %s" % (PREFIX, SUFFIX, out_dir))
         return None
     df = pd.DataFrame(rows)
+    if "N_SIZED" in df.columns:
+        # only when some table had QC_FLAG: plates without it are sized on every row
+        df["N_SIZED"] = [int(v) if v == v else int(n) for v, n in zip(df["N_SIZED"], df["N_PLAQUES"])]
+        cols = list(df.columns)
+        cols.remove("N_SIZED")
+        cols.insert(cols.index("N_PLAQUES") + 1, "N_SIZED")
+        df = df[cols]
     df = df.iloc[sorted(range(len(df)), key=lambda i: _natural_key(df["PLATE"].iloc[i]))]
     df = df.reset_index(drop=True)
     out = os.path.join(out_dir, "summary.csv")
     df.to_csv(out, index=False)
     print(df.to_string(index=False))
+    if "N_SIZED" in df.columns:
+        for _, r in df.iterrows():
+            if r["N_SIZED"] != r["N_PLAQUES"]:
+                print("%s: %s (the size columns use only plaques whose size is reliable; "
+                      "see QC_FLAG)" % (r["PLATE"], plaque_qc.sizes_from_phrase(r["N_SIZED"], r["N_PLAQUES"])))
     n_zero = int((df["N_PLAQUES"] == 0).sum())
     if n_zero:
         print(f"\nNote: {n_zero} plate(s) have N_PLAQUES = 0. That is a real observation "
