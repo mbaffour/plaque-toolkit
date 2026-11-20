@@ -219,6 +219,28 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * Errors the engine raises for bad input are `StatsError` (a `ValueError`), so an app that
   embeds the engine can show them instead of exiting.
 
+### Python web apps (`plaque_stats/app_py.py`, `plaque_stats/agreement/app_py.py`)
+
+* A second file with different columns, an unreadable file or an unusual one shows a plain
+  message instead of ending the session; a failed upload clears the old results. Semicolon files
+  and decimal commas are read, and a line under the upload says how the file was read and how
+  many rows were used.
+* **Statistics app.** A LONG file with UPPER-CASE headers is no longer analysed with all its
+  metrics pooled; "per plate" without a plate column is refused; Replicate "(none)" means none.
+  Samples are picked and ordered from a list of the names in the data (a typo can no longer
+  drop a sample). New **Variances**, **Compare to** (Dunnett) and **Brackets** (including
+  letters) controls; median offers only IQR, CI or none; a box hides values ≤ 0 on a log axis.
+  A status line under the figure says which test ran, on what, with n, and what the bar and
+  whisker show. The preview is exactly the PNG download; the ZIP matches the screen and
+  includes the input file, a dated report and no server paths.
+* **Agreement app.** Every figure has a **legend key** download, a legend text starter and one
+  **Place key on figure** switch; the key files are in the ZIP. Diameter columns are chosen
+  first; area columns are labelled as areas in mm² unless converted (before, the shipped
+  validation file loaded as area against area but was labelled "plaque diameter (mm)"); id
+  columns are never guessed as measurements. The same column twice, too few pairs or identical
+  columns give a plain message; the ICC interval reads "n/a (needs 5 pairs)" when it cannot be
+  computed. The "Both" preview is readable at 1024 px and on a phone.
+
 ### R Shiny app (`plaque_stats/app.R`)
 
 * **Variances** control (auto / equal / unequal) with Welch ANOVA + Games-Howell; Mann-Whitney,
