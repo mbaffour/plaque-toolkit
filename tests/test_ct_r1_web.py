@@ -98,7 +98,7 @@ def test_b_f9_key_text_lists_what_the_figure_draws(k, expect, absent):
 @pytest.mark.parametrize("k", ["both", "a", "b"])
 def test_b_f9_key_zip_has_figure_formats_and_text(k):
     s = _agree_stats()
-    base = B.FIGURES[k][2]
+    base = B.fig_base(k, "diameters")      # CT-R2 N8: the names the results ZIP uses
     fig = B.make_fig(s, B.FIGURES[k][1])
     names = zipfile.ZipFile(io.BytesIO(B.key_zip_bytes(fig, base))).namelist()
     assert sorted(names) == sorted(["%s_legend_key.%s" % (base, f) for f in ("png", "svg", "pdf")]
@@ -231,7 +231,7 @@ def test_b_f9_browser_key_downloads_and_zip(browser_page, tmp_path):
     page.click("#load_example"); _idle(page, 2)
     _tab(page, "B · Bland")
     z = zipfile.ZipFile(io.BytesIO(_download(page, srv.port, "dl_key_b")))
-    assert "agreement_B_bland_altman_legend_key.svg" in z.namelist()
+    assert "agreement_diameters_B_bland_altman_legend_key.svg" in z.namelist()   # CT-R2 N8
     _tab(page, "Both (A + B)")
     assert "mean bias" in page.inner_text("#key_text_both")
     _tab(page, "Statistics")
@@ -394,7 +394,7 @@ def test_a_f13_palette_validation_and_theme_hint():
         A.palette_choice("", "red", 3)
     pal, hint = A.palette_choice("set2", "red", 3)
     assert pal == list(ps.PALETTES["set2"]) and "not used while a colour theme" in hint
-    assert A.palette_choice("", ",,,", 3) == (list(ps.OKABE_ITO), "")
+    assert A.palette_choice("", ",,,", 3)[0] is None        # CT-R2 N10: no colours = no custom palette
 
 
 def test_a_f18_value_without_metric_is_wide(tmp_path):
@@ -515,8 +515,8 @@ def test_b_f6_diameters_preferred_and_area_labelled(tmp_path):
                       "area_fiji_mm2": np.linspace(1.1, 3.05, 10), "diam_tool_mm": np.linspace(1, 2, 10),
                       "diam_fiji_mm": np.linspace(1.02, 2.01, 10)})
     assert B.guess_columns(d) == ("diam_tool_mm", "diam_fiji_mm")
-    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", False) == ("mm²", "plaque area")
-    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", True) == ("mm", "plaque diameter")
+    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", False) == ("mm²", "areas")   # CT-R2 N4: the CLI's wording
+    assert B.unit_what_defaults("area_tool_mm2", "area_fiji_mm2", True) == ("mm", "diameters")
     assert B.effective_unit(True, "µm") == "mm" and B.effective_unit(False, "µm") == "µm"
 
 
@@ -589,7 +589,7 @@ def test_b_browser_preview_equals_download_area_and_failed_upload(browser_page, 
     page.set_input_files("#file", _write(tmp_path, "areas.csv", d)); _idle(page, 3)
     # the label update is a second server round trip: wait for it (a loaded machine is slow)
     page.wait_for_function("() => document.getElementById('unit').value === 'mm²'", timeout=30000)
-    assert page.input_value("#what") == "plaque area"
+    assert page.input_value("#what") == "areas"
     page.set_checked("#convert_area", True); _idle(page, 2)
     page.wait_for_function("() => document.getElementById('unit').value === 'mm' && "
                            "document.getElementById('unit').disabled", timeout=30000)

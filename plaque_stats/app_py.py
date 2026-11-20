@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import zipfile
@@ -142,24 +143,69 @@ class Stale(Exception):
 
 
 # The engine words its messages for the command line; the app names its own controls instead.
-APP_WORDS = [("--equal-var no", "Variances = unequal"), ("--equal-var yes", "Variances = equal"),
-             ("--unit replicate", "Statistical unit = per plate"),
-             ("--unit plaque", "Statistical unit = per plaque"),
-             ("pass --log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
-             ("--log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
-             ("--annotate letters", "Brackets = letters"), ("--annotate all", "Brackets = all pairs"),
-             ("--parametric nonparametric", "Test type = non-parametric"),
-             ("--posthoc dunnett", "Compare to = each sample vs a control"),
-             ("--center median", "Centre marker = median"), ("--center mean", "Centre marker = mean"),
-             ("--error ", "Error bar "), ("--center", "Centre marker"), ("--error", "Error bar"),
-             ("--palette", "Colour theme"), ("--control", "Compare to"), ("--order", "Samples"),
-             ("--value", "Value column"), ("--unit", "Statistical unit")]
+# CT-R2 N5/N13: ONE mapping, applied to everything the app shows or writes that came from the
+# engine (messages, notes, warnings, status line, figure sentence, key text, the report on screen
+# and the report in the ZIP). First whole engine phrases, longest first; then every remaining
+# `--option [value]` through the control tables below, so no `--word` can reach the user.
+PHRASES = [
+    ("(the statistical unit chosen: --unit plaque)", "(Statistical unit = per plaque)"),
+    ("choose --equal-var no (Welch)", "set Variances to unequal (Welch)"),
+    ("pass --log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
+    ("--log-y-drop-nonpositive", "“Hide values ≤ 0 on the log axis”"),
+]
+# option -> the app control that sets it; option -> {value: the choice's name in that control}
+OPTION_CONTROLS = {
+    "unit": "Statistical unit", "parametric": "Test type", "equal-var": "Variances",
+    "posthoc": "Compare to", "control": "Compare to", "center": "Centre marker",
+    "error": "Error bar", "palette": "Colour theme", "order": "Samples", "value": "Value column",
+    "annotate": "Brackets", "log-y": "Log y-axis", "height": "Height", "width": "Width",
+    "group": "Group column", "replicate": "Replicate column", "subgroup": "Subgroup",
+    "title": "Title", "ylabel": "Y-axis label", "legend": "Place key on figure",
+    "equivalence-margin": "equivalence margin", "metric": "Metric to plot",
+    "detect": "Difference to detect",
+}
+OPTION_VALUES = {
+    "unit": {"replicate": "per plate", "plaque": "per plaque", "auto": "auto"},
+    "parametric": {"nonparametric": "non-parametric", "parametric": "parametric", "auto": "auto"},
+    "equal-var": {"yes": "equal", "no": "unequal", "auto": "auto"},
+    "posthoc": {"dunnett": "each sample vs a control (Dunnett)", "auto": "all pairs"},
+    "annotate": {"letters": "letters", "all": "all pairs", "auto": "significant pairs",
+                 "adjacent": "neighbours", "none": "none"},
+    "center": {"mean": "mean", "median": "median"},
+    "error": {"sd": "SD", "sem": "SEM", "ci95": "95% CI", "iqr": "IQR", "none": "none", "auto": "auto"},
+}
+_OPTION = re.compile(r"`?--([a-z][a-z0-9-]*)(?: ([A-Za-z0-9-]+))?`?")
+
+
+def _option_words(m):
+    opt, val = m.group(1), m.group(2)
+    ctl = OPTION_CONTROLS.get(opt, opt.replace("-", " "))
+    shown = OPTION_VALUES.get(opt, {}).get(val) if val else None
+    if shown is not None:
+        return "%s = %s" % (ctl, shown)
+    return ctl + (" " + val if val else "")
 
 
 def app_words(msg):
-    for cli, app in APP_WORDS:
+    """Engine text in the app's words (CT-R2 N5/N13): no `--option` survives."""
+    msg = str(msg)
+    for cli, app in PHRASES:
         msg = msg.replace(cli, app)
-    return msg
+    return _OPTION.sub(_option_words, msg)
+
+
+SPREAD_ADVICE = "Welch ANOVA + Games-Howell is the safer analysis"
+
+
+def with_advice(warnings, equal_var):
+    """CT-R2 N13: the engine's spread warning recommends Welch; the app says where to set it."""
+    out = []
+    for w in warnings:
+        w = app_words(w)
+        if SPREAD_ADVICE in w and equal_var != "no":
+            w += " Set Variances to unequal to follow this advice."
+        out.append(w)
+    return out
 
 
 def message_of(e, path=None, name=None):
@@ -173,16 +219,29 @@ def message_of(e, path=None, name=None):
     return app_words(m)
 
 
+_PANDAS_TEXT = re.compile(r"tokenizing|C error|Expected \d+ fields|ParserError|codec can't|UnicodeDecodeError",
+                          re.I)
+
+
 def read_upload(path, name=None):
     """(DataFrame, parse info) with the engine's reader: delimiter sniffed (comma, semicolon,
     tab), decimal commas, labels kept as typed; a file that parses to ONE column is refused
     (CT-R1 F4). Raises StatsError with a plain message."""
+    name = name or os.path.basename(str(path))
+    not_csv = ("could not read %s: this does not look like a CSV table (is it an Excel or binary file "
+               "saved with a .csv name?)" % name)
     try:
         return ps.read_table(path, return_info=True)
-    except ps.StatsError:
+    except ps.StatsError as e:
+        # the engine's own plain message is shown as it is, unless it carries raw pandas text
+        if _PANDAS_TEXT.search(getattr(e, "message", "") or str(e)):
+            raise ps.StatsError(not_csv)
         raise
-    except Exception as e:                                  # noqa: BLE001 -- e.g. a broken .xlsx
-        raise ps.StatsError("could not read %s: %s" % (name or os.path.basename(str(path)), e))
+    except Exception:                                       # noqa: BLE001 -- never raw pandas text
+        # CT-R2 N12: an Excel / binary file saved as .csv used to show "Error tokenizing data..."
+        if str(name).lower().endswith((".xlsx", ".xls")):
+            raise ps.StatsError("could not read %s as a spreadsheet (is it really an Excel file?)." % name)
+        raise ps.StatsError(not_csv)
 
 
 def layout_of(df):
@@ -204,19 +263,22 @@ def _pick(cands, pool, default=None):
     return default
 
 
-def value_choices(df):
-    """WIDE: the numeric columns that are not labels; LONG: the metric names."""
+def value_choices(df, exclude=()):
+    """WIDE: the numeric columns that are not labels; LONG: the metric names. CT-R2 N14: the
+    columns chosen as Group or Replicate are never offered as the value (a numeric sample
+    name or plate number is a label here, not a measurement)."""
     lay = layout_of(df)
     if lay["long"]:
         return lay["metrics"]
-    return [str(c) for c in ps.numeric_columns(df)]
+    skip = {str(x) for x in exclude if x}
+    return [str(c) for c in ps.numeric_columns(df) if str(c) not in skip]
 
 
 def picker_defaults(df):
     cols = [str(c) for c in df.columns]
-    vals = value_choices(df)
     group = _pick(["group", "sample", "phage", "strain", "condition"], cols, cols[0] if cols else None)
     rep = _pick(["replicate", "plate"], cols, NONE)
+    vals = value_choices(df, (group, rep))
     if layout_of(df)["long"]:
         value = vals[0] if vals else None
     else:
@@ -248,7 +310,12 @@ def check_selection(df, sel):
                             "measurement column such as diameter_mm." % ", ".join(cols))
     if not sel.get("group") or sel["group"] not in cols:
         raise Stale()
-    if sel.get("value") not in value_choices(df):
+    skip = (sel["group"], sel.get("replicate"))
+    if not value_choices(df, skip):
+        raise ps.StatsError("every numeric column is also chosen as Group or Replicate (columns: %s), "
+                            "so there is no measurement left to analyse. Pick other Group / Replicate "
+                            "columns, or add a measurement column such as diameter_mm." % ", ".join(cols))
+    if sel.get("value") not in value_choices(df, skip):
         raise Stale()
     for k in ("replicate", "subgroup"):
         v = sel.get(k)
@@ -272,6 +339,14 @@ def palette_choice(name, custom, needed):
     clean_palette (hex with or without #, commas, semicolons or spaces) and a bad entry is
     named in a StatsError (CT-R1 F13). `hint` says when the custom box is being ignored."""
     custom = (custom or "").strip()
+    if custom and not [x for x in re.split(r"[,;\s]+", custom) if x]:
+        # CT-R2 N10: ",,," holds no colour: it is "no custom palette", and it must not stand in
+        # for one (the engine's cleaner returns its default list, which switched coloured violins on)
+        note = ("The custom palette box holds no colours (only separators), so it is ignored; "
+                "type hex codes such as #0072B2, #D55E00.")
+        if name and name in ps.PALETTES:
+            return list(ps.PALETTES[name]), ""
+        return None, note
     if name and name in ps.PALETTES:
         hint = ("The custom palette is not used while a colour theme is chosen; set the theme "
                 "to “(custom below)” to use it." if custom else "")
@@ -279,6 +354,12 @@ def palette_choice(name, custom, needed):
     if custom:
         return ps.clean_palette(custom, needed=needed), ""
     return None, ""
+
+
+def literal_text(x):
+    """CT-R2 N7: a Title / axis label is drawn exactly as typed: every `$` is escaped, so a
+    `$...$` pair is never turned into mathtext (and a lone `$` never raises)."""
+    return x if x is None else re.sub(r"\$", r"\\$", str(x))
 
 
 def build_opts(sel, n_colours):
@@ -292,13 +373,49 @@ def build_opts(sel, n_colours):
                 log_y_drop_nonpositive=bool(sel["log_y"] and sel["log_drop"]),
                 width=float(sel["width"]), height=float(sel["height"]),
                 legend=bool(sel["place_key"]),
-                title=sel["title"] or None, ylabel=sel["ylabel"] or None)
+                detect=sel.get("detect"),
+                title=literal_text(sel["title"]) or None, ylabel=literal_text(sel["ylabel"]) or None)
     pal, hint = palette_choice(sel["palette_name"], sel["palette_custom"], n_colours)
     if pal is not None:
         opts["palette"] = pal
         if sel["violin_fill"] == "auto":
             opts["violin_fill"] = "group"
     return opts, hint
+
+
+def check_subgroup(df, sel):
+    """CT-R2 N11: a Subgroup that cannot work is refused with a plain message (it used to give
+    "0 of 0 comparisons tested" and an empty table). Judged on the selected samples."""
+    sg, g, rep = sel.get("subgroup"), sel["group"], sel.get("replicate")
+    if not sg or sg == NONE:
+        return
+    if sg == g:
+        raise ps.StatsError("Subgroup is the same column as Group (%s). Pick a different column for the "
+                            "second factor, or set Subgroup to (none)." % sg)
+    if rep and rep != NONE and sg == rep:
+        raise ps.StatsError("Subgroup is the Replicate (plate) column (%s): every plate would become "
+                            "its own subgroup. Pick a different column for the second factor, or set "
+                            "Subgroup to (none)." % sg)
+    lab = pd.DataFrame({"g": ps._labels(df[g]), "s": ps._labels(df[sg])})
+    lab = lab[lab["g"].isin(sel.get("order") or lab["g"].unique())].dropna()
+    levels = list(dict.fromkeys(lab["s"]))
+    if len(levels) < 2:
+        raise ps.StatsError("The Subgroup column %s has only one level (%s) in the selected samples, so "
+                            "there is nothing to compare. Pick another column, or set Subgroup to (none)."
+                            % (sg, levels[0] if levels else "no values"))
+    if not (lab.groupby("g")["s"].nunique() >= 2).any():
+        raise ps.StatsError("In none of the selected samples does the Subgroup column %s have two or "
+                            "more levels, so no subgroup can be compared with a control within a "
+                            "sample. Pick another column, or set Subgroup to (none)." % sg)
+
+
+def in_app_words(a, sel):
+    """CT-R2 N5/N13: every engine text of the analysis, in the app's words, once."""
+    for k in ("sentence", "fig_sentence"):
+        a[k] = app_words(a[k])
+    a["notes"] = [app_words(n) for n in a["notes"]]
+    a["warnings"] = with_advice(a["warnings"], sel.get("equal_var"))
+    return a
 
 
 def compute(df, sel, info=None):
@@ -324,6 +441,7 @@ def compute(df, sel, info=None):
     if not sel.get("order"):
         raise ps.StatsError("No sample is selected under “Samples (in this order)”. Pick at least one.")
     if grouped:
+        check_subgroup(df, sel)
         d, metric = ps.normalize_grouped(df, sel["group"], sg, sel["value"], rep, "metric")
     else:
         d, metric = ps.normalize(df, sel["group"], sel["value"], rep, "metric")
@@ -341,15 +459,18 @@ def compute(df, sel, info=None):
         control = ctrl if ctrl in subs else (subs[0] if subs else None)
         sub_order = [control] + [s for s in subs if s != control]
         opts, hint = build_opts(sel, len(sub_order))
-        opts.update(order=order, _sublabel=sg, control=None)
+        opts.update(order=order, _sublabel=sg, control=None, detect=None)   # no power sentence in grouped mode
     else:
         opts, hint = build_opts(sel, len(order))
         opts["order"] = order
         ctl = sel.get("compare")
+        if ctl and ctl != "all" and ctl not in order:
+            # CT-R2 N14: a control that is no longer among the samples is not an error: back to all
+            # pairs, and say so
+            notes.append("Compare to was “%s”, which is not among the selected samples, so all pairs "
+                         "are compared." % ctl)
+            ctl = None
         opts["posthoc"], opts["control"] = ("dunnett", ctl) if (ctl and ctl != "all") else ("auto", None)
-        if opts["control"] is not None and opts["control"] not in order:
-            raise ps.StatsError("The control %r of “Compare to” is not among the selected samples."
-                                % opts["control"])
     o = ps._plot_opts(opts)                       # centre / error / palette refusals, before any test
     _mask, log_note = ps._log_guard(d["value"].values, o)
     if log_note:
@@ -366,10 +487,10 @@ def compute(df, sel, info=None):
                     warnings=list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
                     sentence=ps.paste_sentence(metric, comp=comp, unit=unit, control=control, opts=opts),
                     fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"]), grouped=True))
-        return base
+        return in_app_words(base, sel)
     omni, posthoc, unit, have_rep = ps.run_stats(
         d, order, sel["unit"], sel["parametric"], equal_var=sel["equal_var"],
-        posthoc=opts["posthoc"], control=opts["control"])
+        posthoc=opts["posthoc"], control=opts["control"], detect=opts.get("detect"))
     summ = ps.group_summary(d, order, unit=unit)
     centers = ps.center_table(d, order, o)
     rm = ps.replicate_means(d)
@@ -379,7 +500,7 @@ def compute(df, sel, info=None):
                 warnings=list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
                 sentence=ps.paste_sentence(metric, summ, omni, unit, have_rep, opts, centers=centers),
                 fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"])))
-    return base
+    return in_app_words(base, sel)
 
 
 def make_figure(a):
@@ -401,6 +522,36 @@ def file_base(a):
     return ("grouped_%s" if a["mode"] == "grouped" else "violin_%s") % ps._safe(a["metric"])
 
 
+def figure_size_in(fig, png, dpi=300):
+    """(width, height) in inches of the figure as saved: the engine's final size when it exposes
+    one (fig.final_size_in / fig.figure_size_in_final), else the PNG's pixels / dpi (CT-R2 N6)."""
+    for name in ("final_size_in", "figure_size_in_final"):
+        v = getattr(fig, name, None)
+        try:
+            v = v() if callable(v) else v
+            if v is not None and len(v) == 2 and float(v[0]) > 0 and float(v[1]) > 0:
+                return float(v[0]), float(v[1])
+        except Exception:                                   # noqa: BLE001 -- fall through
+            pass
+    import struct
+    w, h = struct.unpack(">II", png[16:24])
+    return w / float(dpi), h / float(dpi)
+
+
+def size_line(size, sel):
+    """CT-R2 N6: the size the figure really has, and why when it is not the slider size."""
+    w, h = size
+    sw, sh = float(sel["width"]), float(sel["height"])
+    line = "figure: %.1f x %.1f in" % (w, h)
+    why = []
+    if h > sh + 0.15:
+        why.append("the key is below the plot, so it is taller than the Height slider" if sel["place_key"]
+                   else "it is taller than the Height slider (long labels or notes need room)")
+    if w > sw + 0.15:
+        why.append("it is wider than the Width slider (long labels need room)")
+    return line + (": " + "; ".join(why) if why else "")
+
+
 def status_line(a):
     """CT-R1 F25: under the figure, what was tested on what, n, and what bar and whisker are."""
     if a["mode"] == "grouped":
@@ -417,7 +568,7 @@ def status_line(a):
             o.get("test", "n/a"), ps.p_text(o.get("p", float("nan"))),
             "plate means" if a["unit"] == "replicate" else "single plaques",
             "N plates" if a["unit"] == "replicate" else "n plaques", nn or "n/a")
-    return head + " " + a["fig_sentence"]
+    return app_words(head + " " + a["fig_sentence"])
 
 
 def summary_lines(a):
@@ -426,7 +577,7 @@ def summary_lines(a):
     if a.get("parse_note"):
         lines.append("File: %s %s layout. %d rows used." % (a["parse_note"], a["layout"], len(a["d"])))
     lines += ["Note: " + app_words(n) for n in a.get("notes", [])]
-    lines += ["⚠ " + app_words(w) for w in a.get("warnings", [])]
+    lines += ["⚠ " + w for w in a.get("warnings", [])]
     if a.get("palette_hint"):
         lines.append("Note: " + a["palette_hint"])
     return lines
@@ -449,6 +600,18 @@ def table_image(df, base, title, formats=("png", "svg", "pdf")):
         for fmt in formats:
             fig.savefig("%s.%s" % (base, fmt), dpi=200, bbox_inches="tight", facecolor="white")
         plt.close(fig)
+
+
+def report_words(txt, equal_var, src_name=None):
+    """CT-R2 N5/N13: a text file of the engine's output in the app's words, with the same
+    'set Variances' advice the screen gives (a line at a time). CT-R2 N14: the report names the
+    uploaded file where the engine can only say "in-memory table"."""
+    if src_name:
+        txt = txt.replace("in-memory table", src_name)
+    out = []
+    for ln in txt.split("\n"):
+        out.append(with_advice([ln], equal_var)[0] if SPREAD_ADVICE in ln else app_words(ln))
+    return "\n".join(out)
 
 
 def zip_bytes(df, a, sel, src_name=None, src_bytes=None):
@@ -487,7 +650,11 @@ def zip_bytes(df, a, sel, src_name=None, src_bytes=None):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for fn in sorted(os.listdir(outdir)):
-                z.write(os.path.join(outdir, fn), fn)
+                if fn.endswith((".md", ".txt")):          # the report in the app's words (N5/N13)
+                    with open(os.path.join(outdir, fn), encoding="utf-8") as fh:
+                        z.writestr(fn, report_words(fh.read(), sel.get("equal_var"), src_name))
+                else:
+                    z.write(os.path.join(outdir, fn), fn)
             if src_bytes is not None:                 # the input data itself (F23)
                 z.writestr("input_" + os.path.basename(src_name or "data.csv"), src_bytes)
         return buf.getvalue()
@@ -501,7 +668,11 @@ def key_zip_bytes(fig, base):
         paths = legend_key.write_key_files(key, os.path.join(tmp, base), ["png", "svg", "pdf"]) if key else []
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for fp in paths:
-                z.write(fp, os.path.basename(fp))
+                if fp.endswith(".txt"):                   # the text starter in the app's words (N5)
+                    with open(fp, encoding="utf-8") as fh:
+                        z.writestr(os.path.basename(fp), app_words(fh.read()))
+                else:
+                    z.write(fp, os.path.basename(fp))
     return buf.getvalue()
 
 
@@ -524,6 +695,16 @@ a.shiny-download-link.ct-off { pointer-events: none; opacity: .45; }
 """
 JS = """
 /* CT-R1 F24: downloads are disabled until there is an analysis to download */
+/* CT-R2 N14: "Load example data" empties the file box (it kept the old file's name) */
+Shiny.addCustomMessageHandler('ct_clear_file', function(m) {
+  var f = document.getElementById(m.id); if (!f) return;
+  f.value = '';
+  var g = f.closest('.input-group'); var t = g && g.querySelector('input[type=text]'); if (t) t.value = '';
+  var pr = document.getElementById(m.id + '_progress');
+  if (pr) { pr.style.visibility = 'hidden'; var b = pr.querySelector('.progress-bar');
+            if (b) { b.style.width = '0%'; b.textContent = ''; } }
+  Shiny.setInputValue(m.id, null);
+});
 Shiny.addCustomMessageHandler('ct_downloads', function(ok) {
   document.querySelectorAll('a.shiny-download-link').forEach(function(a) {
     a.classList.toggle('ct-off', !ok); a.setAttribute('aria-disabled', ok ? 'false' : 'true');
@@ -539,6 +720,8 @@ app_ui = ui.page_sidebar(
         ui.input_action_button("load_example", "Load example data", class_="btn-sm"),
         ui.hr(),
         ui.output_ui("col_pickers"),
+        ui.output_ui("value_picker"),             # CT-R2 N14: follows Group / Replicate
+        ui.output_ui("subgroup_picker"),
         ui.output_ui("order_picker"),
         ui.output_ui("control_picker"),
         ui.hr(),
@@ -551,9 +734,13 @@ app_ui = ui.page_sidebar(
         ui.panel_conditional(
             "!input.subgroup || input.subgroup === '(none)'",
             ui.input_select("equal_var", "Variances",
-                            {"auto": "auto (Levene test)", "yes": "equal (ANOVA + Tukey)",
-                             "no": "unequal (Welch + Games-Howell)"}),
+                            {"auto": "auto (Welch when Levene rejects equal spread; "
+                                     "needs 8+ plates per sample to detect it)",
+                             "yes": "equal (ANOVA + Tukey)",
+                             "no": "unequal (Welch ANOVA + Games-Howell)"}),
             ui.output_ui("compare_picker"),
+            ui.input_numeric("detect", "Difference to detect (optional, in the unit of the measurement)",
+                             None, min=0),
             ui.input_select("violin_fill", "Violin fill",
                             {"auto": "auto (grey when plates)", "neutral": "neutral grey",
                              "group": "coloured by sample"})),
@@ -590,6 +777,7 @@ app_ui = ui.page_sidebar(
     ui.navset_tab(
         ui.nav_panel("Plot",
                      ui.output_ui("fig_preview"),
+                     ui.div(ui.output_text("size_text"), class_="ct-status", id="size_line"),
                      ui.div(ui.output_text("status"), class_="ct-status"),
                      ui.div(ui.download_button("dl_png", "PNG"),
                             ui.download_button("dl_svg", "SVG (editable)"),
@@ -632,9 +820,11 @@ def server(input, output, session):
     info = reactive.value(None)           # its parse info
     load_error = reactive.value("")       # CT-R1 F19: a failed upload stays visible
     source = reactive.value((None, None))  # (file name, bytes) for the ZIP
+    compare_note = reactive.value("")     # CT-R2 N14: "Compare to" fell back to all pairs
+    seen = {}                             # the frame the value picker last started from
 
     def _set_data(df, inf, name, data):
-        raw.set(df); info.set(inf); source.set((name, data)); load_error.set("")
+        raw.set(df); info.set(inf); source.set((name, data)); load_error.set(""); compare_note.set("")
 
     @reactive.effect
     @reactive.event(input.file)
@@ -655,7 +845,8 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.load_example)
-    def _load_example():
+    async def _load_example():
+        await session.send_custom_message("ct_clear_file", {"id": "file"})
         try:
             p = _example_wide_path()
             df, inf = read_upload(p)
@@ -680,20 +871,38 @@ def server(input, output, session):
             return ui.p("Upload a file or click “Load example data”.")
         cols = [str(c) for c in df.columns]
         dflt = picker_defaults(df)
+        return ui.TagList(
+            ui.input_select("group", "Group column", {c: c for c in cols}, selected=dflt["group"]),
+            ui.input_select("replicate", "Replicate (plate) column",
+                            {NONE: NONE, **{c: c for c in cols}}, selected=dflt["replicate"]))
+
+    @render.ui
+    def value_picker():
+        # CT-R2 N14: a separate output so that choosing Group / Replicate refreshes the value
+        # choices without rebuilding the Group and Replicate selects themselves
+        df = raw.get()
+        if df is None:
+            return ui.HTML("")
         lay = layout_of(df)
-        vals = value_choices(df)
-        items = [ui.input_select("group", "Group column", {c: c for c in cols}, selected=dflt["group"]),
-                 ui.input_select("replicate", "Replicate (plate) column",
-                                 {NONE: NONE, **{c: c for c in cols}}, selected=dflt["replicate"])]
+        vals = value_choices(df, (_in("group"), _in("replicate")))
+        with reactive.isolate():
+            cur = _in("value") if seen.get("df") is df else None   # a new file starts from the defaults
+        seen["df"] = df
+        dflt = picker_defaults(df)["value"]
+        pick = cur if cur in vals else (dflt if dflt in vals else (vals[0] if vals else None))
         if lay["long"]:
-            items.append(ui.input_select("value", "Metric to plot (LONG file: column %s)" % lay["metric_col"],
-                                         {m: m for m in vals}, selected=dflt["value"]))
-        else:
-            items.append(ui.input_select("value", "Value column", {c: c for c in vals},
-                                         selected=dflt["value"]))
-        items.append(ui.input_select("subgroup", "Subgroup — 2nd factor (optional, e.g. host)",
-                                     {NONE: NONE, **{c: c for c in cols}}, selected=NONE))
-        return ui.TagList(*items)
+            return ui.input_select("value", "Metric to plot (LONG file: column %s)" % lay["metric_col"],
+                                   {m: m for m in vals}, selected=pick)
+        return ui.input_select("value", "Value column", {c: c for c in vals}, selected=pick)
+
+    @render.ui
+    def subgroup_picker():
+        df = raw.get()
+        if df is None:
+            return ui.HTML("")
+        cols = [str(c) for c in df.columns]
+        return ui.input_select("subgroup", "Subgroup — 2nd factor (optional, e.g. host)",
+                               {NONE: NONE, **{c: c for c in cols}}, selected=NONE)
 
     @render.ui
     def order_picker():
@@ -712,10 +921,35 @@ def server(input, output, session):
         df = raw.get()
         g = _in("group")
         lv = group_levels(df, g) if (df is not None and g) else []
+        picked = _in("order")                       # CT-R2 N14: only the samples still selected
+        if picked is not None:
+            lv = [x for x in lv if x in picked]
         with reactive.isolate():
             cur = _in("compare", "all")
         ch = {"all": "all pairs", **{x: "each sample vs %s (Dunnett)" % x for x in lv}}
         return ui.input_select("compare", "Compare to", ch, selected=cur if cur in ch else "all")
+
+    @reactive.effect
+    def _compare_fallback():
+        """CT-R2 N14: removing the Compare-to control from the samples puts Compare to back on
+        'all pairs' and says so (the note stays until the user picks another control)."""
+        order = _in("order")
+        if order is None:
+            return
+        with reactive.isolate():
+            cur = _in("compare", "all")
+        df, g = raw.get(), _in("group")
+        levels = group_levels(df, g) if (df is not None and g) else []
+        if cur and cur != "all" and cur in levels and cur not in order:   # removed by the user
+            compare_note.set("Compare to was “%s”, which is no longer among the samples, so it is back "
+                             "on “all pairs”." % cur)
+            ui.update_select("compare", selected="all")
+
+    @reactive.effect
+    @reactive.event(input.compare)
+    def _compare_changed():
+        if input.compare() != "all":
+            compare_note.set("")
 
     @render.ui
     def control_picker():
@@ -735,6 +969,14 @@ def server(input, output, session):
             cur = input.error()
         ui.update_select("error", choices=ch, selected=cur if cur in ch else "auto")
 
+    def _detect():
+        """CT-R2: the optional 'Difference to detect' (None when the box is empty)."""
+        try:
+            v = input.detect()
+        except Exception:                                   # noqa: BLE001
+            return None
+        return None if v is None or v != v else float(v)
+
     def _sel():
         return {"group": _in("group"), "value": _in("value"), "replicate": _in("replicate", NONE),
                 "subgroup": _in("subgroup", NONE), "control": _in("control"),
@@ -746,7 +988,7 @@ def server(input, output, session):
                 "show_n": input.show_n(), "show_value": input.show_value(), "frame": input.frame(),
                 "log_y": input.log_y(), "log_drop": input.log_drop(), "title": input.title(),
                 "ylabel": input.ylabel(), "width": input.width(), "height": input.height(),
-                "place_key": input.place_key()}
+                "place_key": input.place_key(), "detect": _detect()}
 
     @reactive.calc
     def result():
@@ -775,8 +1017,9 @@ def server(input, output, session):
         a = analysis()
         fig = make_figure(a)
         try:
-            return {"png": fig_bytes(fig, "png"), "key": legend_key.from_figure(fig),
-                    "note": getattr(fig, "annotation_note", "")}
+            png = fig_bytes(fig, "png")
+            return {"png": png, "key": legend_key.from_figure(fig),
+                    "note": getattr(fig, "annotation_note", ""), "size": figure_size_in(fig, png)}
         finally:
             plt.close(fig)
 
@@ -791,6 +1034,8 @@ def server(input, output, session):
         out = []
         if load_error.get():
             out.append(ui.div(load_error.get(), class_="alert alert-danger ct-msg"))
+        if compare_note.get():
+            out.append(ui.div(compare_note.get(), class_="alert alert-info ct-msg small"))
         if "error" in r:
             out.append(ui.div("Cannot analyse with these settings: " + r["error"],
                               class_="alert alert-warning ct-msg"))
@@ -810,6 +1055,12 @@ def server(input, output, session):
             return ui.div("Cannot draw the figure: " + message_of(e), class_="alert alert-warning")
         src = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
         return ui.img(src=src, alt="figure preview (the same image as the PNG download)")
+
+    @render.text
+    def size_text():
+        r = result()
+        req("ok" in r)
+        return size_line(figure_png()["size"], r["sel"])
 
     @render.text
     def status():
@@ -861,12 +1112,12 @@ def server(input, output, session):
             if o.get("posthoc"):
                 msg += "\nPairwise: %s" % o["posthoc"]
         for w in a.get("warnings", []):
-            msg += "\n\n⚠ " + app_words(w)
-        return msg
+            msg += "\n\n⚠ " + w
+        return app_words(msg)
 
     @render.text
     def sentence():
-        return analysis()["sentence"]          # CT-R1 F10: the engine's paste_sentence()
+        return analysis()["sentence"]          # CT-R1 F10: the engine's paste_sentence(), app words
 
     @render.download(filename=lambda: file_base(analysis()) + ".png")
     def dl_png():
@@ -890,7 +1141,7 @@ def server(input, output, session):
     @render.text
     def key_text():
         key = figure_png()["key"]               # the key of the figure as it is drawn right now
-        return legend_key.text_starter(key) or "(no sample colours to key)"
+        return app_words(legend_key.text_starter(key) or "(no sample colours to key)")
 
     @render.download(filename=lambda: file_base(analysis()) + "_legend_key.zip")
     def dl_key():
