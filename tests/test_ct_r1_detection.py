@@ -772,7 +772,8 @@ def test_d8_flag_line_and_run_metadata_report_edge_sources(qtbot, tmp_path):
     tab.image_path = path
     tab._detect()
     qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
-    assert "Edges: 1 standard, 2 split from clusters, 0 small." in tab.flag_label.text()
+    # CT-R2 N9: the SOURCE column's own words
+    assert "Edges: 1 auto (standard pass), 2 split, 0 small." in tab.flag_label.text()
     det = engine_api.detect_single(path, plate_mm=90, scale="auto")
     pgui.save_results(det["plaques"], det["orig_bgr"], path, str(tmp_path / "o"), det["pxl_per_mm"],
                       det["lawn_gray"], plate=det["plate"], published=False, sensitive=False,

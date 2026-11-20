@@ -546,8 +546,11 @@ PLAQUE_CLASSES = {
     "region":    ("detect-area",     (255, 170, 0),   "solid"),
     "watershed": ("watershed split", (180, 120, 255), "solid"),
     "overlap":   ("overlapping",     (255, 40, 150),  "dashed"),
+    # CT-R2 N3: counted, but its size is not used (plaque_qc.size_ok False: CORE? / NO_SIZE).
+    # Wins over "overlap": its size is left out whatever the overlap switch says.
+    "nosize":    ("size not used",   (0, 230, 230),   "dotted"),
 }
-CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap")
+CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap", "nosize")
 # a plaque's SOURCE -> its class (a freehand outline is "added by hand" like a circle or trace)
 # "small" = found only by the small-scale pass of the Auto plaque size (CT-R1 detection D1):
 # a detector result like "auto", drawn and keyed as such; only the SOURCE column tells them apart
@@ -595,16 +598,103 @@ def overlap_flags(plaques, margin=1.0):
 
 
 def plaque_class(p, overlap=False):
-    """Class key of one plaque: 'overlap' wins over its source, as on the canvas."""
+    """Class key of one plaque: 'nosize' (its size is not used, CT-R2 N3) wins, then
+    'overlap' over its source, as on the canvas. 'nosize' is read from p["qc_flag"] (set by
+    tag_qc) through plaque_qc.size_ok, the one rule."""
+    if not size_used(p):
+        return "nosize"
     if overlap:
         return "overlap"
     return _SOURCE_CLASS.get(p.get("source") or "auto", "auto")
+
+
+def size_used(p):
+    """False when the plaque counts but its size is left out (plaque_qc.size_ok of its
+    QC flag, as tagged by tag_qc); True when it carries no flag."""
+    f = p.get("qc_flag")
+    if not f:
+        return True
+    import plaque_qc
+    return plaque_qc.size_ok(f)
+
+
+def tag_qc(plaques, orig_bgr, pxl_per_mm, plate=None):
+    """Store each plaque's QC flag in p["qc_flag"] (qc_flags, the table's own call), so the
+    figure, its key and the canvas can draw the plaques whose size is not used in their own
+    style. Returns the [(flag, reason)] list."""
+    qc = qc_flags(plaques, orig_bgr, pxl_per_mm, plate=plate)
+    for p, (f, _w) in zip(plaques, qc):
+        p["qc_flag"] = f
+    return qc
+
+
+def size_note(p):
+    """Why a plaque's size is not used, as the label word: 'core' (CORE?: outlined at the dark
+    centre only), 'split' (NO_SIZE: a split piece too overlapped to size), or 'size not used'
+    for any other reason plaque_qc.size_ok gives; None when the size is used."""
+    if size_used(p):
+        return None
+    import plaque_qc
+    f = p.get("qc_flag")
+    if plaque_qc.has_flag(f, "CORE?"):
+        return "core"
+    if plaque_qc.has_flag(f, "NO_SIZE"):
+        return "split"
+    return "size not used"
+
+
+_NOSIZE_REASON = {"core": "outlined at the dark centre only", "split": "split piece too overlapped",
+                  "size not used": "size not reliable"}
 
 
 def plaque_classes(plaques):
     """Class key per plaque. The overlap test is recomputed here rather than read from a tag,
     so Batch and CLI callers (whose plaques carry no tag) get the same picture as the app."""
     return [plaque_class(p, ov) for p, ov in zip(plaques, overlap_flags(plaques))]
+
+
+def source_counts_now(plaques):
+    """How the plaques NOW on the plate were found, by their stored SOURCE value (CT-R2 N5/N9:
+    the flag line and run_metadata `sources` used detection-time counts, which edits made
+    stale): auto (the standard pass), split, standard-relaxed, small, watershed, region
+    (Detect area), manual, freehand; 'core' = how many of the small ones are outlined at the
+    dark centre only (CORE?), 'no_size' = NO_SIZE pieces (from p["qc_flag"], see tag_qc)."""
+    import plaque_qc
+    out = {k: 0 for k in ("auto", "split", "standard-relaxed", "small", "watershed", "region",
+                          "manual", "freehand", "other")}
+    out["core"] = out["no_size"] = 0
+    for p in plaques:
+        s = p.get("source") or "auto"
+        out[s if s in out else "other"] += 1
+        f = p.get("qc_flag")
+        out["core"] += plaque_qc.has_flag(f, "CORE?")
+        out["no_size"] += plaque_qc.has_flag(f, "NO_SIZE") and not plaque_qc.has_flag(f, "CORE?")
+    return {k: int(v) for k, v in out.items()}
+
+
+def edges_sentence(counts):
+    """'Edges: 15 auto (standard pass), 12 split, 14 small (10 of them outlined at the dark
+    centre only), 2 region (Detect area), 1 manual (added by hand).' -- the SOURCE values,
+    each with what it means (CT-R2 N9)."""
+    def n(k):
+        return int(counts.get(k) or 0)
+    parts = ["%d auto (standard pass)" % n("auto")]
+    if n("split"):
+        parts.append("%d split" % n("split"))
+    if n("standard-relaxed"):
+        parts.append("%d standard-relaxed" % n("standard-relaxed"))
+    sm = "%d small" % n("small")
+    if n("core"):
+        sm += (" (%s outlined at the dark centre only)"
+               % ("it is" if n("small") == 1 and n("core") == 1 else
+                  ("all of them" if n("core") == n("small") else "%d of them" % n("core"))))
+    parts.append(sm)
+    for k, what in (("watershed", "watershed (split by watershed)"),
+                    ("region", "region (Detect area)"), ("manual", "manual (added by hand)"),
+                    ("freehand", "freehand (drawn by hand)"), ("other", "other")):
+        if n(k):
+            parts.append("%d %s" % (n(k), what))
+    return "Edges: " + ", ".join(parts) + "."
 
 
 def figure_metrics(image_shape):
@@ -619,14 +709,18 @@ def figure_metrics(image_shape):
             "gap": max(2, int(round(font_px / 5.0)))}         # label <-> outline distance
 
 
-def label_text(index, area_pxl, pxl_per_mm, mode="numbers", published=None):
+def label_text(index, area_pxl, pxl_per_mm, mode="numbers", published=None, note=None):
     """The text beside plaque #index for a label mode ('numbers', 'numbers + mm', 'none').
     `published` must be the flag of the engine that made the result, so the diameter printed
-    on the figure is the diameter in the table."""
+    on the figure is the diameter in the table. ``note`` (size_note) marks a plaque whose size
+    is not used: 'numbers + mm' then prints '7 (core)' instead of a size the summaries leave
+    out (CT-R2 N3)."""
     if mode == "none":
         return ""
     if mode != "numbers + mm":
         return str(index)
+    if note:
+        return "%d (%s)" % (index, note)
     dia_pxl, _area_mm2, dia_mm = measure(area_pxl, pxl_per_mm, published)
     if pxl_per_mm:
         return "%d: %.2f mm" % (index, dia_mm)
@@ -877,7 +971,15 @@ def plate_key(plaques, precise=False):
     for k in CLASS_ORDER:
         if k in present:
             _n, rgb, style = PLAQUE_CLASSES[k]
-            spec.append((class_name(k, precise), rgb, style))
+            name = class_name(k, precise)
+            if k == "nosize":                 # say why, for the reasons on THIS plate
+                why = []
+                for p in plaques:
+                    r = _NOSIZE_REASON.get(size_note(p))
+                    if r and r not in why:
+                        why.append(r)
+                name = "%s: %s" % (name, " / ".join(why))
+            spec.append((name, rgb, style))
     return outline_key(spec)
 
 
@@ -988,6 +1090,10 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
     annotated = orig_bgr.copy()
     if annotated.ndim == 2:
         annotated = cv2.cvtColor(annotated, cv2.COLOR_GRAY2BGR)
+    # CT-R2 N3: flag the plaques (the table's own call) so those whose size is not used are
+    # drawn, labelled and keyed as such; tagged on copies, the caller's dicts are untouched
+    plaques = [dict(p) for p in plaques]
+    tag_qc(plaques, annotated, pxl_per_mm, plate=plate)
     m = figure_metrics(annotated.shape)
     for p, cls in zip(plaques, plaque_classes(plaques)):
         _draw_outline(annotated, p, cls, m["line"])
@@ -1026,7 +1132,7 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
 
     mode = labels if (draw_numbers and labels in LABEL_MODES) else ("numbers" if draw_numbers else "none")
     if mode != "none" and plaques:
-        strs = [label_text(i, p["area_pxl"], pxl_per_mm, mode, published)
+        strs = [label_text(i, p["area_pxl"], pxl_per_mm, mode, published, note=size_note(p))
                 for i, p in enumerate(plaques, start=1)]
         sizes = [text_size(s, m["font_px"], m["stroke"]) for s in strs]
         placed = layout_labels(plaques, sizes, annotated.shape, m["gap"], avoid=avoid)
@@ -1231,7 +1337,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
     if write_key and plaques:
         try:                                          # in the overlay's own format (CT-R2 N8)
-            write_key_files_for(plate_key(plaques, precise), img_path)
+            tagged = [dict(p, qc_flag=f) for p, (f, _w) in zip(plaques, qc)]
+            write_key_files_for(plate_key(tagged, precise), img_path)
         except Exception:                             # a key must never break a save
             pass
     if write_provenance:

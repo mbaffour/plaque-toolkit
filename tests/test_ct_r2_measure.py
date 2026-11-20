@@ -429,3 +429,195 @@ def test_n2_data_green_carries_qc_flags_and_gives_the_screen_median(window, qtbo
     assert len(d2) == len(d) - 1
     assert list(d2["QC_FLAG"]) == list(ed.table()["QC_FLAG"])
     assert tab._metrics["median"].text() == "%.2f" % _sized_median(d2)
+
+
+# =========================================================================== N3 + N9 + N5
+@pytest.fixture
+def sample_editor(window, qtbot, dialogs, tmp_path):
+    img = _copy(SAMPLE_TIF, tmp_path / "s")
+    ed = _open(window.measure_tab, qtbot, dialogs, img, mode="current", dish=100.0, scale="auto")
+    return window.measure_tab, ed
+
+
+def _idx(ed, flag):
+    return [i for i, p in enumerate(ed.plaques) if plaque_qc.has_flag(p.get("qc_flag"), flag)]
+
+
+def test_n3_size_not_used_has_its_own_outline_label_and_key_on_canvas_and_export(sample_editor, monkeypatch):
+    tab, ed = sample_editor
+    table = ed.table()
+    assert [p["qc_flag"] for p in ed.plaques] == list(table["QC_FLAG"])
+    core, nos = _idx(ed, "CORE?"), [i for i in _idx(ed, "NO_SIZE") if i not in _idx(ed, "CORE?")]
+    assert len(core) == 10 and len(nos) == 10
+    ed.set_label_mode("numbers + mm")
+    texts = [t for t, _s, _b in ed._label_layout()]
+    assert texts[core[0]] == "%d (core)" % (core[0] + 1)
+    assert texts[nos[0]] == "%d (split)" % (nos[0] + 1)
+    ok = [i for i in range(len(texts)) if i not in core + nos][0]
+    assert texts[ok].endswith(" mm")
+    # canvas outline: dotted for the size-not-used plaques only
+    from PySide6.QtWidgets import QAbstractGraphicsShapeItem, QGraphicsSimpleTextItem
+    shapes = [it for it in ed._overlay if isinstance(it, QAbstractGraphicsShapeItem)
+              and not isinstance(it, QGraphicsSimpleTextItem)]
+    assert shapes[core[0]].pen().style() == Qt.DotLine and shapes[nos[0]].pen().style() == Qt.DotLine
+    assert shapes[ok].pen().style() != Qt.DotLine
+    # key: canvas == export, with the class and both reasons
+    key = ed.legend_key()
+    nosize = [e for e in key["entries"] if e["label"].startswith("size not used")]
+    assert nosize and nosize[0]["label"] == ("size not used: outlined at the dark centre only / "
+                                             "split piece too overlapped")
+    assert nosize[0]["linestyle"] == ":"
+    assert "size not used: outlined at the dark centre only / split piece too overlapped (" in ed.key_text.text()
+    assert "dotted line" in ed.key_text.text()
+    drawn = []
+    real = pgui._draw_texts
+    monkeypatch.setattr(pgui, "_draw_texts", lambda img, items: drawn.extend(it[0] for it in items) or real(img, items))
+    ed.key_cb.setChecked(True)
+    img = pgui.annotate_plaques(ed.orig_bgr, [dict(p) for p in ed.plaques], ed.ppm,
+                                labels="numbers + mm", **ed._figure_kwargs())
+    assert all(t in drawn for t in texts)
+    assert "%d (core)" % (core[0] + 1) in drawn and "%d (split)" % (nos[0] + 1) in drawn
+    patch = pgui.key_image_for(img.shape, key)
+    assert np.array_equal(_key_region(img, patch), patch)
+    # the export draws the dotted outline in the class colour (cyan), not the auto green
+    rgb = pgui.PLAQUE_CLASSES["nosize"][1]
+    img = pgui.annotate_plaques(ed.orig_bgr, [dict(p) for p in ed.plaques], ed.ppm, labels="none",
+                                plate=ed.plate)
+
+    def has(i, bgr):
+        x0, y0, x1, y1 = [int(round(v)) for v in pgui.plaque_bbox(ed.plaques[i])]
+        roi = img[max(0, y0 - 4):y1 + 5, max(0, x0 - 4):x1 + 5].astype(int)
+        return bool((np.abs(roi - np.array(bgr)).sum(axis=2) < 12).any())
+    assert has(core[0], (rgb[2], rgb[1], rgb[0])) and has(nos[0], (rgb[2], rgb[1], rgb[0]))
+    assert not has(ok, (rgb[2], rgb[1], rgb[0]))
+
+
+def test_n5_n9_flag_line_and_sources_follow_the_current_plaques(sample_editor, tmp_path):
+    import re
+    tab, ed = sample_editor
+    c0 = pgui.source_counts_now(ed.plaques)
+    flag = tab.flag_label.text()
+    m = re.search(r"Edges: (\d+) auto \(standard pass\), (\d+) split, (\d+) small "
+                  r"\(10 of them outlined at the dark centre only\)\.", flag)
+    assert m and [int(g) for g in m.groups()] == [c0["auto"], c0["split"], c0["small"]]
+    assert sum(c0[k] for k in ("auto", "split", "standard-relaxed", "small")) == len(ed.plaques)
+    # edit: erase one auto plaque, add a circle -> the line and the metadata follow
+    a = next(p for p in ed.plaques if p["source"] == "auto")
+    ed._erase_at(QPointF(*a["center"]))
+    ed._add_circle(QPointF(400.0, 1000.0), 15.0)
+    flag = tab.flag_label.text()
+    assert "Edges: %d auto (standard pass)" % (c0["auto"] - 1) in flag
+    assert "1 manual (added by hand)" in flag
+    tab.save()
+    meta = json.load(open(os.path.join(ed.out_dir, "run_metadata.json")))
+    src = meta["images"][0]["sources"]
+    assert src["auto"] == c0["auto"] - 1 and src["manual"] == 1 and src["core"] == 10
+
+
+def test_n5_singular_grammar_in_the_sizes_sentence(sample_editor):
+    tab, ed = sample_editor
+    drop = _idx(ed, "CORE?") + [i for i in _idx(ed, "NO_SIZE") if i not in _idx(ed, "CORE?")][1:]
+    ed.selected = set(ed.plaques[i]["_uid"] for i in drop)
+    ed._remove_selected()
+    n = len(ed.plaques)
+    assert ("Sizes from %d of %d plaques (1 split piece whose size is not reliable is counted but "
+            "left out of the size summary)." % (n - 1, n)) in tab.flag_label.text()
+
+
+# =========================================================================== N4
+def test_n4_drawing_the_halo_of_a_core_plaque_replaces_it(sample_editor):
+    tab, ed = sample_editor
+    i = _idx(ed, "CORE?")[0]
+    core = ed.plaques[i]
+    n0, uid = len(ed.plaques), core["_uid"]
+    x0, y0, x1, y1 = pgui.plaque_bbox(core)
+    r = 1.6 * max(x1 - x0, y1 - y0) / 2.0          # a circle round its (larger) halo
+    ed._add_circle(QPointF(*core["center"]), r)
+    assert len(ed.plaques) == n0                     # the count does not grow
+    assert uid not in [p["_uid"] for p in ed.plaques]
+    assert "replaced plaque %d (dark centre only) with your outline" % (i + 1) in ed.hint.text()
+    new = [p for p in ed.plaques if p["source"] == "manual"]
+    assert len(new) == 1 and not plaque_qc.has_flag(new[0]["qc_flag"], "NESTED")
+    ed._undo_last()                                  # ONE step restores both
+    assert len(ed.plaques) == n0 and uid in [p["_uid"] for p in ed.plaques]
+    assert not [p for p in ed.plaques if p["source"] == "manual"]
+
+
+def test_n4_a_circle_round_an_ordinary_plaque_does_not_remove_it(sample_editor):
+    tab, ed = sample_editor
+    ok = next(p for p in ed.plaques if p["qc_flag"] == "OK")
+    n0 = len(ed.plaques)
+    ed._add_circle(QPointF(*ok["center"]), 60.0)
+    assert len(ed.plaques) == n0 + 1 and ok["_uid"] in [p["_uid"] for p in ed.plaques]
+
+
+# =========================================================================== N6 N7 N13 N12
+def test_n6_dish_change_is_its_own_undo_step_and_the_hint_says_so(sample_editor, qtbot):
+    tab, ed = sample_editor
+    ppm100 = ed.ppm
+    a = ed.plaques[0]
+    ed._erase_at(QPointF(*a["center"]))              # a plaque edit ...
+    n_after_erase = len(ed.plaques)
+    tab.plate.setValue(8)                            # ... then typing "85" in the Dish box
+    tab.plate.setValue(85)
+    assert ed.ppm == pytest.approx(ppm100 * 0.85)
+    ed._undo_last()                                  # undoes the Dish change only (one step)
+    assert ed.ppm == pytest.approx(ppm100) and len(ed.plaques) == n_after_erase
+    assert "undid the Dish size change (100 mm → 85 mm)" in ed.hint.text()
+    assert tab.plate.value() == pytest.approx(100.0)
+    ed._undo_last()                                  # then the erase, calibration untouched
+    assert ed.ppm == pytest.approx(ppm100) and len(ed.plaques) == n_after_erase + 1
+    assert "undid the erase of plaque 1" in ed.hint.text()
+
+
+def test_n7_calibration_source_is_the_last_one_used(sample_editor, dialogs):
+    tab, ed = sample_editor
+    dialogs.double = (10.0, True)
+    ed._set_tool("scale")
+    ed._scale_click(QPointF(100, 100)); ed._scale_click(QPointF(200, 100))
+    assert ed.export_state()["edits"]["calibration"] == "ruler"
+    tab.plate.setValue(90)
+    assert ed.export_state()["edits"]["calibration"] == "dish"
+    tab.save()
+    meta = json.load(open(os.path.join(ed.out_dir, "run_metadata.json")))
+    assert meta["images"][0]["edits"]["calibration"] == "dish"
+
+
+def test_n13_undo_after_save_marks_the_result_unsaved(sample_editor):
+    tab, ed = sample_editor
+    ed._erase_at(QPointF(*ed.plaques[0]["center"]))
+    tab.save()
+    assert not ed.dirty
+    ed._undo_last()
+    assert ed.dirty and "unsaved edits" in ed.hint.text()
+    tab.save()
+    ed._redo_last()
+    assert ed.dirty
+
+
+def test_n12_only_the_pointer_grabs_the_scale_bar_and_an_empty_detect_area_is_no_edit(sample_editor, monkeypatch):
+    tab, ed = sample_editor
+    g = ed._sb_g
+    start = (g["x0"] + g["length_px"] / 2.0, g["y0"] + g["thickness"] / 2.0)
+    assert ed._sb_hit(QPointF(*start))
+    monkeypatch.setattr(engine_api, "detect_region", lambda *a, **k: [])
+    from PySide6.QtCore import QEvent, QPoint
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    def drag(a, b):
+        vp = ed.view.viewport()
+        pa, pb = ed.view.mapFromScene(QPointF(*a)), ed.view.mapFromScene(QPointF(*b))
+        for typ, pt, btns in ((QEvent.MouseButtonPress, pa, Qt.LeftButton),
+                              (QEvent.MouseMove, pb, Qt.LeftButton),
+                              (QEvent.MouseButtonRelease, pb, Qt.NoButton)):
+            QApplication.sendEvent(vp, QMouseEvent(typ, QPointF(pt), QPointF(vp.mapToGlobal(pt)),
+                                                   Qt.LeftButton, btns, Qt.NoModifier))
+    before = (g["x0"], g["y0"])
+    ed._set_tool("region")
+    drag(start, (start[0] - 150, start[1] - 150))
+    assert (ed._sb_g["x0"], ed._sb_g["y0"]) == before and ed._scalebar_anchor is None
+    assert not ed.dirty and not ed.edited and "(edited)" not in tab._status_text()
+    ed._set_tool("select")
+    drag(start, (start[0] - 150, start[1] - 150))
+    assert (ed._sb_g["x0"], ed._sb_g["y0"]) != before and ed.dirty

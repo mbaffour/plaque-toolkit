@@ -669,7 +669,7 @@ class MeasureTab(QWidget):
         """Set plate / Ruler / an undo of either changed the scale in the editor: show the dish
         size it now stands for in the Dish box. Signals blocked, so this does not come back
         as a rescale (CT-R1 F20: the box kept saying 90 after Set plate 85)."""
-        if plate_mm is None or plate_mm <= 0:
+        if plate_mm is None or plate_mm < 0:       # 0 = "pixels only", a real Dish value (N6)
             return
         self.plate.blockSignals(True)
         try:
@@ -990,20 +990,12 @@ class MeasureTab(QWidget):
         extras = ["⚠ " + w for w in (det.get("dish_warnings") or [])]
         if not plate and det.get("dish_reason"):
             extras.append("⚠ No dish found: " + det["dish_reason"] + ".")
-        # CT-R1 detection D8: how Auto found each plaque's edge
-        src = det.get("sources")
-        if src:
-            parts = ["%d standard" % src.get("standard", 0)]
-            if src.get("split"):
-                parts.append("%d split from clusters" % src["split"])
-            if src.get("standard-relaxed"):
-                parts.append("%d standard-relaxed" % src["standard-relaxed"])
-            parts.append("%d small" % src.get("small", 0))
-            line = "Edges: " + ", ".join(parts) + "."
-            if src.get("core"):
-                line += (" ⚠ %d plaque%s measured at the dark centre only (CORE?): halo "
-                         "not separable." % (src["core"], "" if src["core"] == 1 else "s"))
-            extras.append(line)
+        # CT-R1 detection D8: how Auto found each plaque's edge. CT-R2 N5/N9: counted from the
+        # plaques NOW on the plate (hand-added and Detect-area ones included), in the words of
+        # the SOURCE column
+        if det.get("sources"):
+            import plaque_gui as _pg
+            extras.append(_pg.edges_sentence(_pg.source_counts_now(self.editor.plaques)))
         n_out = int(det.get("n_outside_dish") or 0)
         if n_out:
             extras.append("%d detection%s outside the dish %s left out." % (
@@ -1049,8 +1041,10 @@ class MeasureTab(QWidget):
             out = plaque_qc.size_left_out_counts(flags)
             if out["core"] or out["no_size"]:
                 stats_df = stats_df[[plaque_qc.size_ok(f) for f in flags]]
-                size_msg = ("Sizes from %d of %d plaques (%s are counted but left out of the "
-                            "size summary)." % (len(stats_df), n, plaque_qc.left_out_phrase(out)))
+                n_out = out["core"] + out["no_size"]
+                size_msg = ("Sizes from %d of %d plaques (%s %s counted but left out of the "
+                            "size summary)." % (len(stats_df), n, plaque_qc.left_out_phrase(out),
+                                                "is" if n_out == 1 else "are"))
                 flag = (flag + "  " + size_msg) if flag else size_msg
         if n_excl:
             ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."

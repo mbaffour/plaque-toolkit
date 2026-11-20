@@ -255,6 +255,10 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             # ---- measurement table (no file writes) ---------------------- #
             df = engine_api.measure_table(plaques, orig_bgr, ppm, lawn_gray,
                                           published=(mode == "published"), plate=plate)
+            if det.get("sources") is not None:
+                # CT-R2 N9: the same SOURCE words as the Measure tab's flag line
+                det_info[os.path.basename(path)]["sources"] = plaque_gui.source_counts_now(
+                    [dict(p, qc_flag=f) for p, f in zip(plaques, df["QC_FLAG"])])
 
             # diameter summary stats over this plate's plaques
             # sizes from size_ok rows only: CORE? / NO_SIZE plaques count but their diameter is
