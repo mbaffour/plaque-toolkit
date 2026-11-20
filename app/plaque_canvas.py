@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPolygonItem,
     QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPathItem, QGraphicsPixmapItem, QPushButton,
     QButtonGroup, QLabel, QComboBox, QSpinBox, QMenu, QFileDialog, QMessageBox, QInputDialog,
-    QColorDialog, QLineEdit, QCheckBox)
+    QColorDialog, QLineEdit, QCheckBox, QScrollArea)
 
 
 class FlowLayout(QLayout):
@@ -178,9 +178,10 @@ _BTN_QSS = (
     "font-weight:800;padding:6px 18px;font-size:13px;} "
     "QPushButton#Primary:hover{background:#19c258;} "
     "QPushButton#Primary::menu-indicator{width:0px;} QComboBox{padding:3px 6px;}")
-_HELP = ("Wheel or + / − = zoom · drag = pan · click = select · Shift/Ctrl+drag = box select / "
+_HELP = ("Wheel or + / − = zoom (when the page scrolls, the wheel scrolls it: click the image "
+         "first or hold Ctrl to zoom) · drag = pan · click = select · Shift/Ctrl+drag = box select / "
          "deselect · right-click = erase · Ctrl+Z / Ctrl+Shift+Z = undo / redo · drag the scale "
-         "bar to move it.")
+         "bar (Select / pan tool) to move it.")
 
 _CANVAS_FAMILY = []
 
@@ -249,8 +250,31 @@ class _View(QGraphicsView):
         self._sb_last = None
         self._fitting = False
 
+    def _page(self):
+        """The scroll area the editor's tab sits in (None outside the app)."""
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                return w
+            w = w.parentWidget()
+        return None
+
+    def _page_scrolls(self):
+        """True when the page around the editor (the tab's scroll area) can scroll."""
+        page = self._page()
+        return page is not None and page.verticalScrollBar().maximum() > 0
+
     def wheelEvent(self, e):
-        self.zoom_by(1.2 if e.angleDelta().y() > 0 else 1.0 / 1.2)
+        # CT-R2 N10: on a page that scrolls (a small window) the wheel over the image scrolls
+        # the PAGE, so the rows below the image stay reachable; it zooms when Ctrl is held, when
+        # the image has the focus (click it first), or when the page does not scroll.
+        if (e.modifiers() & Qt.ControlModifier) or self.hasFocus() or not self._page_scrolls():
+            self.zoom_by(1.2 if e.angleDelta().y() > 0 else 1.0 / 1.2)
+        else:
+            # handed to the page's scroll bar explicitly (Qt does not pass a synthesized wheel
+            # event on to the parent, and this way every wheel event behaves the same)
+            QApplication.sendEvent(self._page().verticalScrollBar(), e.clone())
+        e.accept()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -288,8 +312,9 @@ class _View(QGraphicsView):
             self.owner._erase_at(self._press_scene); return
         if e.button() != Qt.LeftButton:
             return super().mousePressEvent(e)
-        # grab the scale bar from any tool
-        if self.owner._sb_hit(self._press_scene):
+        # the scale bar is grabbed by the Select / pan tool only: a Detect-area box or a circle
+        # started on it used to move the bar and mark the plate edited (CT-R2 N12)
+        if self.owner.tool == TOOL_SELECT and self.owner._sb_hit(self._press_scene):
             self._sb_drag = True; self._sb_last = self._press_scene
             self.setCursor(Qt.SizeAllCursor); return
         tool = self.owner.tool
@@ -465,10 +490,12 @@ class PlaqueCanvas(QWidget):
             q = dict(p); q["_uid"] = self._next_uid(); self._plaques.append(q)
         self._det_uids = set(p["_uid"] for p in self._plaques)   # the detection result, for "edited"
         self._reorder()          # number 1..N top-to-bottom from the very first render
+        self._retag()
         self.tool = TOOL_SELECT
         self.selected = set()
         self._undo = []
         self._redo = []
+        self._dish_step_open = False    # consecutive Dish-box changes merge into one undo step
         # CT-R1 F8: set by any edit that Open / Re-detect / Orient would throw away (a plaque
         # edit, a hand calibration, a scale-bar change). Never cleared: a new detection makes
         # a new editor.
@@ -568,7 +595,7 @@ class PlaqueCanvas(QWidget):
     def counts(self):
         """How the plaques on screen came about: {'detected', 'detect_area', 'by_hand'}."""
         cls = [pgui.plaque_class(p) for p in self._plaques]
-        return {"detected": sum(c in ("auto", "watershed") for c in cls),
+        return {"detected": sum(c in ("auto", "watershed", "nosize") for c in cls),
                 "detect_area": sum(c == "region" for c in cls),
                 "by_hand": sum(c == "manual" for c in cls)}
 
@@ -591,9 +618,12 @@ class PlaqueCanvas(QWidget):
                 "orientation": list(d.get("orientation") or []),
                 # plaque-size scale and dish provenance (CT-R1 detection D1-D4)
                 "scale": d.get("scale"),
-                "detection": {k: d[k] for k in ("scale", "dish_source", "dish_reason",
-                                                "n_outside_dish", "dish_warnings", "sources")
-                              if k in d}}
+                "detection": dict({k: d[k] for k in ("scale", "dish_source", "dish_reason",
+                                                     "n_outside_dish", "dish_warnings")
+                                   if k in d},
+                                  # CT-R2 N5: the plaques NOW on the plate, by SOURCE value
+                                  **({"sources": pgui.source_counts_now(self._plaques)}
+                                     if d.get("sources") is not None else {}))}
 
     def _pub(self):
         """The result's own Published flag (None only for a result that carries none)."""
@@ -961,13 +991,14 @@ class PlaqueCanvas(QWidget):
 
     def _apply_ruler_scale(self, ppm):
         """Set mm/px directly from a ruler measurement (independent of dish detection)."""
-        self._push_undo()                       # CT-R1 F20: a calibration can be undone
+        self._push_undo("the Ruler calibration")   # CT-R1 F20: a calibration can be undone
         self.ppm = float(ppm)
         self._calib_source = "ruler"
         # keep plate_mm consistent so the Set-dish tool still works afterward
         if self.plate and self.plate.get("diam_px"):
             self.plate_mm = self.ppm * self.plate["diam_px"]
         self._sync_det()
+        self._retag(); self._refresh_key()
         self._layout_cache = None
         self._draw_plate(); self._draw_scalebar(); self._render()
         self._update_hint("scale set from the ruler: %.4f mm/px  (%.2f px/mm) — Undo restores the old scale"
@@ -979,7 +1010,7 @@ class PlaqueCanvas(QWidget):
     def _apply_dish(self, cx, cy, r, diam_mm=None):
         """Set the dish to a manual circle and recompute mm/px. diam_mm = the real
         diameter (mm) of the rim just drawn; when given it becomes the working plate size."""
-        self._push_undo()                       # CT-R1 F20: a calibration can be undone
+        self._push_undo("the Set plate calibration")   # CT-R1 F20: a calibration can be undone
         diam = 2.0 * r
         self.plate = {"center": (cx, cy), "radius": r, "diam_px": diam, "axis_ratio": 1.0}
         if diam_mm and diam_mm > 0:
@@ -989,6 +1020,7 @@ class PlaqueCanvas(QWidget):
         self._calib_source = "set plate"
         # propagate to the shared detection dict so the table + summary card recompute
         self._sync_det()
+        self._retag(); self._refresh_key()
         self._layout_cache = None
         self._draw_plate(); self._draw_scalebar(); self._render()
         self._update_hint("plate set by hand: Ø=%.0f px = %g mm · %.4f mm/px — Undo restores the old scale"
@@ -1007,13 +1039,30 @@ class PlaqueCanvas(QWidget):
                               "rescale — use Set plate or the Ruler")
             return False
         mm = float(mm)
+        # CT-R2 N6: a Dish-box change is its own undo step, so undoing a plaque edit never
+        # changes the calibration silently. Typing "85" fires twice ("8", "85"): consecutive
+        # Dish changes with nothing in between are ONE step, named from its first value.
+        if self._dish_step_open and self._undo:
+            start = self._undo[-1].get("dish_from")
+        else:
+            start = self.plate_mm
+            self._push_undo("the Dish size change", dirty=False)
+            self._undo[-1]["dish_from"] = start
+        self._undo[-1]["what"] = "the Dish size change (%s → %g mm)" % (
+            ("%g mm" % start) if start else "pixels only", mm)
+        self._dish_step_open = True
         if mm <= 0:
             self.plate_mm = 0.0
             self.ppm = None
         else:
             self.plate_mm = mm
             self.ppm = mm / float(diam_px)
+        # CT-R2 N7: the scale now comes from the dish and the Dish box, whatever set it before
+        # (the Ruler included) -- except a rim drawn by hand with Set plate, which stays a hand
+        # calibration ("set plate", so the result still counts as edited)
+        self._calib_source = "set plate" if self._calib_source == "set plate" else "dish"
         self._sync_det()
+        self._retag(); self._refresh_key()
         self._layout_cache = None
         self._draw_plate(); self._draw_scalebar(); self._render()
         self._update_hint("dish = %g mm  ->  %s"
@@ -1162,12 +1211,13 @@ class PlaqueCanvas(QWidget):
         if self.label_mode == "none" or not self._plaques:
             return None
         g = self._sb_g
-        sig = (tuple(p.get("_uid") for p in self._plaques), self.label_mode, self.ppm,
+        sig = (tuple((p.get("_uid"), p.get("qc_flag")) for p in self._plaques), self.label_mode, self.ppm,
                (g["x0"], g["y0"], g["length_px"], g["label"]) if g else None, self._key_rect)
         if self._layout_cache is not None and self._layout_cache[0] == sig:
             return self._layout_cache[1]
         m = pgui.figure_metrics(self.orig_bgr.shape)
-        texts = [pgui.label_text(i, p["area_pxl"], self.ppm, self.label_mode, self._pub())
+        texts = [pgui.label_text(i, p["area_pxl"], self.ppm, self.label_mode, self._pub(),
+                                 note=pgui.size_note(p))
                  for i, p in enumerate(self._plaques, start=1)]
         sizes = [pgui.text_size(s, m["font_px"], m["stroke"]) for s in texts]
         avoid = [pgui.scalebar_rect(g)] if g else []
@@ -1190,6 +1240,8 @@ class PlaqueCanvas(QWidget):
             pen = QPen(_SEL if sel else QColor(*rgb), 2.4 if sel else 1.4); pen.setCosmetic(True)
             if style == "dashed" and not sel:
                 pen.setStyle(Qt.DashLine)      # dashed + pink = "overlaps a neighbour"
+            elif style == "dotted" and not sel:
+                pen.setStyle(Qt.DotLine)       # dotted = counted, size not used (CT-R2 N3)
             if p["kind"] == "circle":
                 r = float(p.get("radius", math.sqrt(max(p["area_pxl"], 1) / math.pi)))
                 cx, cy = p["center"]
@@ -1309,7 +1361,7 @@ class PlaqueCanvas(QWidget):
         if not self.selected:
             self._update_hint("nothing selected — click plaques (they turn red) first")
             return
-        self._push_undo()
+        self._push_undo("the removal of %d selected plaque(s)" % len(self.selected))
         n = len(self.selected)
         self._plaques = [p for p in self._plaques if p.get("_uid") not in self.selected]
         self.selected.clear()
@@ -1336,12 +1388,17 @@ class PlaqueCanvas(QWidget):
             self._draw_plate(); self._draw_scalebar()
             self.calibration_changed.emit(self.plate_mm)
 
-    def _push_undo(self):
-        self._undo.append(self._snapshot())
+    def _push_undo(self, what="the last change", dirty=True):
+        """One undo step, named (`what`) so Undo / Redo can say what they undid (CT-R2 N6)."""
+        snap = self._snapshot()
+        snap["what"] = what
+        self._undo.append(snap)
         if len(self._undo) > 80:
             self._undo.pop(0)
         self._redo = []
-        self._mark_dirty()
+        self._dish_step_open = False
+        if dirty:
+            self._mark_dirty()
 
     def _reorder(self):
         # Number plaques 1..N top-to-bottom, then left-to-right, so the on-canvas
@@ -1358,8 +1415,14 @@ class PlaqueCanvas(QWidget):
         for p, f in zip(self._plaques, flags):
             p["overlap"] = bool(f)
 
+    def _retag(self):
+        """Each plaque's QC flag (the table's own call), so the plaques whose size is not used
+        are drawn, labelled and keyed as such on screen exactly as in the export (CT-R2 N3)."""
+        pgui.tag_qc(self._plaques, self.orig_bgr, self.ppm, plate=self.plate)
+
     def _changed(self, msg=None):
         self._reorder()
+        self._retag()
         self._refresh_key()
         self._render(); self._update_hint(msg)
         if self._on_change:
@@ -1369,7 +1432,7 @@ class PlaqueCanvas(QWidget):
         idx = self._find(scene_pt.x(), scene_pt.y())
         if idx is None:
             self._update_hint("nothing to erase there"); return
-        self._push_undo()
+        self._push_undo("the erase of plaque %d" % (idx + 1))
         removed = self._plaques.pop(idx)
         self.selected.discard(removed.get("_uid"))
         self._changed("erased 1 plaque (%s)" % pgui.class_name(
@@ -1385,10 +1448,9 @@ class PlaqueCanvas(QWidget):
             self._update_hint("couldn't auto-trace there — raise 'Trace tol', use Draw shape, "
                               "or drag to draw a circle"); return
         hull, area, center = res
-        self._push_undo()
-        self._plaques.append({"source": "manual", "kind": "contour", "_uid": self._next_uid(),
-                              "contour": hull, "area_pxl": float(area), "center": center})
-        self._changed("added a traced plaque")
+        self._commit_new({"source": "manual", "kind": "contour", "_uid": self._next_uid(),
+                          "contour": hull, "area_pxl": float(area), "center": center},
+                         "added a traced plaque")
 
     def _add_freehand(self, pts):
         """Store a user-drawn outline as a real (possibly non-convex) contour plaque, so
@@ -1416,10 +1478,10 @@ class PlaqueCanvas(QWidget):
             center = (m["m10"] / m["m00"], m["m01"] / m["m00"])
         else:
             center = (float(arr[:, 0].mean()), float(arr[:, 1].mean()))
-        self._push_undo()
-        self._plaques.append({"source": "freehand", "kind": "contour", "_uid": self._next_uid(),
-                              "contour": arr.reshape(-1, 1, 2), "area_pxl": area, "center": center})
-        self._changed("added a freehand outline" + (" (the part outside the image was left out)" if outside else ""))
+        self._commit_new({"source": "freehand", "kind": "contour", "_uid": self._next_uid(),
+                          "contour": arr.reshape(-1, 1, 2), "area_pxl": area, "center": center},
+                         "added a freehand outline" + (" (the part outside the image was left out)"
+                                                       if outside else ""))
 
     def _add_circle(self, center, r):
         cx, cy = center.x(), center.y()
@@ -1432,22 +1494,62 @@ class PlaqueCanvas(QWidget):
         if self.plate and self.plate.get("radius") and r > float(self.plate["radius"]):
             self._update_hint("that circle is larger than the dish, so it was not added — drag "
                               "from the plaque's centre to its edge"); return
-        self._push_undo()
         if cx - r < 0 or cy - r < 0 or cx + r > W - 1 or cy + r > H - 1:
             # only the part on the photo can be measured: store that part as the outline
             cnt = clipped_circle_contour(cx, cy, r, self.orig_bgr.shape)
             area = float(cv2.contourArea(cnt))
             m = cv2.moments(cnt)
             c = (m["m10"] / m["m00"], m["m01"] / m["m00"]) if m["m00"] else (cx, cy)
-            self._plaques.append({"source": "manual", "kind": "contour", "_uid": self._next_uid(),
-                                  "contour": cnt, "area_pxl": area, "center": c})
-            self._changed("added a circle; it runs past the image edge, so only the part on the "
-                          "image is measured (%.0f of %.0f px²)" % (area, math.pi * r * r))
+            self._commit_new({"source": "manual", "kind": "contour", "_uid": self._next_uid(),
+                              "contour": cnt, "area_pxl": area, "center": c},
+                             "added a circle; it runs past the image edge, so only the part on the "
+                             "image is measured (%.0f of %.0f px²)" % (area, math.pi * r * r))
             return
-        self._plaques.append({"source": "manual", "kind": "circle", "_uid": self._next_uid(),
-                              "center": (cx, cy), "radius": float(r),
-                              "area_pxl": float(math.pi * r * r)})
-        self._changed("added a circle")
+        self._commit_new({"source": "manual", "kind": "circle", "_uid": self._next_uid(),
+                          "center": (cx, cy), "radius": float(r),
+                          "area_pxl": float(math.pi * r * r)}, "added a circle")
+
+    @staticmethod
+    def _contains(p, x, y):
+        """True when (x, y) lies inside plaque p's outline."""
+        if p["kind"] == "circle":
+            r = float(p.get("radius", math.sqrt(max(p["area_pxl"], 1) / math.pi)))
+            return math.hypot(x - p["center"][0], y - p["center"][1]) <= r
+        return cv2.pointPolygonTest(np.asarray(p["contour"], dtype=np.int32).reshape(-1, 1, 2),
+                                    (float(x), float(y)), False) >= 0
+
+    def _replaced_by(self, newp):
+        """[(index, why)] of the plaques a new hand outline REPLACES (CT-R2 N4): those flagged
+        CORE? (outlined at the dark centre only) or NESTED (inside another plaque) whose centre
+        lies inside the new outline -- the user has drawn the plaque they belong to. Any other
+        plaque inside it stays: it is a plaque of its own."""
+        import plaque_qc
+        out = []
+        for i, q in enumerate(self._plaques):
+            f = q.get("qc_flag")
+            if plaque_qc.has_flag(f, "CORE?"):
+                why = "dark centre only"
+            elif plaque_qc.has_flag(f, "NESTED"):
+                why = "inside another plaque"
+            else:
+                continue
+            if self._contains(newp, *q["center"]):
+                out.append((i, why))
+        return out
+
+    def _commit_new(self, newp, msg):
+        """Add a hand-made plaque as ONE undo step; a CORE? / NESTED plaque whose centre it
+        contains is replaced, so the count does not grow (CT-R2 N4)."""
+        rep = self._replaced_by(newp)
+        self._push_undo("the added plaque")
+        if rep:
+            gone = set(self._plaques[i]["_uid"] for i, _w in rep)
+            self._plaques = [q for q in self._plaques if q["_uid"] not in gone]
+            self.selected -= gone
+            msg = "replaced %s with your outline" % " and ".join(
+                "plaque %d (%s)" % (i + 1, w) for i, w in rep)
+        self._plaques.append(newp)
+        self._changed(msg)
 
     def _engine_label(self):
         st = self.export_state()
@@ -1476,7 +1578,7 @@ class PlaqueCanvas(QWidget):
         if not fresh:
             self._update_hint("no new plaques in that area with the %s engine's gates — use Add or "
                               "Draw shape for a plaque the engine does not accept" % eng); return
-        self._push_undo()
+        self._push_undo("the %d Detect-area plaque(s)" % len(fresh))
         for p in fresh:
             p["_uid"] = self._next_uid(); self._plaques.append(p)
         self._changed("added %d detect-area plaque(s) (%s gates)" % (len(fresh), eng))
@@ -1484,16 +1586,25 @@ class PlaqueCanvas(QWidget):
     def _undo_last(self):
         if not self._undo:
             self._update_hint("nothing to undo"); return
-        self._redo.append(self._snapshot())
-        self._restore(self._undo.pop())
-        self._changed("undid the last change (Ctrl+Shift+Z redoes it)")
+        s = self._undo.pop()
+        cur = self._snapshot(); cur["what"] = s.get("what", "the last change")
+        self._redo.append(cur)
+        self._restore(s)
+        self._dish_step_open = False
+        # CT-R2 N13: the plate now matches neither the saved files nor the detection
+        self._mark_dirty()
+        self._changed("undid %s (Ctrl+Shift+Z redoes it)" % s.get("what", "the last change"))
 
     def _redo_last(self):
         if not self._redo:
             self._update_hint("nothing to redo"); return
-        self._undo.append(self._snapshot())
-        self._restore(self._redo.pop())
-        self._changed("redid the change")
+        s = self._redo.pop()
+        cur = self._snapshot(); cur["what"] = s.get("what", "the change")
+        self._undo.append(cur)
+        self._restore(s)
+        self._dish_step_open = False
+        self._mark_dirty()
+        self._changed("redid %s" % s.get("what", "the change"))
 
     # ---- view fit / zoom --------------------------------------------------- #
     def _fit_to_scene(self):

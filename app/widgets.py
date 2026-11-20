@@ -20,10 +20,19 @@ COLUMN_TOOLTIPS = {
                    "lower = irregular / comet / elongated. Circles you draw score 1.",
     "OVERLAP": "yes = this plaque touches/overlaps another, so its size is unreliable. "
                "Tick 'Exclude overlapping plaques' to drop these from the stats.",
-    "SOURCE": "How the plaque was found: auto (detector), small (detector, found only at the small "
-              "scale of the Auto plaque size), manual (you added it), "
-              "freehand (you drew the outline), region (the Detect-area tool), or watershed "
-              "(split from a touching pair).",
+    # CT-R2 N9: the stored values, each with what it means (the flag line uses the same words)
+    "SOURCE": "How the plaque was found:\n"
+              "auto — the detector's standard pass (its full outline).\n"
+              "split — Auto plaque size: separated from touching neighbours (a cluster split at "
+              "its dark centres).\n"
+              "standard-relaxed — Auto: the standard pass's own outline of a halo that its shape / "
+              "size gates had rejected.\n"
+              "small — Auto: found only by the small-scale pass; with QC flag CORE? it is "
+              "outlined at the dark centre only.\n"
+              "watershed — split from a touching pair by 'Split touching plaques'.\n"
+              "region — added by the Detect-area tool.\n"
+              "manual — you added it (Add: traced or a circle).\n"
+              "freehand — you drew its outline (Draw shape).",
     # CT-R1 F24: the one column with no explanation
     "QC_FLAG": "Rows that deserve a second look (OK = none). Several can apply, joined with |.\n"
                "EDGE — touches the image border or reaches the lawn edge (0.93 of the dish radius).\n"

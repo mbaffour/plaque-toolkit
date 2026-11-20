@@ -591,7 +591,9 @@ def test_f14_no_mm_scale_shows_pixels_and_says_why(window, qtbot, dialogs, tmp_p
     assert tab._metric_caps["median"].text() == "MEDIAN Ø (px)"
     px = pd.to_numeric(tab.model.dataframe()["DIAMETER_PXL"]).median()
     assert tab._metrics["median"].text() == "%.1f" % px
-    assert "No dish found: sizes are in pixels. Use Set plate or the Ruler to calibrate." in tab.flag_label.text()
+    # CT-R2 (coordinator B): the Batch Problem column's words
+    import plaque_qc
+    assert plaque_qc.NO_DISH_WARNING in tab.flag_label.text()
     shown = _screen_df(tab)
     assert set(shown["DIAMETER_MM"]) == {"—"} and set(shown["AREA_MM2"]) == {"—"}
     # the 85 button explains why nothing happened

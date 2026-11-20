@@ -291,9 +291,12 @@ def test_d1_batch_records_plaque_size_and_dish(tmp_path, mixed_plate):
 
 def test_d1_validate_and_batch_mode_tables_use_auto():
     from app import batch_measure, validate
-    assert batch_measure.MODE_KWARGS["current"] == {"scale": "auto"}
-    assert batch_measure.MODE_KWARGS["sensitive"] == {"scale": "auto", "sensitive": True}
-    assert validate._MODE_KWARGS["current"] == {"scale": "auto"}
+    # CT-R2 (coordinator A): the plaque size comes from ONE constant, filled in at run time
+    from app import engine_api
+    assert engine_api.DEFAULT_PLAQUE_SIZE == "auto"
+    assert batch_measure.MODE_KWARGS["current"] == {}
+    assert batch_measure.MODE_KWARGS["sensitive"] == {"sensitive": True}
+    assert validate._MODE_KWARGS["current"] == {}
     assert validate._MODE_KWARGS["published"] == {"published": True}
 
 
@@ -771,7 +774,8 @@ def test_d8_flag_line_and_run_metadata_report_edge_sources(qtbot, tmp_path):
     tab.image_path = path
     tab._detect()
     qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=60_000)
-    assert "Edges: 1 standard, 2 split from clusters, 0 small." in tab.flag_label.text()
+    # CT-R2 N9: the SOURCE column's own words
+    assert "Edges: 1 auto (standard pass), 2 split, 0 small." in tab.flag_label.text()
     det = engine_api.detect_single(path, plate_mm=90, scale="auto")
     pgui.save_results(det["plaques"], det["orig_bgr"], path, str(tmp_path / "o"), det["pxl_per_mm"],
                       det["lawn_gray"], plate=det["plate"], published=False, sensitive=False,
@@ -851,7 +855,7 @@ def test_d10a_size_ok_rule():
     c = q.size_left_out_counts(["OK", "CORE?", "CORE?|EDGE", "SPLIT|NO_SIZE", "SPLIT"])
     assert c == {"core": 2, "no_size": 1}
     assert q.left_out_phrase(c) == ("2 outlined at the dark centre only and "
-                                    "1 split pieces whose size is not reliable")
+                                    "1 split piece whose size is not reliable")   # CT-R2 N5: grammar
     assert q.left_out_phrase({"core": 0, "no_size": 0}) == ""
 
 

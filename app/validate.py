@@ -55,11 +55,12 @@ def _measure_fn():
 IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 
 # mode -> kwargs for engine_api.detect_single (precise is handled separately via detect_precise)
-# Current / Sensitive run the app's default plaque size, Auto (both scales; CT-R1 detection D1)
+# Current / Sensitive run the app's default plaque size (engine_api.DEFAULT_PLAQUE_SIZE)
 _MODE_KWARGS = {
     "published": {"published": True},
-    "current": {"scale": "auto"},
-    "sensitive": {"scale": "auto", "sensitive": True},
+    # the plaque size is engine_api.DEFAULT_PLAQUE_SIZE, added at run time (CT-R2 coordinator A)
+    "current": {},
+    "sensitive": {"sensitive": True},
 }
 
 
@@ -295,6 +296,9 @@ def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=N
         kwargs = _MODE_KWARGS.get(mode)
         if kwargs is None:
             raise ValueError("unknown mode %r (expected one of precise/published/current/sensitive)" % mode)
+        kwargs = dict(kwargs)
+        if mode in ("current", "sensitive"):
+            kwargs["scale"] = engine_api.DEFAULT_PLAQUE_SIZE
         det = engine_api.detect_single(image_path, plate_mm=plate_mm, **kwargs)
 
     ppm = det.get("pxl_per_mm")
