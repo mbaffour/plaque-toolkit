@@ -35,7 +35,7 @@ def test_poor_agreement_is_not_described_as_close_agreement():
     sent = _ps(r=-0.0126, icc=-0.0121, pearson_p=0.958, icc_lo=-0.40, icc_hi=0.38)
     assert "closely agreed" not in sent
     assert "highly correlated" not in sent
-    assert "did NOT agree at the individual level" in sent
+    assert "did not agree reliably with" in sent       # CT-R3 F6: the verb of the interval's lower limit
     assert "poor agreement" in sent
     assert "cannot be used interchangeably" in sent
 
@@ -52,8 +52,8 @@ def test_excellent_agreement_still_reads_as_agreement():
 @pytest.mark.parametrize("icc,expected", [
     (0.95, "agreed closely with"),
     (0.80, "agreed well with"),
-    (0.60, "agreed only moderately with"),
-    (0.20, "did NOT agree at the individual level with"),
+    (0.60, "agreed moderately with"),
+    (0.20, "did not agree reliably with"),
     (float("nan"), "could not be compared with"),
 ])
 def test_icc_bands(icc, expected):
@@ -86,12 +86,12 @@ def test_the_committed_artefacts_no_longer_contradict_themselves():
         line = sentence[0]
         if "poor agreement" in line:
             assert "closely" not in line and "highly correlated" not in line, name
-            assert "did NOT agree" in line, name
+            assert "did NOT agree" in line or "did not agree" in line, name
 
 
 def test_app_agreement_module_matches():
     s = dict(n=20, r=-0.013, icc=-0.012, bias=0.015, pct_bias=3.6,
              loa_lo=-0.10, loa_hi=0.13, slope=-0.02, icc_lo=-0.40, icc_hi=0.38)   # CT-R2 N8: CI graded
     sent = app_agreement.report_sentence(s)
-    assert "did NOT agree at the individual level" in sent
+    assert "did not agree reliably with" in sent
     assert "poor agreement" in sent

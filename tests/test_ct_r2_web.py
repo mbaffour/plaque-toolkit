@@ -204,7 +204,7 @@ def test_n9_icc_interval_na_always_says_why():
 def test_n9_percentage_bias_blank_when_the_mean_is_near_zero():
     d = _near_zero_df()
     s = B.compute(d, "toolkit_mm", "manual_mm")
-    assert abs(s["pct_bias"]) > 1000                                      # the engine's number
+    assert np.isnan(s["pct_bias"])                    # CT-R3 F2: the engine leaves it out (was > 1000)
     row = dict(B.report_rows(s, "mm"))["mean bias (mm)"]
     assert "n/a: mean near zero" in row and "%" not in row
     z = _zip(d)
@@ -223,9 +223,10 @@ def test_n9_id_like_and_convert_on_diameter_columns_warn():
     w = B.column_warnings(d, "plaque_id", "manual_mm", False)
     assert len(w) == 1 and "plaque_id" in w[0] and "identifier" in w[0]
     assert B.column_warnings(d, "toolkit_mm", "manual_mm", False) == []
-    w = B.column_warnings(_area_diam_df(), "DIAMETER_MM", "fiji_diam", True)
-    assert len(w) == 2 and all("looks like a diameter" in x for x in w)
-    assert B.column_warnings(_area_diam_df(), "AREA_MM2", "fiji_area", True) == []
+    # CT-R3 F1/F5: "Convert area" on diameter columns is a blocking message of its own
+    w = B.convert_problem(_area_diam_df(), "DIAMETER_MM", "fiji_diam", True)
+    assert w.count("looks like a diameter") == 2 and "downloads stay off" in w
+    assert B.convert_problem(_area_diam_df(), "AREA_MM2", "fiji_area", True) == ""
 
 
 # =========================================================================== A: shared helpers
@@ -371,13 +372,15 @@ def test_n6_figure_size_uses_the_engines_final_size_else_the_png():
     png = A.fig_bytes(fig, "png")
     from PIL import Image
     w_px, h_px = Image.open(io.BytesIO(png)).size
-    if not any(hasattr(fig, n) for n in ("final_size_in", "figure_size_in_final")):     # before the engine merge
-        assert A.figure_size_in(fig, png) == (pytest.approx(w_px / 300.0), pytest.approx(h_px / 300.0))
-    fig.final_size_in = (9.0, 7.4)                                  # what the engine will expose
-    assert A.figure_size_in(fig, png) == (9.0, 7.4)
+    # CT-R3: the PNG that is served is the truth (the web line must equal the file); the engine's
+    # final size is only the fallback when there are no PNG bytes to read
+    assert A.figure_size_in(fig, png) == (pytest.approx(w_px / 300.0), pytest.approx(h_px / 300.0))
+    fig.final_size_in = (9.0, 7.4)                                  # what the engine exposes
+    assert A.figure_size_in(fig, png) == (pytest.approx(w_px / 300.0), pytest.approx(h_px / 300.0))
+    assert A.figure_size_in(fig, b"") == (9.0, 7.4)
     del fig.final_size_in
     fig.figure_size_in_final = (8.0, 6.0)                           # the other name it may use
-    assert A.figure_size_in(fig, png) == (8.0, 6.0)
+    assert A.figure_size_in(fig, b"") == (8.0, 6.0)
     R1.plt.close(fig)
 
 
@@ -510,10 +513,14 @@ def test_b_agreement_grade_is_the_engines_interval_grade_everywhere(n):
     else:
         assert "no agreement grade without an interval" in cell
     sent = B.sentence_of(s, "mm", "diameters", "Plaque Toolkit", "Fiji / ImageJ")
-    assert (("graded on the interval" in sent) if g else ("no agreement grade" in sent))
+    if n >= ag.VERDICT_MIN_N:            # CT-R3 F7: below 5 pairs the sentence has no ICC at all
+        assert (("graded on the interval" in sent) if g else ("no agreement grade" in sent))
+    else:
+        assert "ICC(A,1) =" not in sent and "need at least 5 pairs" in sent
     z = _zip(d)
     rep = z.read("agreement_report_diameters.md").decode()
-    assert cell in rep and sent in rep                         # screen == ZIP == sentence
+    assert sent in rep                                         # screen == ZIP == sentence
+    assert (cell in rep) if n >= ag.VERDICT_MIN_N else ("n/a (needs 5 pairs)" in rep)   # CT-R3 F7
     csv = pd.read_csv(io.BytesIO(z.read("agreement_stats_diameters.csv")))
     assert (csv["icc_grade_ci"].fillna("")[0]) == g
 
@@ -529,7 +536,7 @@ def test_a_figure_size_is_the_engines_final_size():
     png = A.fig_bytes(fig, "png")
     assert hasattr(fig, "final_size_in") or hasattr(fig, "figure_size_in_final")
     real = tuple(getattr(fig, "final_size_in", None) or fig.figure_size_in_final)
-    assert A.figure_size_in(fig, png) == pytest.approx(real)
+    assert A.figure_size_in(fig, png) == pytest.approx(real, abs=0.05)   # CT-R3: the PNG, to 0.05 in
     assert real[1] > 5.4 + 0.15 and "taller than the Height slider" in A.size_line(real, sel)
     R1.plt.close(fig)
 

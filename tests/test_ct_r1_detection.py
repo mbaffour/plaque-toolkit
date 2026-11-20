@@ -897,7 +897,7 @@ def test_d10a_analyze_add_current_plate_leaves_out_core_rows(qtbot, monkeypatch)
     st.add_cur_btn.click()
     assert st._plates[0]["diam"] == [5.1, 5.3, 5.0] and st._plates[0]["area"] == [20.4, 22.1, 19.6]
     assert win.statusBar().currentMessage() == (
-        "Added a plate to 'T4' (3 plaques; 2 outlined at the dark centre only were left out of the sizes).")
+        "Added a plate to 'T4' (3 plaques; 2 plaques outlined at the dark centre only were left out of the sizes).")
 
 
 def test_d10a_analyze_add_csv_and_import_leave_out_core_rows(qtbot, monkeypatch, tmp_path):
@@ -912,14 +912,14 @@ def test_d10a_analyze_add_csv_and_import_leave_out_core_rows(qtbot, monkeypatch,
     assert [p["diam"] for p in st._plates] == [[5.1, 5.3, 5.0], [5.1, 5.3, 2.4, 5.0, 2.6]]
     # CT-R2 F1 (tab part): the file without QC_FLAG is named once in the same message
     assert win.statusBar().currentMessage() == (
-        "Added 2 replicate plate(s); 2 outlined at the dark centre only were left out of the sizes. "
+        "Added 2 replicate plate(s); 2 plaques outlined at the dark centre only were left out of the sizes. "
         "data_plain.csv has no QC_FLAG column: every row was used; plaques outlined at the dark "
         "centre only, if any, cannot be told apart.")
     monkeypatch.setattr(ST._AssignDialog, "exec", lambda self: ST.QDialog.Accepted)
     q["openN"].append(([str(flagged)], ""))
     st.assign_btn.click()
     assert st._plates[-1]["diam"] == [5.1, 5.3, 5.0]
-    assert "; 2 outlined at the dark centre only were left out of the sizes." in win.statusBar().currentMessage()
+    assert "; 2 plaques outlined at the dark centre only were left out of the sizes." in win.statusBar().currentMessage()
 
 
 def test_d10a_measure_tab_and_batch_size_summary_leave_out_core_and_no_size(qtbot, tmp_path):
@@ -938,7 +938,7 @@ def test_d10a_measure_tab_and_batch_size_summary_leave_out_core_and_no_size(qtbo
     tab.image_path = SAMPLE_TIF
     tab._detect()
     qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=120_000)
-    assert ("Sizes from 21 of 41 plaques (10 outlined at the dark centre only and 10 split pieces "
+    assert ("Sizes from 21 of 41 plaques (10 plaques outlined at the dark centre only and 10 split pieces "
             "whose size is not reliable are counted but left out of the size summary).") \
         in tab.flag_label.text()
     df = tab.model.dataframe()

@@ -381,8 +381,8 @@ def test_f12_legend_key_follows_the_plate_and_matches_on_figure(window, qtbot, d
     ed.key_cb.setChecked(True)
     out = ed.export_figure(str(tmp_path / "with_key.png"))
     fig = cv2.imread(out)
-    patch = pgui.key_image_for(fig.shape, ed.legend_key())
-    x, y = pgui.key_origin(fig.shape, patch.shape)
+    patch = pgui.key_image_for(ed.orig_bgr.shape, ed.legend_key())     # CT-R3 F5: beside the
+    x, y = pgui.key_origin(ed.orig_bgr.shape, patch.shape)              # plate image, not on it
     np.testing.assert_array_equal(fig[y:y + patch.shape[0], x:x + patch.shape[1]], patch)
     # ... and the canvas shows that same picture at that same place
     items = [it for it in ed.scene.items() if isinstance(it, QGraphicsPixmapItem) and it.zValue() == 24]
@@ -593,7 +593,7 @@ def test_f14_no_mm_scale_shows_pixels_and_says_why(window, qtbot, dialogs, tmp_p
     assert tab._metrics["median"].text() == "%.1f" % px
     # CT-R2 (coordinator B): the Batch Problem column's words
     import plaque_qc
-    assert plaque_qc.NO_DISH_WARNING in tab.flag_label.text()
+    assert plaque_qc.no_dish_sentence() in tab.flag_label.text()    # CT-R3 F8
     shown = _screen_df(tab)
     assert set(shown["DIAMETER_MM"]) == {"—"} and set(shown["AREA_MM2"]) == {"—"}
     # the 85 button explains why nothing happened

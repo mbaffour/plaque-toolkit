@@ -183,7 +183,8 @@ def test_icc_interval_is_the_exact_mcgraw_wong_f_interval_in_both_copies():
 def test_no_icc_interval_below_five_pairs():
     s = ap.full_stats([1.0, 2.0, 3.1, 4.2], [1.1, 2.0, 3.0, 4.0])
     assert math.isnan(s["icc_lo"]) and math.isnan(s["icc_hi"])
-    assert "n too small for an interval" in ap.report_sentence(s)
+    sent = ap.report_sentence(s)                # CT-R3 F7: below 5 pairs numbers only, no ICC at all
+    assert "ICC(A,1) =" not in sent and "need at least 5 pairs" in sent
 
 
 def test_icc_interval_coverage_is_close_to_95_percent():
@@ -275,7 +276,7 @@ def test_one_sentence_everywhere_with_three_decimals_and_no_double_plaque():
     assert a == b
     assert a.startswith("Plaque diameters measured with Plaque Toolkit agreed closely with Fiji / ImageJ")
     assert "Plaque plaque" not in a and "r = 0.997" in a and "ICC(A,1) = 0.997" in a
-    assert "No proportional bias was detected" in a and "each limit ±" in a      # CT-R2 N8 wording
+    assert "There is no evidence of a proportional bias" in a and "each limit ±" in a      # CT-R3 F7 wording
 
 
 def test_a_constant_offset_is_not_called_significant_from_float_noise():
@@ -285,7 +286,8 @@ def test_a_constant_offset_is_not_called_significant_from_float_noise():
         assert s["sd"] == 0.0 and math.isnan(s["t_p"]) and math.isnan(s["ba_slope_p"])
         sent = mod.report_sentence(s)
         assert "significantly different" not in sent and "difference from zero not testable" in sent
-        assert "depend on plaque size" not in sent and "spread is zero" in sent
+        assert "depend on plaque size" not in sent and "differ by a constant +0.100 mm" in sent
+        assert "every difference was the same" in sent and "limits of agreement of" not in sent
 
 
 def test_nan_p_values_read_not_testable_never_significant():
@@ -431,8 +433,8 @@ def test_cli_writes_key_files_beside_every_figure(tmp_path):
 def test_agreement_tab_key_controls_follow_the_current_figure(agreement_tab, tmp_path):
     tab = agreement_tab
     tab._example()
-    assert tab.key_btn.isEnabled() and tab.key_text.text().startswith("within the limits of agreement (")
-    assert "outside" not in tab.key_text.text()
+    assert tab.key_btn.isEnabled() and tab.key_text.toPlainText().startswith("within the limits of agreement (")
+    assert "outside" not in tab.key_text.toPlainText()
     assert tab.canvas.figure.legends                      # placed on the figure by default
     tab.key_cb.setChecked(False)
     assert not tab.canvas.figure.legends
@@ -443,7 +445,7 @@ def test_agreement_tab_key_controls_follow_the_current_figure(agreement_tab, tmp
     tab.tool_in.setPlainText("\n".join("%.6f" % v for v in s["tool"]))
     tab.fiji_in.setPlainText("\n".join("%.6f" % v for v in s["fiji"]))
     tab._compute()
-    assert "outside the 95% limits of agreement (" in tab.key_text.text()
+    assert "outside the 95% limits of agreement (" in tab.key_text.toPlainText()
 
 
 # =========================================================================== 4. DA-F8 Compare vs Fiji
@@ -524,7 +526,7 @@ def test_clear_and_failed_compute_leave_no_stale_result(agreement_tab):
     assert tab.canvas is not None and tab.report.toPlainText()
     tab._clear()
     assert tab.canvas is None and tab.fig_placeholder is not None
-    assert tab.report.toPlainText() == "" and tab.key_text.text() == ""
+    assert tab.report.toPlainText() == "" and tab.key_text.toPlainText() == ""
     assert all(v.text() == "—" for v in tab._metrics.values())
     assert not any(b.isEnabled() for b in tab._result_buttons())
     tab._example()
@@ -593,16 +595,17 @@ def test_validate_scores_only_label_files_and_fails_bad_ones_with_reasons(neutra
     pp = res["per_plate_df"].set_index("label_file")
     assert pp.loc["labels_good.json", "error"] == ""
     assert "1 of 5 labelled plaques have no x_px/y_px" in pp.loc["labels_nocoords.json", "error"]
-    assert "could not locate the plate image" in pp.loc["labels_noimage.json", "error"]
+    assert "was not found next to it or in the chosen folder" in pp.loc["labels_noimage.json", "error"]   # CT-R3
     pm = res["per_mode_df"].iloc[0]
     good = pp.loc["labels_good.json"]
     assert pm["n_plates"] == 1 and pm["tp"] == good["tp"] and pm["fn"] == good["fn"]   # failed rows excluded
-    assert V.summary_status(res) == ("Scored 3 plates x 1 engine; 2 failed (see the last column). "
-                                     "Skipped 1 JSON file that is not a plaque label file.")
+    assert V.summary_status(res) == ("Scored 1 of 3 plates x 1 engine; 2 plates failed (see the last "
+                                     "column). Skipped 1 JSON file that is not a plaque label file.")
     from app import __version__
     sent = V.report_sentence(res, {"current": "Current (corrected)"}, __version__)
     assert sent.startswith("Against 1 hand-corrected plate (5 plaques), the Current (corrected) "
-                           "engine of Plaque Toolkit %s detected plaques with precision" % __version__)
+                           "engine (plaque size Auto) of Plaque Toolkit %s detected plaques with "
+                           "precision" % __version__)
 
 
 def test_validate_with_no_label_files_has_no_zero_row(tmp_path):
@@ -656,7 +659,8 @@ def test_validate_tab_run_status_sentence_and_csv(validate_tab, qt, neutral_plat
     validate_tab.labels.setText(str(d))
     validate_tab._run()
     qt.waitUntil(lambda: validate_tab._res is not None, timeout=120_000)
-    assert validate_tab.status.text().startswith("Scored 3 plates x 1 engine; 2 failed (see the last column).")
+    assert validate_tab.status.text().startswith("Scored 1 of 3 plates x 1 engine; 2 plates failed (see "
+                                                 "the last column).")
     from app import __version__
     assert "Plaque Toolkit %s" % __version__ in validate_tab.sentence.text()
     out = validate_tab._save(str(tmp_path / "res.csv"))

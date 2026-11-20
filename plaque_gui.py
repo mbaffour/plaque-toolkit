@@ -439,6 +439,16 @@ def measure(area_pxl, pxl_per_mm, published=None):
     return dia_pxl, area_mm2, dia_mm
 
 
+def mm_cell(value, pxl_per_mm, ndigits=2):
+    """A millimetre cell of a per-plaque file the APP writes: the rounded value, or NaN (an
+    EMPTY cell in the CSV) when there is no mm scale. CT-R3 F1: no scale = no millimetres;
+    these files said 0.0 mm, which Analyze took as a measured size. The CLI's own files
+    (plaque_size_tool.py default / --published / -small) are frozen and do not use this."""
+    if not pxl_per_mm:
+        return float("nan")
+    return round(float(value), ndigits)
+
+
 def qc_flags(plaques, orig_bgr, pxl_per_mm, plate=None, circularities=None):
     """[(QC_FLAG, QC_REASON)] per plaque -- the ONE call behind the Measure table
     (engine_api.measure_table), Save results' data-green CSV, the Batch CSVs and the Compare
@@ -1020,11 +1030,43 @@ def key_image(key, font_px):
     return cv2.imdecode(np.frombuffer(buf.getvalue(), np.uint8), cv2.IMREAD_COLOR)
 
 
-def key_origin(image_shape, key_shape):
-    """Top-left pixel of the embedded key: the image's top-right corner (outside a round dish)."""
+def _key_pad(image_shape):
+    return max(6, int(round(0.015 * int(image_shape[1]))))
+
+
+def key_below(image_shape, key_shape):
+    """True when the key goes BELOW the image, False when to its right: the side that adds
+    the smaller margin (a wide, short key -- the usual plate key -- goes below)."""
     H, W = int(image_shape[0]), int(image_shape[1])
-    pad = max(6, int(round(0.015 * W)))
-    return (max(0, W - pad - int(key_shape[1])), min(pad, max(0, H - int(key_shape[0]))))
+    kh, kw = int(key_shape[0]), int(key_shape[1])
+    pad = _key_pad(image_shape)
+    return (kh + 2 * pad) * max(W, kw + 2 * pad) <= (kw + 2 * pad) * max(H, kh + 2 * pad)
+
+
+def key_origin(image_shape, key_shape):
+    """Top-left pixel of the embedded key: OUTSIDE the image, in a margin below it (left-
+    aligned) or to its right (top-aligned), whichever adds less (key_below). CT-R3 F5: in the
+    top-right corner it covered plaques #1-#3 of sample.tif and cut their labels.
+    ``image_shape`` is the plate image's own shape, not the extended figure's."""
+    H, W = int(image_shape[0]), int(image_shape[1])
+    pad = _key_pad(image_shape)
+    return (pad, H + pad) if key_below(image_shape, key_shape) else (W + pad, pad)
+
+
+def figure_with_key(img_bgr, patch):
+    """CT-R3 F5: the figure with the key beside it -- a NEW image whose top-left W x H pixels
+    are ``img_bgr`` unchanged (outlines, labels, the scale bar where it was), with a white
+    margin below or to the right (key_origin) holding ``patch`` (the stand-alone key picture).
+    The ONE placement behind the plate figure, the Batch overlay, the turbidity overlay and
+    the canvas. Returns (figure, (x, y, w, h) of the key)."""
+    H, W = img_bgr.shape[:2]
+    pad = _key_pad(img_bgr.shape)
+    x, y = key_origin(img_bgr.shape, patch.shape)
+    kh, kw = patch.shape[:2]
+    out = np.full((max(H, y + kh + pad), max(W, x + kw + pad), 3), 255, np.uint8)
+    out[:H, :W] = img_bgr if img_bgr.ndim == 3 else cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+    out[y:y + kh, x:x + kw] = patch
+    return out, (x, y, kw, kh)
 
 
 def key_image_for(image_shape, key):
@@ -1044,18 +1086,13 @@ def key_image_for(image_shape, key):
     return patch
 
 
-def _paste_key(img_bgr, patch):
-    x, y = key_origin(img_bgr.shape, patch.shape)
-    img_bgr[y:y + patch.shape[0], x:x + patch.shape[1]] = patch
-    return (x, y, patch.shape[1], patch.shape[0])
-
-
 def place_key(img_bgr, key):
-    """Paste the key onto the figure (in place). Returns the rectangle used, or None."""
+    """The figure with the key placed beside it (figure_with_key): (figure, key rectangle), or
+    (the image unchanged, None) when there is nothing to key."""
     patch = key_image_for(img_bgr.shape, key)
     if patch is None:
-        return None
-    return _paste_key(img_bgr, patch)
+        return img_bgr, None
+    return figure_with_key(img_bgr, patch)
 
 
 def scalebar_rect(g):
@@ -1083,7 +1120,8 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
     Export all, the side-by-side figure and the Batch overlays (CT-R1 F9).
 
     ``labels``  'numbers' (default), 'numbers + mm' or 'none'; ``draw_numbers=False`` = 'none'.
-    ``key``     True also places the legend key (plate_key) in the top-right corner.
+    ``key``     True also places the legend key (plate_key) OUTSIDE the image, in a white
+                margin below it or to its right (figure_with_key; the image pixels unchanged).
     ``scalebar_mm`` forces the bar length (mm); ``scalebar_anchor`` (x, y in image px) its
     left end. With neither, and ``plate`` known, the bar is auto-sized and placed INSIDE the
     dish (an image corner would fall in the dark surround)."""
@@ -1122,11 +1160,8 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
             pass          # never let the overlay break a save
     key_patch = None
     if key:
-        try:
+        try:          # beside the image (CT-R3 F5), so the labels need not avoid it
             key_patch = key_image_for(annotated.shape, plate_key(plaques, precise))
-            if key_patch is not None:
-                kx, ky = key_origin(annotated.shape, key_patch.shape)
-                avoid.append((kx, ky, kx + key_patch.shape[1], ky + key_patch.shape[0]))
         except Exception:
             key_patch = None
 
@@ -1143,7 +1178,7 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
     except Exception:
         pass
     if key_patch is not None:
-        _paste_key(annotated, key_patch)
+        annotated, _rect = figure_with_key(annotated, key_patch)
     return annotated
 
 
@@ -1209,6 +1244,11 @@ def save_comparison(plaques, orig_bgr, out_path, pxl_per_mm, plate=None, scaleba
                              scalebar_color=scalebar_color, labels=plaque_labels, key=key,
                              published=published, precise=precise)
     h, w = left.shape[:2]
+    if left.ndim == 2:
+        left = cv2.cvtColor(left, cv2.COLOR_GRAY2BGR)
+    if right.shape[0] > h:          # the key below / beside the right panel (CT-R3 F5)
+        left = np.vstack([left, np.full((right.shape[0] - h, w, 3), 255, np.uint8)])
+    h = left.shape[0]
     gap = max(8, int(round(0.01 * w)))
     sep = np.full((h, gap, 3), 255, np.uint8)               # white divider
     combo = np.hstack([left, sep, right])
@@ -1264,7 +1304,10 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
            "csv": os.path.basename(csv_path)}
     if edits:
         rec["edits"] = dict(edits)
-    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings", "sources"):
+    # CT-R3 F3: plate_warnings and n_sized / n_core / n_no_size of the plaques NOW on the plate
+    # (the app passes them in ``detection``: app/engine_api.plate_size_record)
+    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings", "sources",
+              "plate_warnings", "n_sized", "n_core", "n_no_size"):
         if det_info.get(k) is not None:
             rec[k] = det_info[k]
     return provenance.write_metadata(out_dir, tool, label, settings, [rec])
@@ -1291,7 +1334,11 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     The desktop app passes all of them: its Save used to record whatever engine another tab
     had last run. ``labels`` / ``key`` style the overlay (see annotate_plaques);
     ``write_key=True`` also writes out_<stem>_legend_key.<overlay format> (+ .png) and
-    out_<stem>_legend_text.txt."""
+    out_<stem>_legend_text.txt.
+
+    CT-R3 F1: with no mm scale (``pxl_per_mm`` None) AREA_MM2 and DIAMETER_MM are left EMPTY
+    (they were 0.0) for every caller -- the app's Save results, Batch, this module's editor and
+    measure_samples.py. plaque_size_tool.py's own files do not come from here."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -1312,8 +1359,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
             "INDEX_COL": i,
             "AREA_PXL": round(p["area_pxl"], 2),
             "DIAMETER_PXL": round(dia_pxl, 2),
-            "AREA_MM2": round(area_mm2, 2),
-            "DIAMETER_MM": round(dia_mm, 2),
+            "AREA_MM2": mm_cell(area_mm2, pxl_per_mm),        # CT-R3 F1: blank, not 0.0,
+            "DIAMETER_MM": mm_cell(dia_mm, pxl_per_mm),       # without a mm scale
             "MEAN_GRAY": round(mg, 2),
             "TURBIDITY_REL": round(tb, 3),
             "SOURCE": p["source"],

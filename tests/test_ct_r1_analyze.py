@@ -471,27 +471,27 @@ def test_median_offers_only_iqr_ci_or_none(st, dialogs):
     assert enabled == {"auto": True, "sem": False, "ci95": True, "sd": False, "iqr": True, "none": True}
     assert st.error_sel.currentData() == "iqr" and st.err.text() == "" and st._last_fig is not None
     st.error_sel.setCurrentIndex(st.error_sel.findData("ci95"))
-    assert "bootstrap interval of the median (approximate" in st.fig_caption.text()   # CT-R2 N3: 3 plates
+    assert "bootstrap interval of the median, approximate (too narrow" in st.fig_caption.text()   # CT-R2 N3 / CT-R3
     st.center_sel.setCurrentIndex(st.center_sel.findData("mean"))
     assert all(m.item(i).isEnabled() for i in range(st.error_sel.count()))
 
 
 def test_log_y_with_values_at_or_below_zero(st, dialogs):
-    """CT-R1 F15: the engine's message is shown (no stale figure) and 'hide ≤ 0' draws the rest."""
+    """CT-R1 F15: the engine's message is shown (no stale figure). CT-R3 F8: there is no 'hide ≤ 0'
+    control any more (both metrics are sizes, and Load study / Add CSV(s) refuse sizes <= 0, so it
+    could never act); a value <= 0 that reaches the tab another way is named, with what to do."""
     _fill(st, [("WT", "", [1.0, 1.1, 1.05]), ("mut", "", [1.5, 1.6, 1.55])])
     st._add_plate(0, [0.0, 1.0, 1.1], [0.0, 1.0, 1.2])
     st._refresh_tree()
     st.analyse_btn.click()
-    assert not st.logy_drop_cb.isEnabled()
+    assert not hasattr(st, "logy_drop_cb")
     st.logy_cb.setChecked(True)
     assert "zero or negative" in st.err.text()
-    assert "tick 'hide ≤ 0'" in st.err.text() and "--" not in st.err.text()   # the tab's words
+    assert "remove those plaques: a plaque size must be a positive number" in st.err.text()
+    assert "hide" not in st.err.text() and "--" not in st.err.text()   # the tab's words
     assert st._last_fig is None and not st.savefig_btn.isEnabled() and not st.key_btn.isEnabled()
-    assert st.logy_drop_cb.isEnabled()
-    st.logy_drop_cb.setChecked(True)
+    st.logy_cb.setChecked(False)
     assert st.err.text() == "" and st._last_fig is not None and st.savefig_btn.isEnabled()
-    assert st._last_fig.axes[0].get_yscale() == "log"
-    assert any("not shown on the log axis" in t for t in _fig_texts(st._last_fig))
 
 
 def test_brackets_offer_letters(st, dialogs):
@@ -572,16 +572,16 @@ def test_save_figure_names_size_and_dpi(st, dialogs, tmp_path):
     st.savefig_btn.click()
     p = tmp_path / "fig_0.5MOI.png"
     assert p.exists()
-    assert Image.open(p).size == (840, 540)                 # 8.4 x 5.4 in at 100 dpi, no crop
+    assert Image.open(p).size == (800, 520)                 # 8 x 5.2 in (CT-R3 default) at 100 dpi, no crop
     dialogs["save"].append((str(tmp_path / "typed.pdf"), "PNG image (*.png)"))
     st.savefig_btn.click()
     assert (tmp_path / "typed.pdf").exists() and not (tmp_path / "typed.png").exists()
     dialogs["save"].append((str(tmp_path / "fig.tiff"), "TIFF — journal raster (*.tiff)"))
     st.savefig_btn.click()
-    assert Image.open(tmp_path / "fig.tiff").size == (840, 540)
+    assert Image.open(tmp_path / "fig.tiff").size == (800, 520)
     z = _zip(st, dialogs, tmp_path)
-    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.png"))).size == (840, 540)
-    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.tiff"))).size == (840, 540)
+    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.png"))).size == (800, 520)
+    assert Image.open(io.BytesIO(z.read("violin_diameter_mm.tiff"))).size == (800, 520)
 
 
 def test_figure_is_not_squeezed_into_a_second_scroll_area(win, st, dialogs, qtbot):
