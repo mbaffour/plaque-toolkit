@@ -478,3 +478,165 @@ def test_sensitivity_line_names_a_pair_that_differs():
     only = "equal variances assumed (Tukey HSD)" if t[0, 2] < 0.05 else "without that assumption (Games-Howell)"
     assert "A vs C is significant only %s" % (("with " + only) if t[0, 2] < 0.05 else only) in om["sensitivity"]["text"]
     assert "conclusions are the same" not in om["sensitivity"]["text"]
+
+
+# =========================================================================== 8. figures (desktop tester)
+def _fig_args(**kw):
+    o = dict(ps.DEFAULTS)
+    o.update(kw)
+    return o
+
+
+def test_g8a_caption_fits_the_final_width_and_final_size_is_exposed(tmp_path):
+    r = np.random.default_rng(1)
+    names = ["Escherichia phage T%d with a long name" % i for i in range(12)]
+    df = pd.DataFrame([{"group": g, "replicate": "p%d" % p, "value": float(v)}
+                       for g in names for p in range(3) for v in r.normal(2, .3, 5)])
+    res, _ = _run(tmp_path, df, violin_fill="group", width=6.0, height=5.4, dpi=60)
+    w, h = res["figure_size_in_final"]
+    assert h > 5.4 + 0.5                                  # the key went below: the figure grew
+    from PIL import Image
+    im = Image.open(os.path.join(res["out"], "violin_value.png"))
+    assert im.size[0] / 60 == pytest.approx(w, abs=0.1) and im.size[1] / 60 == pytest.approx(h, abs=0.1)
+    assert w <= 6.0 + 0.25                                # nothing (caption) runs past the width
+    import json
+    cfg = json.load(open(os.path.join(res["out"], "run_config_value.json")))
+    assert cfg["figure_size_in_final"] == pytest.approx([w, h])
+    fig = ps.plot_violin(ps.normalize(df, "group", "value", "replicate", "metric")[0], names,
+                         _fig_args(violin_fill="group", width=6.0, height=5.4), "value", {})
+    cap = [t for t in fig.texts if t.get_position() == (0.012, 0.008)]
+    rend = fig.canvas.get_renderer()
+    assert cap and cap[0].get_window_extent(rend).x1 <= fig.bbox.width + 0.5
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+
+
+def test_g8b_a_key_taller_than_the_axes_goes_below(tmp_path):
+    r = np.random.default_rng(1)
+    df = pd.DataFrame([{"group": g, "replicate": "plate%02d" % p, "value": float(v)}
+                       for g in "ABC" for p in range(15) for v in r.normal(2, .3, 4)])
+    fig = ps.plot_violin(df, list("ABC"), _fig_args(width=8.4, height=3.6), "value", {})
+    assert fig.key_placement == "below" and fig.get_size_inches()[1] > 3.6
+    ah = ps._axes_in(fig, fig.axes[0])[1]
+    assert ah > 2.0                                        # the plot area is not squeezed
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+    # the saved file keeps the key even without a caption line under it
+    res, _ = _run(tmp_path, df, width=8.4, height=3.6, dpi=60)
+    assert res["figure_size_in_final"][1] > 3.6 + 0.4
+    # a short key still sits at the right
+    fig = ps.plot_violin(df[df["replicate"] <= "plate02"], list("ABC"), _fig_args(), "value", {})
+    assert fig.key_placement == "right"
+    plt.close(fig)
+
+
+def test_g8c_log_axis_marks_come_from_the_drawn_values(tmp_path):
+    rows = [("A", "p1", 0.0), ("A", "p1", 1.2), ("A", "p2", 1.0), ("A", "p2", 1.4), ("A", "p3", 0.9),
+            ("A", "p3", 1.1), ("B", "p1", 2.0), ("B", "p1", 2.4), ("B", "p2", 2.2), ("B", "p2", 2.6),
+            ("B", "p3", 2.1), ("B", "p3", 2.3)]
+    df = pd.DataFrame(rows, columns=["group", "replicate", "value"])
+    o = _fig_args(log_y=True, log_y_drop_nonpositive=True)
+    fig = ps.plot_violin(df, ["A", "B"], o, "value", {})
+    ax = fig.axes[0]
+    big = [c for c in ax.collections if c.get_sizes().size and c.get_sizes()[0] > 50]   # plate means
+    ys = np.concatenate([c.get_offsets()[:, 1] for c in big])
+    drawn = {1.2, 1.2, 1.2, 2.2, 2.4, 2.2}
+    assert 0.6 not in np.round(ys, 6)                                  # not the mean of {0, 1.2}
+    assert sorted(np.round(ys, 6)) == sorted([1.2, 1.2, 1.0, 2.2, 2.4, 2.2])
+    lo, hi = ax.get_ylim()
+    assert lo <= min(ys) and lo <= 0.9 and hi >= max(ys)
+    bar_a = [l for l in ax.lines if len(l.get_xdata()) == 2 and l.get_ydata()[0] == l.get_ydata()[1]
+             and abs(np.mean(l.get_xdata()) - 1) < 0.01]
+    assert bar_a and bar_a[0].get_ydata()[0] == pytest.approx(np.mean([1.2, 1.2, 1.0]))
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+    res, _ = _run(tmp_path, df, log_y=True, log_y_drop_nonpositive=True)
+    note = "1 value ≤ 0 is not shown on the log axis: the plotted plate means, bar and whisker leave it out, the statistics include it."
+    assert note in res["notes"] and note in _report(res)
+
+
+def test_g8d_no_global_matplotlib_settings_leak(tmp_path):
+    import importlib
+    import matplotlib
+    matplotlib.rcdefaults()
+    before = dict(matplotlib.rcParams)
+    importlib.reload(ps)
+    importlib.reload(cli_ag)
+    g = {"A": [2.0, 2.1, 2.2], "B": [2.5, 2.6, 2.4], "C": [3.0, 3.1, 2.9]}
+    with contextlib.redirect_stdout(io.StringIO()):
+        ps.run(_args(tmp_path, _units(g), formats=["png", "svg", "pdf", "tiff"], stats_table=True,
+                     legend_key=True))
+    after = dict(matplotlib.rcParams)
+    changed = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+    assert changed == {}
+
+
+def test_g8e_grey_words_unique_and_close_palette_note(tmp_path):
+    r = np.random.default_rng(1)
+    df = pd.DataFrame([{"group": "S%d" % i, "replicate": "p%d" % p, "value": float(v)}
+                       for i in range(12) for p in range(3) for v in r.normal(2, .3, 4)])
+    res, _ = _run(tmp_path, df, palette=list(ps.PALETTES["grays"]), violin_fill="group", legend_key=True)
+    import legend_key as lk
+    fig = ps.plot_violin(ps.normalize(df, "group", "value", "replicate", "metric")[0], res["order"],
+                         _fig_args(palette=list(ps.PALETTES["grays"]), violin_fill="group"), "value", {})
+    key = lk.from_figure(fig)
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+    words = lk._colour_words(key["entries"])
+    seen = {}
+    for e, w in zip(key["entries"], words):
+        sig = (e.get("colour"), e.get("hatch"), e.get("marker"))
+        seen.setdefault(w + "|" + str(e.get("hatch")) + "|" + str(e.get("marker")), set()).add(sig)
+    assert all(len(v) == 1 for v in seen.values())           # one word+hatch+marker = one look
+    grey = [w for w in words if w.startswith("grey ")]
+    assert "grey 1 of 8 (darkest)" in grey and "grey 8 of 8 (lightest)" in grey
+    assert len({w for e, w in zip(key["entries"], words) if not e.get("hatch") and w in grey}) == 8
+    note = [n for n in res["notes"] if n.startswith("The grays palette's colours are hard to tell apart")]
+    assert note and "below 10" in note[0] and note[0] in _report(res)
+    # okabe with 5 samples: no note
+    assert ps.palette_close_note(list("ABCDE"), {"palette": ps.OKABE_ITO}) is None
+
+
+# =========================================================================== 9. R / Python agreement
+def test_g9_rank_tests_count_ties_like_R():
+    # plate means equal on paper but not in floating point: mean(0.1, 0.2, 0.3) is
+    # 0.19999999999999998 and mean(0.2, 0.2, 0.2) is 0.20000000000000004 (both 0.2)
+    rows = []
+    plates = {"A": [[0.1, 0.2, 0.3], [0.05, 0.1, 0.15], [0.12, 0.14, 0.16]],
+              "B": [[0.25, 0.3, 0.35], [0.2, 0.2, 0.2], [0.3, 0.35, 0.4]],
+              "C": [[0.5, 0.6, 0.7], [0.45, 0.5, 0.55], [0.6, 0.65, 0.7]]}
+    for g, pl in plates.items():
+        for i, vals in enumerate(pl):
+            rows += [{"group": g, "replicate": "%s%d" % (g, i), "value": v} for v in vals]
+    df = pd.DataFrame(rows)
+    rm = ps.replicate_means(df)
+    a0 = rm[(rm["group"] == "A") & (rm["replicate"] == "A0")]["value"].iloc[0]
+    b1 = rm[(rm["group"] == "B") & (rm["replicate"] == "B1")]["value"].iloc[0]
+    assert a0 != b1 and round(a0, 12) == round(b1, 12) == 0.2      # the trap is armed
+    typed = {g: [round(float(np.mean(v)), 10) for v in pl] for g, pl in plates.items()}
+    om = ps.run_stats(df, list("ABC"), "auto", "nonparametric")[0]
+    om_t = ps.run_stats(_units(typed), list("ABC"), "auto", "nonparametric")[0]
+    assert om["p"] == pytest.approx(om_t["p"], rel=1e-12)
+    assert om["p"] == pytest.approx(st.kruskal(*typed.values()).pvalue, rel=1e-12)
+    assert [r["p_adj"] for r in om["pairwise"]] == pytest.approx([r["p_adj"] for r in om_t["pairwise"]])
+    om2 = ps.run_stats(df[df["group"] != "C"], ["A", "B"], "auto", "nonparametric")[0]
+    assert om2["p"] == pytest.approx(st.mannwhitneyu(typed["A"], typed["B"]).pvalue, rel=1e-12)
+    assert om2["p_method"] == "asymptotic"                     # the tie is seen
+
+
+def test_g9_untestable_comparison_with_the_reference_is_na_not_ns():
+    groups = {"S%d" % i: [2.0 + 0.01 * i, 2.1, 2.05] for i in range(6)}
+    groups["S6"] = [2.3]                                          # one plate: cannot be tested
+    om, post, _u, _h = ps.run_stats(_units(groups), list(groups), "auto", "auto")
+    plan = ps.annotation_plan(list(groups), post, {"annotate": "auto"})
+    assert plan["mode"] == "vsref" and plan["letters"]["S6"] == "n/a"
+    assert "n/a = could not be tested, fewer than 2 plates" in plan["note"]
+
+
+@pytest.mark.parametrize("token", ["NA", "nan", "n/a", "-"])
+def test_g9_text_in_a_value_cell_is_not_a_number(tmp_path, token):
+    p = tmp_path / "v.csv"
+    p.write_text("group,replicate,value\nA,p1,1.0\nA,p2,%s\nA,p3,1.2\nB,p1,2.0\nB,p2,\nB,p3,2.2\nB,p4,2.1\n" % token,
+                 encoding="utf-8")
+    res, _ = _run(tmp_path, str(p))
+    assert "2 rows dropped: no numeric value value (1 not a number, 1 empty)." in res["notes"]

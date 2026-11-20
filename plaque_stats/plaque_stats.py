@@ -50,8 +50,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import PathPatch
 
-# keep text EDITABLE in vector exports (Illustrator / Inkscape) — for every figure and table
-matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+# Text stays EDITABLE in vector exports (Illustrator / Inkscape): every figure and table is drawn
+# and saved inside matplotlib.rc_context(_FIG_RC / _TABLE_RC). Nothing is set globally: the old
+# module-level rcParams.update changed every later figure of the process (CT-R2 group 8 d).
 
 import scipy
 from scipy import stats as st
@@ -209,9 +210,13 @@ def _numbers(series):
         return pd.to_numeric(series, errors="coerce").astype(float), 0, False
     txt = _cells(series)
     num = pd.to_numeric(txt, errors="coerce")
-    bad = txt.notna() & num.isna() & ~txt.astype(str).str.lower().isin(["nan"])
+    # CT-R2 group 9: any TEXT in a value cell that is not a number ("NA", "nan", "n/a", "-") counts
+    # as "not a number"; only a truly empty cell is "empty" (the note is how a user finds a
+    # mis-exported column). "nan" used to count as empty.
+    bad = txt.notna() & num.isna()
     comma = False
-    if bad.any() and txt[bad].astype(str).str.match(_DECIMAL_COMMA_RE).all():
+    digits = bad & txt.astype(str).str.contains(r"\d")
+    if digits.any() and txt[digits].astype(str).str.match(_DECIMAL_COMMA_RE).all():
         # European decimal commas ("2,34"): read them as numbers instead of dropping every row
         num = pd.to_numeric(txt.astype(str).str.replace(",", ".", regex=False).where(txt.notna(), np.nan),
                             errors="coerce")
@@ -631,6 +636,14 @@ def pairwise_mwu(groups):
         except ValueError:
             raw[(a, b)] = np.nan
     return _holm(raw)
+
+
+def _rank_ready(v):
+    """Unit values rounded to 12 significant digits before a RANK test (Kruskal-Wallis, Dunn,
+    Mann-Whitney): plate means that are equal on paper ((2.0 + 2.1 + 1.96) / 3 and 2.02) can differ
+    in the last bits and would not count as ties. The R app does the same (CT-R2 group 9). Never
+    used before a parametric test."""
+    return np.array([float("%.12g" % x) for x in np.asarray(v, float)])
 
 
 def _mwu_method(a, b):
@@ -1211,9 +1224,10 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
             else:
                 # CT-R2 N10: scipy's own choice (exact below 9 per side without ties), made explicit
                 # so the report can say which p it is
-                how = _mwu_method(a, b)
+                ra, rb = _rank_ready(a), _rank_ready(b)
+                how = _mwu_method(ra, rb)
                 omni["p_method"] = how
-                r = _quiet(st.mannwhitneyu, a, b, alternative="two-sided", method=how)
+                r = _quiet(st.mannwhitneyu, ra, rb, alternative="two-sided", method=how)
             p = float(r.pvalue) if r is not None else np.nan
             if p != p:
                 notes.append("The two samples have no spread (identical values), so no test is possible (p = n/a).")
@@ -1335,6 +1349,7 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                         % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"]),
                            " (drop --posthoc dunnett and use --equal-var no)" if ctrl is not None else ""))
         else:
+            gv = [_rank_ready(v) for v in gv]          # CT-R2 g9: ties as R counts them
             hres = _quiet(st.kruskal, *gv)
             N = sum(len(x) for x in gv); kk = len(gv)
             omni["test"] = "Kruskal–Wallis"
@@ -1349,7 +1364,7 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                 # before was (H - k + 1) / (N - k), which is eta squared (H); both are given now.
                 omni["effect"] = {"epsilon_squared": H / (N - 1) if N > 1 else float("nan"),
                                   "eta_squared_H": (H - kk + 1) / (N - kk) if N > kk else float("nan")}
-                posthoc = dunn({g: groups[g] for g in tg})
+                posthoc = dunn({g: _rank_ready(groups[g]) for g in tg})
             omni["posthoc"] = "Dunn (Holm)"
             omni["p_method"] = "asymptotic"
             omni["variance_rule"] = "Kruskal–Wallis and Dunn's test are rank-based (no variance assumption)."
@@ -1664,8 +1679,12 @@ def _log_guard(values, opts, what="value"):
         raise StatsError("%s of %d are zero or negative and cannot be drawn on a log axis. Turn the "
                          "log axis off, or pass --log-y-drop-nonpositive to hide them on the figure "
                          "(they stay in the statistics)." % (_plural(bad, what), len(v)))
-    return v > 0, ("%s ≤ 0 %s not shown on the log axis (still in the statistics)"
-                   % (_plural(bad, what), "is" if bad == 1 else "are"))
+    # CT-R2 group 8 c: the plotted plate means, bar and whisker are computed from the values that
+    # are drawn; the statistics (and the paste-ready sentence) use every value. Say both.
+    it = "it" if bad == 1 else "them"
+    return v > 0, ("%s ≤ 0 %s not shown on the log axis: the plotted plate means, bar and whisker "
+                   "leave %s out, the statistics include %s"
+                   % (_plural(bad, what), "is" if bad == 1 else "are", it, it))
 
 
 def _log_axis(ax, lo, hi):
@@ -1732,10 +1751,27 @@ def _caption(fig, bits):
         return None
     import textwrap
     txt = " · ".join(bits) + "."
-    per = max(40, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))   # wrap to the figure width
-    txt = "\n".join(textwrap.wrap(txt, per)) or txt
-    return fig.text(0.012, 0.008, txt, ha="left", va="bottom", fontsize=7.5,
-                    color="#5b6a65", style="italic")
+    # CT-R2 group 8 a: wrapped to the MEASURED width of the figure as it is now (after any growth
+    # for a key below), not to a character estimate that long names overran
+    avail = 0.97 * fig.get_size_inches()[0]
+    kw = dict(fontsize=7.5, style="italic")
+    per = max(20, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))
+    lines = textwrap.wrap(txt, per) or [txt]
+    while per > 20 and max(_text_in(fig, ln, **kw)[0] for ln in lines) > avail:
+        per -= 3
+        lines = textwrap.wrap(txt, per, break_long_words=True) or [txt]
+    return fig.text(0.012, 0.008, "\n".join(lines), ha="left", va="bottom", color="#5b6a65", **kw)
+
+
+def _final_size(fig):
+    """(width, height) in inches of the figure as SAVED (bbox_inches="tight", 0.1 in padding),
+    after every layout step: front-ends report this instead of the requested size (CT-R2 g8 a)."""
+    try:
+        bb = fig.get_tightbbox(_renderer(fig))
+        return (round(float(bb.width) + 0.2, 2), round(float(bb.height) + 0.2, 2))
+    except Exception:                                    # noqa: BLE001
+        w, h = fig.get_size_inches()
+        return (round(float(w), 2), round(float(h), 2))
 
 
 def _tight(fig, caption=None):
@@ -1765,6 +1801,14 @@ def _tight(fig, caption=None):
 
 def _layout(fig, caption):
     _tight(fig, caption)
+    # CT-R2 group 8 b: a key placed below is kept out of tight_layout (it has its own strip), but
+    # bbox_inches="tight" also skips artists outside the layout, so without a caption under it
+    # the saved file lost the key. Once the layout is final it counts again.
+    if float(getattr(fig, "_key_below_in", 0.0) or 0.0) > 0:
+        for a in fig.axes:
+            leg = a.get_legend()
+            if leg is not None:
+                leg.set_in_layout(True)
 
 
 KEY_RIGHT_MAX_FRAC = 0.28      # the embedded key stays at the right only while this narrow
@@ -1781,11 +1825,14 @@ def _place_key(fig, ax, key, **kw):
     if not key or not key.get("entries"):
         return None
     W, H = fig.get_size_inches()
+    ah = _axes_in(fig, ax)[1]
     leg = _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), ncol=1, **kw)
     r = _renderer(fig)
     bb = leg.get_window_extent(r)
     w1, h1 = bb.width / fig.dpi, bb.height / fig.dpi
-    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= 0.98 * H:
+    # CT-R2 group 8 b: a key TALLER than the axes squeezed the plot (8.4 x 3.6 in, 15 plates):
+    # it stays at the right only when it fits both the width share and the axes height
+    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= ah:
         return leg
     leg.remove()
     nrows = len(_lk.rows(key)[0])
@@ -1893,14 +1940,18 @@ def annotation_plan(order, posthoc, opts):
             plan["pairs"] = [pr for pr in allpairs if ref in pr]
             plan["mode"] = "vsref"
             plan["ref"] = ref
-            plan["letters"] = {(b if a == ref else a): stars(_p(pr) if _has(pr) else float("nan"))
+            # CT-R2 group 9: an untestable comparison (a 1-plate sample) is n/a, never "ns"
+            raw = {pr: posthoc.get(pr, posthoc.get((pr[1], pr[0]))) for pr in plan["pairs"]}
+            plan["letters"] = {(b if a == ref else a): stars(raw[pr] if raw[pr] is not None else float("nan"))
                                for pr in plan["pairs"] for a, b in [pr]}
             nsig = sum(1 for pr in plan["pairs"] if _p(pr) < 0.05)
+            nna = sum(1 for v in plan["letters"].values() if v == "n/a")
             plan["note"] += ("With %d samples each sample is compared with %s only: the stars above "
                              "each sample give that comparison (%d of %d with adjusted p < 0.05; %s "
-                             "itself is marked ref.). Every pair is in the pairwise table. `--annotate "
+                             "itself is marked ref.%s). Every pair is in the pairwise table. `--annotate "
                              "letters` gives a compact letter display, `--annotate all` every bracket."
-                             % (len(order), ref, nsig, len(plan["pairs"]), ref))
+                             % (len(order), ref, nsig, len(plan["pairs"]), ref,
+                                "; n/a = could not be tested, fewer than 2 plates" if nna else ""))
             return plan
         else:
             plan["pairs"] = sig or [(order[i], order[i + 1]) for i in range(len(order) - 1)]
@@ -1988,6 +2039,27 @@ def palette_repeat_note(items, opts, what="sample", how="a hatch"):
             % (len(items), what, name, len(pal), span, how))
 
 
+PALETTE_MIN_DELTA_E = 10.0     # two colours closer than this (CIE76 ΔE*ab) are hard to tell apart
+
+
+def palette_close_note(items, opts, what="sample"):
+    """A note when the palette colours that encode `items` are too close to tell apart (CT-R2
+    group 8 e). Rule: any two DIFFERENT colours used closer than ΔE*ab = 10 (CIE76, in CIE Lab;
+    for greys that is a lightness step of less than 10 L* units). None otherwise."""
+    pal = clean_palette(opts.get("palette"))
+    used = list(dict.fromkeys(_lk.to_hex(pal[i % len(pal)]).upper() for i in range(len(items))))
+    if len(used) < 2:
+        return None
+    lab = {c: _lk._srgb_to_lab(matplotlib.colors.to_rgb(c)) for c in used}
+    d, a, b = min((math.dist(lab[a], lab[b]), a, b) for a, b in itertools.combinations(used, 2))
+    if d >= PALETTE_MIN_DELTA_E:
+        return None
+    name = _palette_name(pal) or "chosen"
+    return ("The %s palette's colours are hard to tell apart for %d %ss: the closest two (%s and %s) "
+            "differ by ΔE = %.1f (CIE76), below %g. Choose a palette with more distinct colours "
+            "(okabe, tab10) or fewer %ss." % (name, len(items), what, a, b, d, PALETTE_MIN_DELTA_E, what))
+
+
 def _and_list(names):
     names = [str(n) for n in names]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -2049,7 +2121,11 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]                                     # what can be DRAWN (all of it, unless log)
-    cen_tab = center_table(df, order, opts)                # the statistic: from ALL the values
+    # CT-R2 group 8 c: the marks are computed from the values that are drawn (on a log axis with
+    # hidden values <= 0 the plate mean of {0, 1.2} used to be drawn at 0.6, below the axis)
+    hidden = not bool(np.all(drawmask))
+    cen_tab = center_table(ddf if hidden else df, order, opts)
+    rm_draw = replicate_means(ddf) if (hidden and rm is not None) else rm
 
     data = [ddf.loc[ddf["group"] == g, "value"].values for g in order]
     n_all = [int((df["group"] == g).sum()) for g in order]
@@ -2102,9 +2178,11 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                     jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(vv))
                     ax.scatter(jx, vv, s=opts["point_size"], color=rcol[r], alpha=0.45,
                                edgecolor="none", zorder=3, marker=rmark[r])
-            gm = rm[rm["group"] == g]
+            gm = rm_draw[rm_draw["group"] == g] if rm_draw is not None else rm.iloc[0:0]
             if log_y:
                 gm = gm[gm["value"] > 0]
+            if len(gm):
+                bottoms.append(float(gm["value"].min()))
             jx = (x0 + np.linspace(-0.05, 0.05, len(gm))) if len(gm) > 1 else np.array([float(x0)])
             for mk in dict.fromkeys(rmark[r] for r in gm["replicate"]):
                 sel = np.array([rmark[r] == mk for r in gm["replicate"]], bool)
@@ -2162,7 +2240,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     caption_bits = [log_note]
     if opts.get("show_value", True) and not show_val:
         caption_bits.append("Bar values are in the summary table")
-    if log_y and bottoms:                         # the violins were estimated in log10 units, which
+    if log_y and [b for b in bottoms if b > 0]:   # the violins were estimated in log10 units, which
         b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
@@ -2259,6 +2337,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
     _layout(fig, cap)
+    fig.final_size_in = _final_size(fig)
     return fig
 
 
@@ -2835,6 +2914,7 @@ def _two_sample_test(control_vals, treat_vals, parametric):
     if len(a) < 2 or len(b) < 2:
         return float("nan"), "n/a (need ≥2 per side)"
     if parametric == "nonparametric":
+        a, b = _rank_ready(a), _rank_ready(b)
         r = _quiet(st.mannwhitneyu, a, b, alternative="two-sided")
         if r is None:
             return float("nan"), "Mann–Whitney U (all ties)"
@@ -2979,7 +3059,10 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]
-    cen_tab = center_table(df, group_order, opts, by=("group", "subgroup"))
+    hidden = not bool(np.all(drawmask))                    # CT-R2 group 8 c: marks from drawn values
+    if hidden and pm is not None:
+        pm = _plate_means_gs(ddf)
+    cen_tab = center_table(ddf if hidden else df, group_order, opts, by=("group", "subgroup"))
     K = max(len(sub_order), 1)
     slot = 0.82 / K
     offs = {s: (i - (K - 1) / 2.0) * slot for i, s in enumerate(sub_order)}
@@ -3071,6 +3154,7 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     fin = {k: v for k, v in tops.items() if v == v and (v > 0 or not log_y)}
     if not fin:
         _layout(fig, _caption(fig, caption_bits))
+        fig.final_size_in = _final_size(fig)
         return fig
     n_plan = None
     if opts.get("show_n", True) and cells:
@@ -3144,6 +3228,7 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     if log_y:
         _log_axis(ax, *ax.get_ylim())
     _layout(fig, _caption(fig, caption_bits))
+    fig.final_size_in = _final_size(fig)
     return fig
 
 
@@ -3306,9 +3391,13 @@ def run_grouped(args):
     _save_fig(fig, base, args)
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
+    final_size = list(getattr(fig, "final_size_in", fig.get_size_inches()))
     plt.close(fig)
 
     rn = palette_repeat_note(sub_order, o, "subgroup level", "a different marker")
+    cn = palette_close_note(sub_order, o, "subgroup level")
+    if cn:
+        notes.append(cn)
     if rn:
         notes.append(rn)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _have_rep=unit == "replicate")
@@ -3317,6 +3406,7 @@ def run_grouped(args):
     prov = _prov(args)
     prov.update({"mode": "grouped", "metric": metric, "groups": group_order,
                  "subgroups": sub_order, "control": control, "unit": unit,
+                 "figure_size_in_final": final_size,
                  "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
                               "numpy": np.__version__, "pandas": pd.__version__,
                               "scipy": scipy.__version__}})
@@ -3334,7 +3424,7 @@ def run_grouped(args):
             "control": control, "unit": unit, "summary": summ, "comparisons": comp,
             "warnings": info["warnings"], "notes": notes + info["notes"], "parse_note": parse_note,
             "paste_sentence": paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args),
-            "out": os.path.abspath(out)}
+            "figure_size_in_final": final_size, "out": os.path.abspath(out)}
 
 
 def run(args):
@@ -3404,6 +3494,7 @@ def run(args):
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     ann = getattr(fig, "annotation_note", "")
+    final_size = list(getattr(fig, "final_size_in", fig.get_size_inches()))
     plt.close(fig)
 
     if log_note:
@@ -3413,6 +3504,9 @@ def run(args):
         rn = palette_repeat_note(order, o, "sample", "a hatch" if not _neutral else "a different marker")
         if rn:
             notes.append(rn)
+        cn = palette_close_note(order, o, "sample")
+        if cn:
+            notes.append(cn)
     centers = center_table(df, order, o)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _centers=centers,
                  _annotation_note=ann)
@@ -3423,7 +3517,7 @@ def run(args):
             save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}"),
                                 metric, unit, args["formats"], pairwise=pw)
     prov = _prov(args)
-    prov.update({"metric": metric, "groups": order, "unit": unit,
+    prov.update({"metric": metric, "groups": order, "unit": unit, "figure_size_in_final": final_size,
                  "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
                               "numpy": np.__version__, "pandas": pd.__version__,
                               "scipy": scipy.__version__}})
@@ -3442,7 +3536,7 @@ def run(args):
             "notes": notes + list(omni.get("notes", [])), "parse_note": parse_note,
             "paste_sentence": sentence,
             "figure_sentence": figure_sentence(o, have_rep, list(summ["n_units"])),
-            "annotation_note": ann, "out": os.path.abspath(out)}
+            "annotation_note": ann, "figure_size_in_final": final_size, "out": os.path.abspath(out)}
 
 
 def _safe(s):

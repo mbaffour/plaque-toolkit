@@ -41,8 +41,8 @@ from scipy import stats as scstats
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib.figure import Figure
-# keep text EDITABLE in SVG/PDF (Illustrator / Inkscape)
-matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+# Text stays EDITABLE in SVG/PDF: figures are drawn and saved inside figure_rc() (FIG_RC sets the
+# font types); nothing is set globally (CT-R2 group 8 d: it leaked into every later figure).
 
 __version__ = "1.1.0"
 
