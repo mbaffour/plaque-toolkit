@@ -1573,7 +1573,11 @@ def _caption(fig, bits):
     bits = [b for b in bits if b]
     if not bits:
         return None
-    return fig.text(0.012, 0.008, " · ".join(bits) + ".", ha="left", va="bottom", fontsize=7.5,
+    import textwrap
+    txt = " · ".join(bits) + "."
+    per = max(40, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))   # wrap to the figure width
+    txt = "\n".join(textwrap.wrap(txt, per)) or txt
+    return fig.text(0.012, 0.008, txt, ha="left", va="bottom", fontsize=7.5,
                     color="#5b6a65", style="italic")
 
 
@@ -1582,10 +1586,24 @@ def _tight(fig, caption=None):
     caption line)."""
     kb = float(getattr(fig, "_key_below_in", 0.0) or 0.0)
     H = fig.get_size_inches()[1]
+    cap_h = 0.0
+    if caption is not None:
+        try:
+            cap_h = caption.get_window_extent(_renderer(fig)).height / fig.dpi + 0.03
+        except Exception:                                # noqa: BLE001
+            cap_h = 0.04 * H
     if kb > 0:
+        extra = max(0.0, cap_h - KEY_CAPTION_IN)         # a caption taller than the strip kept for it
+        if extra:
+            W = fig.get_size_inches()[0]
+            fig.set_size_inches(W, H + extra); H += extra
+            kb += extra; fig._key_below_in = kb
+            leg = fig.axes[0].get_legend() if fig.axes else None
+            if leg is not None:
+                leg.set_bbox_to_anchor((0.5, cap_h / H), transform=fig.transFigure)
         fig.tight_layout(rect=(0, kb / H, 1, 1))
     else:
-        fig.tight_layout(rect=(0, 0.04, 1, 1) if caption is not None else None)
+        fig.tight_layout(rect=(0, max(0.04, cap_h / H), 1, 1) if caption is not None else None)
 
 
 def _layout(fig, caption):
@@ -1593,6 +1611,7 @@ def _layout(fig, caption):
 
 
 KEY_RIGHT_MAX_FRAC = 0.28      # the embedded key stays at the right only while this narrow
+KEY_CAPTION_IN = 0.20          # inches kept for one caption line under a key placed below
 
 
 def _place_key(fig, ax, key, **kw):
@@ -1622,7 +1641,7 @@ def _place_key(fig, ax, key, **kw):
             break
         leg.remove(); ncol -= 1
     leg.set_in_layout(False)
-    cap_in = 0.20                                  # room for the caption line under the key
+    cap_in = KEY_CAPTION_IN                        # room for the caption line under the key
     hk = bb.height / fig.dpi
     fig.set_size_inches(W, H + hk + cap_in + 0.06)
     Hn = H + hk + cap_in + 0.06
