@@ -381,3 +381,25 @@ def test_f8_left_out_wording_is_grammatical_for_one_and_for_many(sample_editor, 
     assert window.statusBar().currentMessage() == (
         "Added a plate to 'T4' (2 plaques; 1 plaque outlined at the dark centre only was left out "
         "of the sizes).")
+
+
+# =========================================================================== F2
+def test_f2_small_tooltip_says_what_the_apps_small_is_on_every_tab(window):
+    from PySide6.QtCore import Qt
+    want = ("The small-plaque pass, with the dish taken from the standard pass and plaques outlined "
+            "twice counted once; the command line's -small differs in both.")
+    boxes = [window.measure_tab.scale_box, _tab(window, "Batch").scale_box,
+             _tab(window, "Compare").scale_box]
+    for box in boxes:
+        box.set_engine("current")
+        box.set_scale("small")
+        assert box.toolTip().startswith("Plaque size. " + want)
+        assert box.itemData(box.findData("small"), Qt.ToolTipRole).startswith(want)
+        assert "(the command line's -small)" not in box.toolTip()
+    # Published's Small IS the command line's --published -small (one pass, its own dish)
+    box = window.measure_tab.scale_box
+    box.set_engine("published"); box.set_scale("small")
+    assert "exactly the command line's --published -small" in box.toolTip()
+    assert "differs" not in box.toolTip()
+    box.set_engine("current")
+    assert box.scale() == "small" and box.toolTip().startswith("Plaque size. " + want)

@@ -165,10 +165,27 @@ class PlaqueSizeBox(QComboBox):
                 "small scale (SOURCE = small). Recommended.",
         "standard": "One pass at the standard scale (the command line's default). Plaques "
                     "under ~2.5 mm are not found.",
-        "small": "One pass at the small scale (the command line's -small). Finds plaques under "
-                 "~2.5 mm, but outlines only the core of plaques wider than ~50 px, so large "
-                 "plaques come out too small.",
+        # CT-R3 F2: say what the app's Small IS. It is not the command line's -small: the dish
+        # comes from the standard pass and a plaque outlined twice (core and halo) counts once,
+        # so counts and sizes can differ (Plate_6: 89 vs 96 plaques; Plate_8: every size 4.7 %).
+        "small": "The small-plaque pass, with the dish taken from the standard pass and plaques "
+                 "outlined twice counted once; the command line's -small differs in both. Finds "
+                 "plaques under ~2.5 mm, but outlines only the core of plaques wider than ~50 px, "
+                 "so large plaques come out too small.",
     }
+    # Published runs the unchanged published algorithm: one pass, the dish from that same pass,
+    # nothing merged -- exactly `plaque_size_tool.py --published` (with -small for Small)
+    TIPS_PUBLISHED = {
+        "standard": "One pass at the standard scale, exactly the command line's --published. "
+                    "Plaques under ~2.5 mm are not found.",
+        "small": "One pass at the small scale, exactly the command line's --published -small "
+                 "(the dish from that same pass). Finds plaques under ~2.5 mm, but outlines only "
+                 "the core of plaques wider than ~50 px.",
+    }
+
+    def _tip(self, key):
+        tips = self.TIPS_PUBLISHED if self._family == "published" else self.TIPS
+        return tips.get(key, self.TIPS.get(key, ""))
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -195,12 +212,13 @@ class PlaqueSizeBox(QComboBox):
             self.addItem("Fixed by Precise", None)
             self.setToolTip("Not used by Precise: it runs its own fixed detection.")
         else:
+            self._family = fam
             keys = ("standard", "small") if fam == "published" else ("auto", "standard", "small")
             for k in keys:
                 self.addItem(self._labels[k], k)
-                self.setItemData(self.count() - 1, self.TIPS[k], Qt.ToolTipRole)
+                self.setItemData(self.count() - 1, self._tip(k), Qt.ToolTipRole)
             self.setCurrentIndex(max(0, self.findData(self._choice[fam])))
-            self.setToolTip("Plaque size. " + self.TIPS[self.scale()])
+            self.setToolTip("Plaque size. " + self._tip(self.scale()))
         self.blockSignals(False)
         self._family = fam
         self.setEnabled(fam != "precise" and not busy)
@@ -208,7 +226,7 @@ class PlaqueSizeBox(QComboBox):
     def _remember(self, _i=None):
         if self._family in self._choice and self.currentData():
             self._choice[self._family] = self.currentData()
-            self.setToolTip("Plaque size. " + self.TIPS[self.currentData()])
+            self.setToolTip("Plaque size. " + self._tip(self.currentData()))
 
     def scale(self):
         return self.currentData()
