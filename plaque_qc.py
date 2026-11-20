@@ -59,11 +59,33 @@ MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from thi
 SIZE_EXCLUDING_FLAGS = ("CORE?", "NO_SIZE")
 
 
+def flag_tokens(flag_string):
+    """The |-joined flags of one cell, upper-cased and stripped. Tolerant of a CSV a user has
+    opened and re-saved (CT-R2, Analyze tester): "core?" == "CORE?", "MERGED? | CORE?" splits
+    as "MERGED?|CORE?", and None / NaN / an empty cell mean no flags."""
+    if flag_string is None:
+        return []
+    try:
+        if flag_string != flag_string:                      # NaN
+            return []
+    except (TypeError, ValueError):                         # pandas.NA and the like
+        return []
+    return [t.strip().upper() for t in str(flag_string).split("|") if t.strip()]
+
+
 def has_flag(flag_string, name):
-    """True when ``name`` is one of the |-joined flags in ``flag_string`` (exact token)."""
-    if flag_string is None or flag_string != flag_string:      # None / NaN
-        return False
-    return name in str(flag_string).split("|")
+    """True when ``name`` is one of the |-joined flags in ``flag_string`` (whole token; case and
+    spaces around the separator do not matter)."""
+    return str(name).strip().upper() in flag_tokens(flag_string)
+
+
+def flag_column(df):
+    """The name of the QC flag column of a per-plaque table whatever its case or stray spaces
+    (QC_FLAG, qc_flag, Qc_Flag), or None. Every reader of saved tables uses it."""
+    for c in getattr(df, "columns", ()):
+        if str(c).strip().upper() == "QC_FLAG":
+            return c
+    return None
 
 
 def size_ok(flag_string):
@@ -76,11 +98,13 @@ def size_ok(flag_string):
 
 def sized_rows(df):
     """Boolean list: which rows of a per-plaque table may enter a size summary, or None when
-    the table has no QC_FLAG column (then every row is sized, as before; CT-R2 detection N1).
+    the table has no QC_FLAG column in any spelling (flag_column; then every row is sized, as
+    before; CT-R2 detection N1).
     summarize_plates.py, compile_excel.py and make_figure.py all use this."""
-    if df is None or "QC_FLAG" not in getattr(df, "columns", ()):
+    col = flag_column(df) if df is not None else None
+    if col is None:
         return None
-    return [size_ok(f) for f in df["QC_FLAG"].tolist()]
+    return [size_ok(f) for f in df[col].tolist()]
 
 
 def sizes_from_phrase(n_sized, n_all):

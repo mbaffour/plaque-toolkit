@@ -332,3 +332,63 @@ def test_p4_few_sized_warning():
         plaque_qc.few_sized_warning(["CORE?", "CORE?", "OK"])
     assert plaque_qc.plate_warnings([20.0], None, None) == []
 
+
+
+# --------------------------------------------------------------------------- #
+#  Part 1 addendum (Analyze tester): flag cells and the flag column as a user re-saved them
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("cell,core", [("CORE?", True), ("core?", True), ("Core?", True),
+                                       ("MERGED? | CORE?", True), (" merged?|core? ", True),
+                                       ("SPLIT | no_size", False), ("MERGED?", False), ("", False),
+                                       (None, False), (float("nan"), False), ("OK", False)])
+def test_p1_has_flag_is_tolerant(cell, core):
+    import plaque_qc
+    assert plaque_qc.has_flag(cell, "CORE?") is core
+    no_size = cell is not None and cell == cell and "no_size" in str(cell).lower()
+    assert plaque_qc.size_ok(cell) is (not core and not no_size)
+
+
+def test_p1_has_flag_handles_pandas_na():
+    import plaque_qc
+    assert plaque_qc.has_flag(pd.NA, "CORE?") is False and plaque_qc.size_ok(pd.NA) is True
+
+
+@pytest.mark.parametrize("name", ["QC_FLAG", "qc_flag", "Qc_Flag", " QC_FLAG "])
+def test_p1_flag_column_any_spelling(name):
+    import plaque_qc
+    df = pd.DataFrame({"DIAMETER_MM": [1.0], name: ["core?"]})
+    assert plaque_qc.flag_column(df) == name
+    assert plaque_qc.sized_rows(df) == [False]
+    assert plaque_qc.flag_column(pd.DataFrame({"DIAMETER_MM": [1.0]})) is None
+
+
+RESAVED = ["OK", "core?", "edge", "split | no_size", "ok"]      # FLAGS as a spreadsheet re-saved them
+
+
+@pytest.mark.parametrize("col", ["qc_flag", "Qc_Flag"])
+def test_p1_tools_read_resaved_flags(tmp_path, col):
+    import summarize_plates as sp
+    out = tmp_path / "out"
+    out.mkdir()
+    t = _table(DIAMS_ALL).assign(**{col: RESAVED})
+    t.to_csv(out / "data-green-A.csv", index=False)
+    sp.summarize(str(out))
+    s = pd.read_csv(out / "summary.csv").set_index("PLATE")
+    assert s.loc["A", "N_SIZED"] == 3 and s.loc["A", "DIAM_MM_MEDIAN"] == 2.5
+    # compile_excel
+    pytest.importorskip("openpyxl")
+    pdir = tmp_path / "root" / "WT" / "p1"
+    pdir.mkdir(parents=True)
+    t.to_csv(pdir / "p1_normal.csv", index=False)
+    _table(DIAMS_ALL).to_csv(pdir / "p1_sensitive.csv", index=False)
+    r = _run("compile_excel.py", ["--root", str(tmp_path / "root"), "--out", str(tmp_path / "x.xlsx")],
+             tmp_path)
+    assert r.returncode == 0, r.stderr
+    x = pd.read_excel(tmp_path / "x.xlsx", sheet_name="Summary (per replicate)").set_index("SAMPLE")
+    assert x.loc["WT", "normal_n_sized"] == 3 and x.loc["WT", "normal_median_mm"] == 2.5
+    # make_figure
+    t2 = t.assign(SAMPLE="WT", PLATE="p1", MODE="normal")
+    t2.to_csv(tmp_path / "tidy.csv", index=False)
+    r = _run("make_figure.py", ["--csv", str(tmp_path / "tidy.csv"), "--ymax", "0", "--out", "fig"], tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "Sizes from 3 of 5 plaques" in r.stdout

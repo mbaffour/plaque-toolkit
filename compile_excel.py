@@ -81,7 +81,8 @@ def main():
                 df.insert(2, "PLATE", photo_dir); df.insert(3, "MODE", m)
                 long[m].append(df)
                 # CT-R2 detection N1: a table with QC_FLAG sizes only its size_ok rows; the
-                # count is every row. Without QC_FLAG every row is sized, as before.
+                # count is every row. Without QC_FLAG every row is sized, as before. Any
+                # spelling of the column / case of the flags (plaque_qc.flag_column, has_flag).
                 keep = plaque_qc.sized_rows(df) if plaque_qc is not None else None
                 sized = df if keep is None else df[keep]
                 dia = pd.to_numeric(sized.get("DIAMETER_MM"), errors="coerce").dropna()

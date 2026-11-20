@@ -36,7 +36,8 @@ def _natural_key(s):
 def _sized(d):
     """(rows whose size may be summarised, n_sized or None). A table with a QC_FLAG column
     (the app's CSVs, --multiscale) sizes only plaque_qc.size_ok rows; one without sizes every
-    row, exactly as before (CT-R2 detection N1)."""
+    row, exactly as before (CT-R2 detection N1). The column is found in any spelling
+    (plaque_qc.flag_column: qc_flag, Qc_Flag) and the flags in any case / spacing."""
     if d is None:
         return d, None
     keep = plaque_qc.sized_rows(d) if plaque_qc is not None else None

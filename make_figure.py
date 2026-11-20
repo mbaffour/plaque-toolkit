@@ -68,7 +68,8 @@ SIZE_METRICS = ("DIAMETER_MM", "AREA_MM2", "DIAMETER_PXL", "AREA_PXL")
 
 def _size_rows(df, metric):
     """Which rows may be plotted as a SIZE (CT-R2 detection N1), or None for all rows: tables
-    without QC_FLAG and non-size metrics (turbidity) keep every row."""
+    without QC_FLAG (in any spelling: plaque_qc.flag_column) and non-size metrics (turbidity)
+    keep every row."""
     if metric not in SIZE_METRICS:
         return None
     try:
