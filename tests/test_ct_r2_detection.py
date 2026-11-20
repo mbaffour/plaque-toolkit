@@ -325,7 +325,7 @@ def test_p4_few_sized_warning():
     assert plaque_qc.few_sized_warning(["OK", "CORE?"]) == []            # exactly half: no
     w = plaque_qc.few_sized_warning(["OK", "CORE?", "SPLIT|NO_SIZE", "EDGE|CORE?"])
     assert w == ["sizes from 1 of 4 plaques: the size summary may not represent the plate (left out: "
-                 "2 outlined at the dark centre only and 1 split pieces whose size is not reliable)."]
+                 "2 outlined at the dark centre only and 1 split piece whose size is not reliable)."]  # N5 grammar
     assert plaque_qc.few_sized_warning([]) == []
     # plate_warnings carries it next to the large-plaque warning, for every front end
     assert plaque_qc.plate_warnings([20.0], None, ["CORE?", "CORE?", "OK"]) == \
