@@ -630,15 +630,15 @@ def test_saved_size_is_reported_as_saved(win, st, dialogs, tmp_path):
     st.savefig_btn.click()
     w_px, h_px = Image.open(tmp_path / "f.png").size
     w, h = w_px / 100.0, h_px / 100.0
-    assert h > 5.4 + 0.3                                    # it did grow (key below)
+    assert h > 5.2 + 0.3                                    # it did grow (key below; CT-R3 default 5.2 in)
     said = "%.1f × %.1f in" % (w, h)
     msg = _status(win)
-    assert said in msg and "taller than the 5.4 in asked for" in msg, msg
-    assert said in st.size_lbl.text() and "taller than the 5.4 in asked for" in st.size_lbl.text()
+    assert said in msg and "taller than the 5.2 in asked for" in msg, msg
+    assert said in st.size_lbl.text() and "taller than the 5.2 in asked for" in st.size_lbl.text()
     z = _zip(st, dialogs, tmp_path)
     cfg = json.loads(z.read("run_config_diameter_mm.json"))
     assert abs(cfg["figure_size_in"][0] - w) < 0.011 and abs(cfg["figure_size_in"][1] - h) < 0.011
-    assert cfg["figure_size_asked_in"] == [6.0, 5.4]
+    assert cfg["figure_size_asked_in"] == [6.0, 5.2]
     png = Image.open(io.BytesIO(z.read("violin_diameter_mm.png"))).size
     assert png == (w_px, h_px)
 
@@ -658,16 +658,16 @@ def test_preview_is_the_figure_at_its_size_in_inches(win, st, dialogs, qtbot):
     st.analyse_btn.click()
     qtbot.wait(100)
     fig = st._last_fig
-    assert np.allclose(fig.get_size_inches(), [8.4, 5.4], atol=0.011)
-    assert abs(st.canvas.width() / st.canvas.height() - 8.4 / 5.4) < 0.01
+    assert np.allclose(fig.get_size_inches(), [8.0, 5.2], atol=0.011)   # CT-R3 default
+    assert abs(st.canvas.width() / st.canvas.height() - 8.0 / 5.2) < 0.01
     st.width_in.setValue(16.0)                               # wider than the panel: scaled down
     win.resize(900, 600)
     qtbot.wait(200)
     fig = st._last_fig
-    assert np.allclose(fig.get_size_inches(), [16.0, 5.4], atol=0.02)
+    assert np.allclose(fig.get_size_inches(), [16.0, 5.2], atol=0.02)
     sa = st._scroll_area()
     assert st.canvas.width() <= sa.viewport().width()
-    assert abs(st.canvas.width() / st.canvas.height() - 16.0 / 5.4) < 0.01
+    assert abs(st.canvas.width() / st.canvas.height() - 16.0 / 5.2) < 0.01
     assert sa.horizontalScrollBar().maximum() == 0
 
 

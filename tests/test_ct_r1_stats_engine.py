@@ -558,8 +558,9 @@ def test_A6_every_allowed_center_error_runs_end_to_end(tmp_path, center, error):
     assert "Whisker" in res["figure_sentence"] or "No whisker" in res["figure_sentence"]
     if (center, error) == ("median", "ci95"):
         # CT-R2 N3: 3 plates per sample -> the plate bootstrap is called approximate, not a 95 % CI
-        assert ("bootstrap interval of the median (approximate: too narrow with fewer than about 10 plates) "
-                "(plates resampled, 2,000 bootstrap resamples, seed 7)") in res["figure_sentence"]
+        # CT-R3 (stats N3): no brackets inside brackets
+        assert ("bootstrap interval of the median, approximate (too narrow with fewer than about 10 plates, "
+                "plates resampled, 2,000 bootstrap resamples, seed 7)") in res["figure_sentence"]
         assert "95 % CI" not in res["figure_sentence"]
 
 

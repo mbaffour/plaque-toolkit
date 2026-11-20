@@ -264,14 +264,16 @@ def _pick(cands, pool, default=None):
 
 
 def value_choices(df, exclude=()):
-    """WIDE: the numeric columns that are not labels; LONG: the metric names. CT-R2 N14: the
-    columns chosen as Group or Replicate are never offered as the value (a numeric sample
-    name or plate number is a label here, not a measurement)."""
+    """WIDE: the MOSTLY numeric columns that are not labels; LONG: the metric names. CT-R2 N14:
+    the columns chosen as Group or Replicate are never offered as the value (a numeric sample
+    name or plate number is a label here, not a measurement). CT-R3 F1: a column is offered when
+    at least half of its non-empty cells are numbers (ps.value_columns); the cells that are not
+    are dropped and counted in the notes, as the command line does."""
     lay = layout_of(df)
     if lay["long"]:
         return lay["metrics"]
     skip = {str(x) for x in exclude if x}
-    return [str(c) for c in ps.numeric_columns(df) if str(c) not in skip]
+    return [str(c) for c in ps.value_columns(df) if str(c) not in skip]
 
 
 def picker_defaults(df):
@@ -282,7 +284,9 @@ def picker_defaults(df):
     if layout_of(df)["long"]:
         value = vals[0] if vals else None
     else:
-        value = _pick(["diameter_mm", "value"], vals, vals[0] if vals else None)
+        # CT-R3 F1: a diameter column is the default whenever there is one
+        diam = next((v for v in vals if "diam" in v.lower()), None)
+        value = _pick(["diameter_mm", "value"], vals, diam or (vals[0] if vals else None))
     return {"group": group, "replicate": rep, "value": value}
 
 
@@ -446,6 +450,7 @@ def compute(df, sel, info=None):
     else:
         d, metric = ps.normalize(df, sel["group"], sel["value"], rep, "metric")
     notes = ps.data_notes(d)
+    rows_read = int(d.attrs.get("rows_read", len(df)))      # before any filtering below (CT-R3 F1)
     present = list(dict.fromkeys(d["group"]))
     order = ps.resolve_order([g for g in sel["order"] if g in present], present, "Samples")
     gone = [g for g in present if g not in order]
@@ -453,6 +458,7 @@ def compute(df, sel, info=None):
         notes.append("%d rows not analysed: %s not selected." % (int(d["group"].isin(gone).sum()),
                                                                  ", ".join(gone)))
     d = d[d["group"].isin(order)].reset_index(drop=True)
+    size_warn = [w for w in [ps.size_warning(d["value"].values, metric)] if w]   # CT-R3 F8
     if grouped:
         subs = list(dict.fromkeys(d["subgroup"]))
         ctrl = sel.get("control")
@@ -477,14 +483,14 @@ def compute(df, sel, info=None):
         notes.append(log_note[0].upper() + log_note[1:] + ".")
     base = dict(d=d, metric=metric, order=order, opts=opts, palette_hint=hint, notes=notes,
                 parse_note=(info or {}).get("note", ""), layout="LONG" if lay["long"] else "WIDE",
-                rows_read=int(d.attrs.get("rows_read", len(df))))
+                rows_read=rows_read)
     if grouped:
         summ, comp, unit, ginfo = ps.grouped_stats(d, order, sub_order, control, sel["parametric"],
                                                     unit=sel["unit"], return_info=True)
         have_rep = unit == "replicate"
         base.update(mode="grouped", group_order=order, sub_order=sub_order, control=control,
                     summ=summ, comp=comp, unit=unit, have_rep=have_rep,
-                    warnings=list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
+                    warnings=size_warn + list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
                     sentence=ps.paste_sentence(metric, comp=comp, unit=unit, control=control, opts=opts),
                     fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"]), grouped=True))
         return in_app_words(base, sel)
@@ -497,7 +503,7 @@ def compute(df, sel, info=None):
     src = rm if (unit == "replicate" and rm is not None) else d
     base.update(mode="single", omni=omni, posthoc=posthoc, unit=unit, have_rep=have_rep, summ=summ,
                 unit_means=src.groupby("group")["value"].mean().to_dict(),
-                warnings=list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
+                warnings=size_warn + list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
                 sentence=ps.paste_sentence(metric, summ, omni, unit, have_rep, opts, centers=centers),
                 fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"])))
     return in_app_words(base, sel)
@@ -523,8 +529,15 @@ def file_base(a):
 
 
 def figure_size_in(fig, png, dpi=300):
-    """(width, height) in inches of the figure as saved: the engine's final size when it exposes
-    one (fig.final_size_in / fig.figure_size_in_final), else the PNG's pixels / dpi (CT-R2 N6)."""
+    """(width, height) in inches of the figure as saved. CT-R3: the PNG that is served is the
+    truth (its pixels / dpi); the engine's final size is only the fallback (CT-R2 N6)."""
+    import struct
+    try:
+        w, h = struct.unpack(">II", png[16:24])
+        if w > 0 and h > 0:
+            return w / float(dpi), h / float(dpi)
+    except Exception:                                       # noqa: BLE001 -- fall through
+        pass
     for name in ("final_size_in", "figure_size_in_final"):
         v = getattr(fig, name, None)
         try:
@@ -549,6 +562,11 @@ def size_line(size, sel):
                    else "it is taller than the Height slider (long labels or notes need room)")
     if w > sw + 0.15:
         why.append("it is wider than the Width slider (long labels need room)")
+    if not why and (w < sw - 0.05 or h < sh - 0.05):
+        # CT-R3: the file is saved with its empty white margin trimmed, so it is a little smaller
+        # than the sliders (9 x 5.4 in gave an 8.8 x 5.2 in file); say so instead of hiding it
+        why.append("the empty white margin around the figure is trimmed when it is saved, so the file is "
+                   "a little smaller than the Width x Height sliders (%.1f x %.1f in)" % (sw, sh))
     return line + (": " + "; ".join(why) if why else "")
 
 
@@ -571,11 +589,41 @@ def status_line(a):
     return app_words(head + " " + a["fig_sentence"])
 
 
+def test_choice_line(a):
+    """CT-R3: the engine's test-choice / normality-gate sentence ON SCREEN (it was only in the
+    ZIP's report), in the app's words; the same words as the report's 'Test choice' line."""
+    if a.get("mode") != "single":
+        return ""
+    o = a["omni"]
+    return app_words(re.sub(r"\s+", " ", "Test choice: %s, followed by %s. %s %s" % (
+        o.get("test"), o.get("posthoc") or "no post-hoc test", o.get("choice_note") or "",
+        o.get("variance_rule") or "")).strip())
+
+
+def sensitivity_line(a):
+    """CT-R3 F2: the engine's Sensitivity line (omnibus p with and without equal variances, and
+    which pairwise conclusions differ), in the app's words; '' when it does not apply."""
+    if a.get("mode") != "single":
+        return ""
+    t = ps.sensitivity_text(a["omni"])
+    return app_words("Sensitivity: " + t) if t else ""
+
+
+def detail_lines(a):
+    """The short lines under the status line: test choice, then sensitivity."""
+    return [x for x in (test_choice_line(a), sensitivity_line(a)) if x]
+
+
 def summary_lines(a):
     """Parse line + data notes + engine warnings, for the message box above the results."""
     lines = []
     if a.get("parse_note"):
-        lines.append("File: %s %s layout. %d rows used." % (a["parse_note"], a["layout"], len(a["d"])))
+        # CT-R3 F1: never "635 rows used" when rows were dropped: say how many of how many
+        used, read = len(a["d"]), int(a.get("rows_read") or len(a["d"]))
+        lines.append("File: %s %s layout. %s" % (
+            a["parse_note"], a["layout"],
+            "%d rows used." % used if used >= read else
+            "%d of %d rows used (the notes below say why the others are not)." % (used, read)))
     lines += ["Note: " + app_words(n) for n in a.get("notes", [])]
     lines += ["⚠ " + w for w in a.get("warnings", [])]
     if a.get("palette_hint"):
@@ -767,8 +815,9 @@ app_ui = ui.page_sidebar(
                                                "(they stay in the statistics)", False)),
         ui.input_text("title", "Title", ""),
         ui.input_text("ylabel", "Y-axis label", ""),
-        ui.input_slider("width", "Width (in)", 4, 16, 9, step=0.5),
-        ui.input_slider("height", "Height (in)", 3, 12, 5.4, step=0.2),
+        # CT-R3: the engine's default size (the command line's and the desktop's): 8 x 5.2 in
+        ui.input_slider("width", "Width (in)", 4, 16, ps.DEFAULTS["width"], step=0.5),
+        ui.input_slider("height", "Height (in)", 3, 12, ps.DEFAULTS["height"], step=0.2),
         width=330, open="always",
     ),
     ui.tags.style(CSS),
@@ -779,6 +828,8 @@ app_ui = ui.page_sidebar(
                      ui.output_ui("fig_preview"),
                      ui.div(ui.output_text("size_text"), class_="ct-status", id="size_line"),
                      ui.div(ui.output_text("status"), class_="ct-status"),
+                     # CT-R3: the test choice (normality gate) and the Sensitivity line, on screen
+                     ui.div(ui.output_text("detail"), class_="ct-status ct-msg", id="detail_line"),
                      ui.div(ui.download_button("dl_png", "PNG"),
                             ui.download_button("dl_svg", "SVG (editable)"),
                             ui.download_button("dl_pdf", "PDF (editable)"),
@@ -1066,6 +1117,10 @@ def server(input, output, session):
     def status():
         return status_line(analysis())
 
+    @render.text
+    def detail():
+        return "\n".join(detail_lines(analysis()))
+
     @render.data_frame
     def summary_group():
         a = analysis()
@@ -1111,6 +1166,8 @@ def server(input, output, session):
                 o["test"], ps.p_text(o["p"]), a["unit"], o["parametric_used"], o.get("min_n", 0))
             if o.get("posthoc"):
                 msg += "\nPairwise: %s" % o["posthoc"]
+            for ln in detail_lines(a):                     # CT-R3: gate sentence + sensitivity
+                msg += "\n\n" + ln
         for w in a.get("warnings", []):
             msg += "\n\n⚠ " + w
         return app_words(msg)

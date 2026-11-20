@@ -389,9 +389,11 @@ def test_N3_plate_bootstrap_of_the_median_is_approximate_below_10_plates(tmp_pat
                              for v in r.normal(mu + r.normal(0, .1), .3, 6)])
     res, _ = _run(tmp_path, frame(4), center="median", error="ci95")
     fs, rep = res["figure_sentence"], _report(res)
-    want = "bootstrap interval of the median (approximate: too narrow with fewer than about 10 plates)"
+    # CT-R3 (stats N3): the wording without nested brackets
+    want = "bootstrap interval of the median, approximate (too narrow with fewer than about 10 plates"
     assert want in fs and "95 % CI" not in fs
-    assert "median (%s) of all plaques" % want in res["paste_sentence"] and "95 % CI" not in res["paste_sentence"]
+    assert ("median of all plaques, whisker: bootstrap interval of the median, approximate, too narrow with "
+            "fewer than about 10 plates") in res["paste_sentence"] and "95 % CI" not in res["paste_sentence"]
     assert want in rep
     res10, _ = _run(tmp_path / "ten", frame(10), center="median", error="ci95")
     assert "95 % CI of the median (plates resampled" in res10["figure_sentence"]
