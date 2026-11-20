@@ -55,12 +55,14 @@ FIXTURES = {
     # (R and pandas differ in the last bits of a mean; the rank tests must see the same ties)
     "zerovar": os.path.join(FX, "ct_r2_zerovar.csv"),
     "ties": os.path.join(FX, "ct_r2_ties.csv"),
+    # a sample called NA, a sample called 007, 24 data-looking lines whose first field starts with #
+    "names2": os.path.join(FX, "ct_r2_names2.csv"),
 }
 # Expected family under parametric=auto, equal_var=auto (guards against both sides drifting together)
 EXPECT_AUTO = {"example_wide_3x3": "anova", "B_unequal": "welch_anova", "D_two_12v14": "welch_t",
                "E_oneplate_group": "anova", "equalvar_3x8": "anova", "unequalvar_3x8": "welch_anova",
                "skewed_3x10": "kruskal", "skewed_2x9": "mannwhitney",
-               "zerovar": "anova", "ties": "anova"}
+               "zerovar": "anova", "ties": "anova", "names2": "welch_t"}
 COMBOS = list(itertools.product(("auto", "parametric", "nonparametric"), ("auto", "yes", "no")))
 
 FAMILY = {"one-way anova": "anova", "welch anova": "welch_anova", "kruskal-wallis": "kruskal",

@@ -270,7 +270,12 @@ read_plaque_table <- function(path, name = basename(path)) {
   Encoding(txt) <- "UTF-8"
   txt <- sub("^﻿", "", txt)
   lines <- strsplit(txt, "\r\n|\n|\r")[[1]]
-  lines <- lines[!grepl("^\\s*(#.*)?$", lines)]              # blank lines and # comment lines
+  # CT-R2 N7: blank lines and lines whose FIRST field starts with # are skipped, and the # lines are
+  # counted in the read note ("24 lines starting with # skipped"), as plaque_stats.py does
+  n_comment <- sum(grepl("^\\s*#", lines))
+  lines <- lines[nzchar(trimws(lines)) & !grepl("^\\s*#", lines)]
+  if (n_comment)
+    notes <- c(notes, sprintf("%d line%s starting with # skipped", n_comment, if (n_comment == 1) "" else "s"))
   if (!length(lines))
     stop_data("'", name, "' has no data: every line is blank or a # comment.")
   # the delimiter is the one the header line uses most (outside quotes): comma, semicolon or tab
@@ -302,15 +307,8 @@ read_plaque_table <- function(path, name = basename(path)) {
     x <- df[[nm]]; filled <- nzchar(x)
     comma <- grepl(COMMA_NUM_RE, x); dot <- grepl(NUM_RE, x)
     if (!any(comma) || sum(comma | dot) < 0.5 * sum(filled)) next
-    if (delim == ",") {
-      # CT-R1 F3: "1,932" in a comma-separated file is 1.932 to a European and 1932 to an
-      # American. readr used to read it as 1932 without a word; this app will not guess.
-      stop_data("Column '", nm, "' of '", name, "' has numbers written with a comma (for example \"",
-                x[comma][1], "\"). In a comma-separated file that could mean ",
-                sub(",", ".", x[comma][1], fixed = TRUE), " or ", sub(",", "", x[comma][1], fixed = TRUE),
-                ", so nothing was loaded. Write the numbers with a decimal point (1.932), or save the ",
-                "sheet as a semicolon-separated CSV, and upload it again.")
-    }
+    # CT-R2 F3: a comma inside a cell of a comma-separated file can only come from quotes
+    # ("1,8263"), so it is a decimal comma, read as 1.8263 exactly as plaque_stats.py reads it
     df[[nm]][comma] <- sub(",", ".", x[comma], fixed = TRUE)
     notes <- c(notes, paste0("decimal commas in '", nm, "' were read as decimal points (",
                              x[comma][1], " = ", sub(",", ".", x[comma][1], fixed = TRUE), ")"))
@@ -368,18 +366,22 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
   keep[is.na(keep)] <- FALSE
   d <- d[keep, , drop = FALSE]; raw_val <- raw_val[keep]
   n_read <- nrow(d)
-  not_num <- !is.finite(d$value) & nzchar(raw_val) & !tolower(raw_val) %in% c("na", "nan")
+  # CT-R2 N7: a sample (group) name is text exactly as typed: "NA", "None", "nan", "null" are NAMES,
+  # only an empty cell is blank (plaque_stats.py, CT-R1 SM-F1/F2). Rows without a name are dropped
+  # first, so the value counts below are about the rows that were still in play (as Python counts).
+  d$group <- trimws(d$group)
+  no_group <- is.na(d$group) | !nzchar(d$group)
+  d <- d[!no_group, , drop = FALSE]; raw_val <- raw_val[!no_group]
+  # CT-R2 N8: a value cell that is text but not a number ("NA", "2.5mm", "-") is "not a number"; only a
+  # cell that is empty (or "nan") is "empty" -- the split plaque_stats.py reports
+  not_num <- !is.finite(d$value) & nzchar(raw_val) & tolower(raw_val) != "nan"
   blank <- !is.finite(d$value) & !not_num
   bad_examples <- utils::head(unique(raw_val[not_num]), 3)
   ok <- is.finite(d$value)
   d <- d[ok, , drop = FALSE]
-  # drop blank/NA groups; treat blank/"nan" replicate labels as missing (robust to Excel gaps);
-  # "1.0" labels read back from a spreadsheet are "1", as in plaque_stats.py
-  d$group <- sub("\\.0$", "", trimws(d$group))
-  no_group <- is.na(d$group) | tolower(d$group) %in% c("", "na", "nan", "nat", "none")
-  d <- d[!no_group, , drop = FALSE]
-  d$replicate <- sub("\\.0$", "", trimws(as.character(d$replicate)))
-  d$replicate[tolower(d$replicate) %in% c("", "na", "nan", "nat", "none")] <- NA
+  # only an empty plate cell is "no plate"; a plate called NA is a plate (labels as typed)
+  d$replicate <- trimws(as.character(d$replicate))
+  d$replicate[is.na(d$replicate) | !nzchar(d$replicate)] <- NA
   # CT-R1 F13: the order box matches names without regard to case and says what it ignored
   present <- unique(d$group)
   ord <- trimws(strsplit(if (is.null(order) || is.na(order)) "" else order, ",")[[1]]); ord <- ord[ord != ""]
@@ -390,13 +392,15 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
   d <- d[!is.na(d$group), , drop = FALSE]
   rownames(d) <- NULL
   notes <- character(0)
-  if (sum(not_num))
-    notes <- c(notes, sprintf("%d of %d rows were left out because '%s' is not a number there (for example %s).",
-                              sum(not_num), n_read, vcol, paste0("\"", bad_examples, "\"", collapse = ", ")))
-  if (sum(blank))
-    notes <- c(notes, sprintf("%d of %d rows were left out because '%s' is blank there.", sum(blank), n_read, vcol))
   if (sum(no_group))
-    notes <- c(notes, sprintf("%d rows were left out because the sample (group) cell is blank.", sum(no_group)))
+    notes <- c(notes, sprintf("%d row%s dropped: no %s label.", sum(no_group), if (sum(no_group) == 1) "" else "s", group))
+  if (sum(not_num) + sum(blank)) {
+    why <- sprintf("no numeric %s value", vcol)
+    if (sum(not_num))
+      why <- sprintf("%s (%d not a number, %d empty)", why, sum(not_num), sum(blank))
+    notes <- c(notes, sprintf("%d row%s dropped: %s.", sum(not_num) + sum(blank),
+                              if (sum(not_num) + sum(blank) == 1) "" else "s", why))
+  }
   if (length(ignored))
     notes <- c(notes, sprintf("Group order: %s %s not a sample in this data and %s ignored.",
                               paste0("'", ignored, "'", collapse = ", "),

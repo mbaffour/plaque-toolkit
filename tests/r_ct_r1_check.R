@@ -142,8 +142,9 @@ chk("F3_semicolon_decimal_comma", !inherits(r, "error") && all(is.finite(as.nume
       max(as.numeric(r$df$diameter_mm)) < 5 && any(grepl("decimal comma", r$notes)))
 q <- mk(",", ","); q[-1] <- vapply(strsplit(q[-1], ","), function(x) paste0(x[1], ",", x[2], ',"', x[3], ",", x[4], '"'), "")
 r <- read_ok(tmp("eu_quoted.csv", q))
-chk("F3_ambiguous_comma_stops", inherits(r, "plaque_data_problem") && grepl("decimal point", conditionMessage(r)) &&
-      grepl("nothing was loaded", conditionMessage(r)), if (inherits(r, "error")) conditionMessage(r) else "was read")
+# CT-R2: a comma inside a cell of a comma file can only come from quotes, so it is a decimal comma (Python reads it so)
+chk("F3_quoted_decimal_comma_is_read", !inherits(r, "error") && all(is.finite(as.numeric(r$df$diameter_mm))) &&
+      max(as.numeric(r$df$diameter_mm)) < 5 && any(grepl("decimal comma", r$notes)), if (inherits(r, "error")) conditionMessage(r) else "")
 bad <- list(
   empty = raw(0), header_only = "group,replicate,diameter_mm",
   binary = as.raw(c(0:255, 0:255)), cp1252 = NULL,
@@ -167,7 +168,7 @@ mv <- mk(","); mv[5] <- sub("[0-9.]+$", "2.5mm", mv[5]); mv[7] <- sub("[0-9.]+$"
 r <- read_ok(tmp("missing.csv", mv))
 chk("F9_text_cell_keeps_column", !inherits(r, "error") && "diameter_mm" %in% numeric_cols(r$df))
 d <- tidy_plaque_data(r$df, "group", "replicate", "diameter_mm", NULL, "")
-chk("F9_rows_dropped_reported", nrow(d) == 70 && any(grepl("2 of 72 rows were left out", attr(d, "info")$notes)), paste(attr(d, "info")$notes, collapse = " "))
+chk("F9_rows_dropped_reported", nrow(d) == 70 && any(grepl("^2 rows dropped: no numeric diameter_mm value \\(2 not a number, 0 empty\\)\\.$", attr(d, "info")$notes)), paste(attr(d, "info")$notes, collapse = " "))
 lv <- mk(","); lv[1] <- "group,replicate,value"; r <- read_ok(tmp("long_nometric.csv", lv))
 chk("F9_value_without_metric", is.null(long_cols(r$df)) && "value" %in% numeric_cols(r$df))
 r <- read_ok(tmp("upper.csv", mk(",", head = c("GROUP", "REPLICATE", "DIAMETER_MM"))))
@@ -490,3 +491,22 @@ chk("R2_N3_ties_dunn_p", near(unname(pw_p(stT)), c(0.001695575267088922, 0.03978
     paste(sprintf("%.10g", pw_p(stT)), collapse = " "))
 stTp <- plaque_run_stats(tidy(fx("ct_r2_ties.csv")))
 chk("R2_N3_parametric_p_unchanged", near(stTp$p, 0.000721407841790418, 1e-12), sprintf("%.12g", stTp$p))
+
+# ---- N7 + N8 + F3: reading as Python does ----------------------------------------------------------
+rN <- read_plaque_table(fx("ct_r2_names2.csv"))
+chk("R2_N7_hash_lines_skipped_and_counted", any(grepl("^24 lines starting with # skipped$", rN$notes)), paste(rN$notes, collapse = "|"))
+dN2 <- tidy_plaque_data(rN$df, "group", "replicate", "diameter_mm", NULL, "")
+chk("R2_N7_NA_is_a_sample_name", identical(levels(dN2$group), c("NA", "007")) && nrow(dN2) == 48, paste(c(levels(dN2$group), nrow(dN2)), collapse = "|"))
+stN2 <- plaque_run_stats(dN2)
+chk("R2_N7_names2_same_test_and_p_as_python", stN2$test == "Welch t-test" && near(stN2$p, 0.012957814949959734, 1e-12), sprintf("%s %.12g", stN2$test, stN2$p))
+nm <- tmp("names_words.csv", c("group,replicate,diameter_mm", paste0(rep(c("None", "nan", "null", "NA"), each = 4), ",p", rep(1:2, 8), ",", c(2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.4, 2.7, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.4, 3.7)),
+                                   ",p1,2.2"))
+dW <- tidy_plaque_data(read_plaque_table(nm)$df, "group", "replicate", "diameter_mm", NULL, "")
+chk("R2_N7_None_nan_null_NA_are_names_empty_is_blank", identical(levels(dW$group), c("None", "nan", "null", "NA")) &&
+      any(grepl("^1 row dropped: no group label\\.$", attr(dW, "info")$notes)), paste(levels(dW$group), collapse = "|"))
+rU <- read_plaque_table(fx("ct_r2_upper_missing.csv"))
+dU <- tidy_plaque_data(rU$df, "GROUP", "REPLICATE", "DIAMETER_MM", NULL, "")
+chk("R2_N8_not_a_number_vs_empty_wording", identical(attr(dU, "info")$notes, "7 rows dropped: no numeric DIAMETER_MM value (5 not a number, 2 empty)."),
+    paste(attr(dU, "info")$notes, collapse = "|"))
+stU <- plaque_run_stats(dU)
+chk("R2_N8_upper_missing_same_p_as_python", stU$test == "one-way ANOVA" && near(stU$p, 0.0013102525378786152, 1e-9), sprintf("%.12g", stU$p))
