@@ -439,6 +439,23 @@ def measure(area_pxl, pxl_per_mm, published=None):
     return dia_pxl, area_mm2, dia_mm
 
 
+def qc_flags(plaques, orig_bgr, pxl_per_mm, plate=None, circularities=None):
+    """[(QC_FLAG, QC_REASON)] per plaque -- the ONE call behind the Measure table
+    (engine_api.measure_table), Save results' data-green CSV, the Batch CSVs and the Compare
+    tab's plaque list (CT-R2 N1/N2), so every one of them flags (and leaves out of the size
+    summaries, plaque_qc.size_ok) the same plaques. Never raises: a QC failure gives blanks."""
+    try:
+        import plaque_qc
+        import plaque_scales
+        if circularities is None:
+            circularities = [plaque_scales.circularity(p) for p in plaques]
+        return plaque_qc.flags_for_plaque_dicts(
+            plaques, orig_bgr.shape[:2], plate=plate, circularities=circularities,
+            gray=cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY), mm_per_px=pxl_per_mm)
+    except Exception:                        # never let QC break a table or a save
+        return [("", "")] * len(plaques)
+
+
 def trace_by_contour(candidates, x, y):
     """Snap to the smallest detector contour that contains (x, y). None if no hit."""
     best, best_area = None, None

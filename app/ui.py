@@ -148,9 +148,11 @@ _BUSY_STD = [
 
 
 class PlaqueSizeBox(QComboBox):
-    """The "Plaque size" choice shared by the Measure and Batch tabs (CT-R1 detection D1).
+    """The "Plaque size" choice shared by the Measure, Batch and Compare tabs (CT-R1 detection
+    D1, CT-R2 N1).
 
-    Current / Sensitive: Auto (both scales, the default), Standard, Small. Published: Standard
+    Current / Sensitive: Auto (both scales), Standard, Small; the default is
+    engine_api.DEFAULT_PLAQUE_SIZE. Published: Standard
     (the default, = `plaque_size_tool.py --published`) or Small; it never runs Auto. Precise
     has its own fixed detection, so the box is disabled. The user's pick is remembered per
     engine family, so switching engine and back does not lose it."""
@@ -170,7 +172,11 @@ class PlaqueSizeBox(QComboBox):
         super().__init__(parent)
         import plaque_gui as _pg
         self._labels = dict(_pg.SCALE_LABELS)
-        self._choice = {"published": "standard", "other": "auto"}
+        # CT-R2 (coordinator A): the default lives in ONE place, engine_api.DEFAULT_PLAQUE_SIZE.
+        # Published never runs Auto, so its default is Standard unless the constant is Small.
+        dflt = engine_api.DEFAULT_PLAQUE_SIZE
+        self._choice = {"published": dflt if dflt in ("standard", "small") else "standard",
+                        "other": dflt}
         self._family = None
         self.currentIndexChanged.connect(self._remember)
         self.setToolTip("Plaque size: how the detector handles small and large plaques.")
@@ -1396,7 +1402,9 @@ _QUANTITY = {"TRANSMITTANCE": ("Transm.", "transmittance = light through the pla
                                         "as the lawn")}
 PHAGE_COLUMNS = {"PHAGE": ("Phage", "Phage / sample label (from the file name).", None),
                  "N_PLATES": ("Plates", "Number of plates of this phage that had plaques.", "count"),
-                 "N_PLAQUES": ("Plaques", "Number of plaques measured, all plates together.", "count")}
+                 "N_PLAQUES": ("Plaques", "Number of plaques measured, all plates together.", "count"),
+                 "N_SIZED": ("Sized", "Plaques whose size and turbidity enter this summary (all "
+                                      "except CORE? / NO_SIZE ones, which only count).", "count")}
 for _q, (_qlab, _qtip) in _QUANTITY.items():
     for _s, (_slab, _stip) in _STAT.items():
         PHAGE_COLUMNS["%s_%s" % (_q, _s)] = ("%s %s" % (_qlab, _slab),
@@ -1406,7 +1414,12 @@ for _q, (_qlab, _qtip) in _QUANTITY.items():
 PLATE_COLUMNS = {
     "PLATE": ("Plate", "Plate label (the image file name).", None),
     "PHAGE": ("Phage", "Phage / sample this plate belongs to.", None),
-    "N_PLAQUES": ("Plaques", "Number of plaques counted on this plate.", "count"),
+    "N_PLAQUES": ("Plaques", "Number of plaques counted on this plate (all of them enter the "
+                             "titer).", "count"),
+    "N_SIZED": ("Sized", "Plaques whose size and turbidity enter the summaries and plots: all "
+                         "except those outlined at the dark centre only (CORE?) or split pieces "
+                         "too overlapped to size (NO_SIZE). Those still count, and enter the "
+                         "titer.", "count"),
     "PFU_PER_ML": ("PFU/mL", "Titer = plaques × dilution factor ÷ plated volume (mL).", "sci"),
     "PFU_PER_ML_CI95_LO": ("95 % low", "Lower end of the 95 % interval of the titer (exact "
                                        "Poisson limits on the plaque count).", "sci"),
@@ -1450,11 +1463,21 @@ BATCH_COLUMNS = {
 }
 
 
-def compare_qc_note(q, failed=(), titer=False):
+_SIZE_TRY = {"standard": "Small (plaques under ~2.5 mm) or Auto (both scales)",
+             "auto": "Small (one pass at the small scale)",
+             "small": "Auto (both scales) or Standard"}
+
+
+def compare_qc_note(q, failed=(), titer=False, scale=None, flags=None):
     """The Compare tab's QC sentence(s), from qc.csv rows `q` (CT-R1 F5). Polarity is a
     pass/fail only for plates measured against a blank (ABSOLUTE_OD): without one the engine
     does not assess it, and the tab must not call it a failure. Plates with no plaques are
-    named, because they are absent from the per-phage table."""
+    named, because they are absent from the per-phage table.
+
+    CT-R2 N1: ``scale`` is the run's Plaque size; a plate with 0 plaques is a warning that says
+    which Plaque size to try, and the run is then never called "QC passed". ``flags`` (the
+    plaques' QC_FLAG values) adds "sizes and turbidity from N of M plaques" when some count
+    but are left out of the summaries (plaque_qc.size_ok)."""
     failed = [str(f) for f in failed]
     n = len(q)
     parts = ["%d plate%s analysed." % (n, "" if n == 1 else "s")]
@@ -1477,7 +1500,23 @@ def compare_qc_note(q, failed=(), titer=False):
     if nod:
         parts.append("⚠ no dish found (sizes and turbidity unreliable): %s." % ", ".join(nod))
     if zero:
-        parts.append("0 plaques: %s." % ", ".join(zero))
+        if scale in _SIZE_TRY:
+            parts.append("⚠ 0 plaques: %s. If %s plaques, run again with Plaque size %s, "
+                         "and check the Dish size." % (", ".join(zero),
+                                                       "this plate has" if len(zero) == 1 else "these plates have",
+                                                       _SIZE_TRY[scale]))
+        else:
+            parts.append("⚠ 0 plaques: %s." % ", ".join(zero))
+    if flags is not None and len(flags):
+        import plaque_qc
+        out = plaque_qc.size_left_out_counts(list(flags))
+        n_sized = sum(1 for f in flags if plaque_qc.size_ok(f))
+        if n_sized < len(flags):
+            phrase = plaque_qc.left_out_phrase(out)
+            parts.append("Sizes and turbidity from %d of %d plaques%s." % (
+                n_sized, len(flags),
+                (" (%s %s counted, and in the titer, but left out of the summaries and plots)"
+                 % (phrase, "is" if (len(flags) - n_sized) == 1 else "are")) if phrase else ""))
     if bad:
         parts.append("⚠ polarity fail (plaques darker than the lawn; check that the plates were "
                      "back-lit): %s." % ", ".join(bad))
@@ -1488,7 +1527,7 @@ def compare_qc_note(q, failed=(), titer=False):
     elif rel:
         parts.append("Lawn-relative only (the blank could not be applied): polarity not assessed "
                      "for %s." % ", ".join(rel))
-    if not (nod or bad or uneven or failed):
+    if not (nod or bad or uneven or failed or zero):
         parts.append("✓ QC passed (dish found%s)." % (", polarity" if len(rel) < n else ""))
     if not titer:
         parts.append("No titer: fill in both Titer boxes (dilution factor and plated volume) "
@@ -1535,7 +1574,11 @@ class CompareTab(QWidget):
 
         self.plate = QDoubleSpinBox(); self.plate.setRange(0, 500); self.plate.setValue(100)
         self.plate.setSuffix(" mm")
-        self.small = QCheckBox("Small plaques")
+        # CT-R2 N1: the same "Plaque size" box as Measure and Batch (it replaces the "Small
+        # plaques" box, whose unticked default was Standard: up to 38x fewer plaques than
+        # Measure / Batch found on the same image). Compare detects as engine Current does.
+        self.scale_box = PlaqueSizeBox()
+        self.scale_box.set_engine("current")
         self.watershed = QCheckBox("Watershed")
         self.group = QCheckBox("Group replicates by name prefix"); self.group.setChecked(True)
         self.core = QDoubleSpinBox(); self.core.setRange(0.2, 1.0); self.core.setValue(1.0)
@@ -1551,7 +1594,9 @@ class CompareTab(QWidget):
         opts_box = QGroupBox("Options")
         opts = QGridLayout(opts_box); opts.setHorizontalSpacing(14); opts.setVerticalSpacing(8)
         opts.addWidget(QLabel("Dish"), 0, 0); opts.addWidget(self.plate, 0, 1)
-        opts.addWidget(self.small, 0, 2); opts.addWidget(self.watershed, 0, 3)
+        sz = QHBoxLayout(); sz.setContentsMargins(0, 0, 0, 0)
+        sz.addWidget(QLabel("Plaque size")); sz.addWidget(self.scale_box)
+        opts.addLayout(sz, 0, 2); opts.addWidget(self.watershed, 0, 3)
         opts.addWidget(self.group, 1, 0, 1, 2)
         opts.addWidget(QLabel("Core fraction"), 1, 2); opts.addWidget(self.core, 1, 3)
         opts.addWidget(QLabel("Titer"), 2, 0)
@@ -1681,7 +1726,7 @@ class CompareTab(QWidget):
                         "No images found in %s.\n\nThe folder must hold the plate photos "
                         "(.tif, .jpg, .png or .heic), one plate per file; the file name is "
                         "used as the phage label." % directory)
-        kw = dict(plate_mm=self.plate.value(), small=self.small.isChecked(),
+        kw = dict(plate_mm=self.plate.value(), scale=self.scale_box.scale(),
                   core=self.core.value(), group_by_prefix=self.group.isChecked(),
                   watershed=self.watershed.isChecked(),
                   out_dir=os.path.join(directory, "out_turbidity"),
@@ -1729,6 +1774,7 @@ class CompareTab(QWidget):
 
     def _set_busy(self, on):
         self.run_btn.setEnabled(not on)
+        self.scale_box.setEnabled(not on)
         self.key_cb.setEnabled(not on)
         self.key_btn.setEnabled(not on and bool(self._figures))
         self.progress.setVisible(on)
@@ -1774,7 +1820,13 @@ class CompareTab(QWidget):
                 failed = err["PLATE"].astype(str).tolist() if "PLATE" in err else ["%d" % n_failed]
         except (OSError, ValueError):
             pass
-        self.qc.setText(compare_qc_note(q, failed=failed, titer=titer))
+        flags = None
+        if self._last_df is not None and "QC_FLAG" in getattr(self._last_df, "columns", ()):
+            flags = self._last_df["QC_FLAG"].tolist()
+        scale = None
+        if "PLAQUE_SIZE" in q.columns and len(q):
+            scale = str(q["PLAQUE_SIZE"].iloc[0])
+        self.qc.setText(compare_qc_note(q, failed=failed, titer=titer, scale=scale, flags=flags))
 
     @staticmethod
     def _plate_frame(q):
@@ -1789,6 +1841,9 @@ class CompareTab(QWidget):
         out["PHAGE"] = q["PHAGE"].astype(str) if "PHAGE" in q else ""
         counts = pd.to_numeric(q["N_PLAQUES"], errors="coerce") if "N_PLAQUES" in q else pd.Series([float("nan")] * len(q))
         out["N_PLAQUES"] = pd.array([None if c != c else int(c) for c in counts], dtype="Int64")
+        if "N_SIZED" in q:                     # CT-R2 N1: n whose size counts, next to the count
+            sized = pd.to_numeric(q["N_SIZED"], errors="coerce")
+            out["N_SIZED"] = pd.array([None if c != c else int(c) for c in sized], dtype="Int64")
         for c in ("PFU_PER_ML", "PFU_PER_ML_CI95_LO", "PFU_PER_ML_CI95_HI"):
             if c in q:
                 out[c] = pd.to_numeric(q[c], errors="coerce")

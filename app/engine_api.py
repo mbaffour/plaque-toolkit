@@ -15,6 +15,11 @@ import plaque_gui as pgui
 
 _LOCK = threading.Lock()
 
+# The default "Plaque size" of the Current / Sensitive engines, in ONE place (an open owner
+# decision, CT-R2 coordinator note A): the Measure, Batch and Compare tabs' Plaque size box,
+# app/batch_measure.py and app/validate.py all read it. One of plaque_gui.SCALES.
+DEFAULT_PLAQUE_SIZE = "auto"
+
 
 def numpy_version():
     return np.__version__
@@ -162,13 +167,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     turb = pst.turbidity_indices(means, lg)
     over = overlap_flags(plaques)
     circs = [_circularity(p) for p in plaques]
-    try:
-        import plaque_qc
-        # CT-R1 detection D5: the grey image (BRIGHT) and the scale (TINY in mm) go in too
-        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs,
-                                              gray=gray, mm_per_px=ppm)
-    except Exception:                        # never let QC break the table
-        qc = [("", "")] * len(plaques)
+    # CT-R1 detection D5 / CT-R2 N2: the one shared flag call (Save results and the Compare
+    # tab flag with it too)
+    qc = pgui.qc_flags(plaques, orig_bgr, ppm, plate=plate, circularities=circs)
     rows = []
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
@@ -500,11 +501,15 @@ def compare_images(directory):
 
 def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, dark=None,
                 core=1.0, group_by_prefix=False, dilution=None, volume_ul=None,
-                watershed=False, published=False, out_dir="out_turbidity", key_on_figure=True):
+                watershed=False, published=False, out_dir="out_turbidity", key_on_figure=True,
+                scale=None):
     """Batch cross-phage turbidity. Writes per_phage.csv/qc.csv/figures into out_dir and
     returns the plaque-level DataFrame, out_dir and `figures`: the records of the figures
     THIS run wrote (plaque_turbidity.write_plots), which is exactly what the tab shows --
-    never a glob of the folder, which also matched an earlier run's files (CT-R1 F4)."""
+    never a glob of the folder, which also matched an earlier run's files (CT-R1 F4).
+
+    ``scale`` = the tab's Plaque size ("auto" / "standard" / "small", CT-R2 N1): the plaques
+    are detected exactly as the Measure and Batch tabs detect them with engine Current."""
     import plaque_turbidity as ptb
     overlays = []
     with _LOCK:
@@ -518,7 +523,8 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
             group_by_prefix=bool(group_by_prefix), dark_path=dark or None,
             core_frac=float(core), make_overlays=True,
             dilution=dilution, volume_ul=volume_ul, make_plots=False,
-            key_on_figure=bool(key_on_figure), overlay_records=overlays)
+            key_on_figure=bool(key_on_figure), overlay_records=overlays,
+            scale=(pgui.resolve_scale(scale, small) if (scale and not published) else None))
     # Plotting runs here, on the caller's (worker) thread, AFTER the engine lock is released.
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
     return {"df": df, "out_dir": out_dir, "figures": figures, "overlays": overlays}

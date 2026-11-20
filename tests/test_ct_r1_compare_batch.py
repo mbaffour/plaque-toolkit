@@ -455,23 +455,25 @@ def test_compare_tab_plots_a_folder_with_plaques_on_the_worker(window, qtbot, ph
 
     # per-phage table: only columns that hold something, short labels, ascending by phage
     hdr, rows = _table(tab.table)
-    assert hdr == ["Phage", "Plates", "Plaques", "Transm. pooled", "Transm. plate mean", "Transm. plate SD"]
+    # CT-R2 N1: "Sized" (the app's Plaque size detection) after the count
+    assert hdr == ["Phage", "Plates", "Plaques", "Sized", "Transm. pooled", "Transm. plate mean",
+                   "Transm. plate SD"]
     assert [r[:3] for r in rows] == [["T4", "2", "10"], ["T7", "1", "5"]]
     per = pd.read_csv(out / "per_phage.csv")
     assert "OD_PLAQUE_MEAN" in per.columns and "TURBIDITY_PLATE_SD" in per.columns   # CSV unchanged
     t4 = per[per["PHAGE"] == "T4"].iloc[0]
-    assert rows[0][3] == "%.4g" % t4["TRANSMITTANCE_PLAQUE_MEAN"]
-    assert rows[1][5] == ""                                     # one plate: no SD, and not "nan"
+    assert rows[0][4] == "%.4g" % t4["TRANSMITTANCE_PLAQUE_MEAN"]
+    assert rows[1][6] == ""                                     # one plate: no SD, and not "nan"
     assert not [c for r in rows for c in r if "nan" in c.lower()]
-    tip = tab.model.headerData(4, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.model.headerData(5, Qt.Horizontal, Qt.ToolTipRole)
     assert "TRANSMITTANCE_PLATE_MEAN" in tip and "per-plate means" in tip
 
     # per-plate table from qc.csv
     hdr, rows = _table(tab.plate_table)
-    assert hdr == ["Plate", "Phage", "Plaques", "Countable (30–300)", "OD reference"]
-    assert rows == [["T4_1", "T4", "5", "no", "lawn-relative"],
-                    ["T4_2", "T4", "5", "no", "lawn-relative"],
-                    ["T7_1", "T7", "5", "no", "lawn-relative"]]
+    assert hdr == ["Plate", "Phage", "Plaques", "Sized", "Countable (30–300)", "OD reference"]
+    assert rows == [["T4_1", "T4", "5", "5", "no", "lawn-relative"],
+                    ["T4_2", "T4", "5", "5", "no", "lawn-relative"],
+                    ["T7_1", "T7", "5", "5", "no", "lawn-relative"]]
 
 
 # ----------------------------------------------------------------------------- F2
@@ -594,18 +596,18 @@ def test_compare_tab_shows_the_titer_per_plate(window, qtbot, phage_folder, dial
     _run_compare(tab, qtbot, phage_folder, dil="10^6", vol="100")
     assert not dialogs
     hdr, rows = _table(tab.plate_table)
-    assert hdr == ["Plate", "Phage", "Plaques", "PFU/mL", "95 % low", "95 % high",
+    assert hdr == ["Plate", "Phage", "Plaques", "Sized", "PFU/mL", "95 % low", "95 % high",
                    "Countable (30–300)", "OD reference"]
     lo, hi = ptb.poisson_ci95(5)
     per_ml = 1e6 / 0.1
-    assert rows[0] == ["T4_1", "T4", "5", "%.2e" % (5 * per_ml), "%.2e" % (lo * per_ml),
+    assert rows[0] == ["T4_1", "T4", "5", "5", "%.2e" % (5 * per_ml), "%.2e" % (lo * per_ml),
                        "%.2e" % (hi * per_ml), "no", "lawn-relative"]
     assert [r[0] for r in rows] == ["T4_1", "T4_2", "T7_1"]
     assert "No titer" not in tab.qc.text()
     q = pd.read_csv(phage_folder / "out_turbidity" / "qc.csv")       # the CSV keeps full numbers
     assert q["PFU_PER_ML"].tolist() == [5 * per_ml] * 3
     assert {"COUNT", "PFU_PER_ML_CI95_LO", "PFU_PER_ML_CI95_HI", "COUNT_IN_RANGE_30_300"} <= set(q.columns)
-    tip = tab.plate_model.headerData(4, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.plate_model.headerData(5, Qt.Horizontal, Qt.ToolTipRole)
     assert "PFU_PER_ML_CI95_LO" in tip and "Poisson" in tip
 
 
@@ -626,7 +628,7 @@ def test_a_zero_plaque_rerun_shows_no_figures_and_names_the_empty_plates(window,
     _run_compare(tab, qtbot, phage_folder)
     assert "0 plaques: T7_1." in tab.qc.text()
     assert [r[0] for r in _table(tab.table)[1]] == ["T4"]
-    assert ["T7_1", "T7", "0", "no", "lawn-relative"] in _table(tab.plate_table)[1]
+    assert ["T7_1", "T7", "0", "0", "no", "lawn-relative"] in _table(tab.plate_table)[1]
     assert all("T7" not in f["legend_text"] for f in tab._figures)
 
     # now nothing has plaques: no figure on screen, none left in the folder

@@ -31,10 +31,11 @@ IMAGE_EXTS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif")
 # separately (it calls engine_api.detect_precise, not detect_single).
 MODE_KWARGS = {
     "published": {"published": True},
-    # Auto = both plaque-size scales merged (CT-R1 detection D1); the Batch tab's "Plaque size"
-    # choice overrides it through ``scale``
-    "current":   {"scale": "auto"},
-    "sensitive": {"scale": "auto", "sensitive": True},
+    # Current / Sensitive run engine_api.DEFAULT_PLAQUE_SIZE (filled in at run time, so the
+    # default lives in one place; CT-R2 coordinator A); the Batch tab's "Plaque size" choice
+    # overrides it through ``scale``
+    "current":   {},
+    "sensitive": {"sensitive": True},
 }
 
 
@@ -136,8 +137,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
         "published" mode override below (the other modes already set it); it is
         accepted for API symmetry with the GUI.
     scale : {"auto", "standard", "small"} or None
-        Plaque size (CT-R1 detection D1). None = the mode's default: Auto for Current and
-        Sensitive, Standard for Published (Small when ``small`` is True). Published never
+        Plaque size (CT-R1 detection D1). None = the mode's default:
+        engine_api.DEFAULT_PLAQUE_SIZE for Current and Sensitive, Standard for Published (Small when ``small`` is True). Published never
         runs Auto (it falls back to Standard); Precise ignores it.
     out_dir : str or None
         Output directory. Defaults to ``<folder>/out_batch`` and is created.
@@ -176,6 +177,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # ``watershed`` flag, and let an explicit small=True still apply in published
     # mode (published forces sensitive off inside the engine regardless).
     mode_kwargs = dict(MODE_KWARGS.get(mode, {"small": True}))
+    if mode in ("current", "sensitive"):
+        mode_kwargs.setdefault("scale", engine_api.DEFAULT_PLAQUE_SIZE)
     # Watershed splitting exists only in the Current / Sensitive engines: Published forces it
     # off inside the engine and Precise never reads it. Record (and pass) what is APPLIED,
     # not what was ticked -- run_metadata.json said watershed:true for Published runs that
