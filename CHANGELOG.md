@@ -65,10 +65,19 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
     sized / median: `sample.tif` 42 / 42 / 2.81 mm → 41 / 21 / 5.93 mm; Plate_6 96 / 96 /
     1.87 mm → 89 / 62 / 3.16 mm; Plate_8 27 / 27 / 3.89 mm → 27 / 22 / 5.39 mm (the
     command-line default gives 5.97, 3.79 and 5.57 mm on 16, 48 and 19 plaques). Choose
-    **Small** for the old behaviour. The ±5 % rule comes from a sweep of 168 synthetic plates
-    (`validation/split_sweep/`); the halo thresholds were set on the bundled plates and have
-    not been validated on other images, and whether the halo or the dark centre is the right
-    edge for a given phage is the experimenter's call.
+    **Small** for the old behaviour.
+    **Known limits of Auto, found by the second test round and not yet fixed (do not rely on
+    Auto sizes for publication until this paragraph is gone):** the per-plate CSV that "Save
+    results" and Batch write (`data-green-*.csv`) does not carry the flags yet, so sizes
+    computed from those files, or imported from them into the Analyze tab, still include the
+    `CORE?` / `NO_SIZE` rows (bundled Plate_6: 3.16 mm in the app, 2.57 mm from the saved file);
+    the ±5 % rule for split pieces was fitted on its own sweep (`validation/split_sweep/`) and
+    fails outside it (neighbours at 90°, unequal neighbours: 6–16 % short); a 1 % change of
+    exposure can move a plaque between the standard, split, small and `CORE?` classes; haloed
+    plaques wider than roughly 150 px are outlined at their dark centre by the standard pass
+    itself; and a quarter to a third of the plaques on haloed plates are left out of the size
+    summary, not at random. The halo thresholds were set on the bundled plates only. Whether the
+    halo or the dark centre is the right edge for a given phage is the experimenter's call.
   * The dish, and so the mm scale, now comes from the standard pass. On four bundled plates the
     old dish was a threshold halo 4–5 % too wide (Plate_8, 11, 14, 17), so every mm size on them
     grows by about that much; Plate_2, which had no dish, now gets one.

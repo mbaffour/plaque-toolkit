@@ -17,6 +17,11 @@ except ImportError:
     raise SystemExit("compile_excel.py needs openpyxl to write the workbook: "
                      "pip install openpyxl   (it is in requirements.txt)")
 
+try:
+    import plaque_qc                        # the ONE size rule (size_ok); CT-R2 detection N1
+except Exception:                           # pragma: no cover - a standalone copy of this script
+    plaque_qc = None
+
 MODES = ["normal", "sensitive"]
 # Default sample order (the author's own strains); override with --order (PT-22).
 ORDER = ["WT", "2-4", "DTR", "G12E", "I70T", "T65I", "T71A"]
@@ -75,9 +80,19 @@ def main():
                 df.insert(0, "SAMPLE", sample); df.insert(1, "REPLICATE", rep)
                 df.insert(2, "PLATE", photo_dir); df.insert(3, "MODE", m)
                 long[m].append(df)
-                dia = pd.to_numeric(df.get("DIAMETER_MM"), errors="coerce").dropna()
+                # CT-R2 detection N1: a table with QC_FLAG sizes only its size_ok rows; the
+                # count is every row. Without QC_FLAG every row is sized, as before. Any
+                # spelling of the column / case of the flags (plaque_qc.flag_column, has_flag).
+                keep = plaque_qc.sized_rows(df) if plaque_qc is not None else None
+                sized = df if keep is None else df[keep]
+                dia = pd.to_numeric(sized.get("DIAMETER_MM"), errors="coerce").dropna()
                 dia = dia[dia > 0]
                 rec["%s_count" % m] = int(len(df))
+                if keep is not None:
+                    rec["%s_n_sized" % m] = int(sum(keep))
+                    if sum(keep) != len(df):
+                        print("%s / %s (%s): %s" % (sample, photo_dir, m,
+                                                    plaque_qc.sizes_from_phrase(sum(keep), len(df))))
                 rec["%s_median_mm" % m] = round(float(dia.median()), 3) if len(dia) else None
                 rec["%s_mean_mm" % m] = round(float(dia.mean()), 3) if len(dia) else None
                 found = True

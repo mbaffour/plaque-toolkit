@@ -30,7 +30,9 @@ def _ps(**over):
 
 def test_poor_agreement_is_not_described_as_close_agreement():
     """The exact committed case: r = -0.013, ICC = -0.012."""
-    sent = _ps(r=-0.0126, icc=-0.0121, pearson_p=0.958)
+    # CT-R2 N8: the grade is given for the 95% CI, so the case carries one (an exact F interval
+    # around ICC = -0.012 at n = 20 lies inside the "poor" band)
+    sent = _ps(r=-0.0126, icc=-0.0121, pearson_p=0.958, icc_lo=-0.40, icc_hi=0.38)
     assert "closely agreed" not in sent
     assert "highly correlated" not in sent
     assert "did NOT agree at the individual level" in sent
@@ -40,7 +42,7 @@ def test_poor_agreement_is_not_described_as_close_agreement():
 
 def test_excellent_agreement_still_reads_as_agreement():
     """The primary validation (r = 0.979, ICC = 0.974) must not be talked down."""
-    sent = _ps(r=0.979, r2=0.958, icc=0.974, pearson_p=0.0001, ccc=0.974)
+    sent = _ps(r=0.979, r2=0.958, icc=0.974, pearson_p=0.0001, ccc=0.974, icc_lo=0.949, icc_hi=0.985)
     assert "agreed closely with" in sent
     assert "very strongly correlated" in sent
     assert "excellent agreement" in sent
@@ -89,7 +91,7 @@ def test_the_committed_artefacts_no_longer_contradict_themselves():
 
 def test_app_agreement_module_matches():
     s = dict(n=20, r=-0.013, icc=-0.012, bias=0.015, pct_bias=3.6,
-             loa_lo=-0.10, loa_hi=0.13, slope=-0.02)
+             loa_lo=-0.10, loa_hi=0.13, slope=-0.02, icc_lo=-0.40, icc_hi=0.38)   # CT-R2 N8: CI graded
     sent = app_agreement.report_sentence(s)
     assert "did NOT agree at the individual level" in sent
     assert "poor agreement" in sent

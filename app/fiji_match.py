@@ -48,6 +48,13 @@ def _sniff(path):
 _XY_NAMES = (("X", "Y"), ("XM", "YM"))
 
 
+def _col_name(c):
+    """A column name for a message: Fiji's first column (the row numbers) has a blank header,
+    which read '(found: , Area)' (CT-R2 F20)."""
+    name = str(c).strip()
+    return "(unnamed column)" if not name or name.lower().startswith("unnamed:") else name
+
+
 def load_fiji_results(path):
     """Parse a Fiji Results table (comma, tab or semicolon separated; decimal point or comma)
     into columns: frow, fx, fy, fdiam.
@@ -66,7 +73,7 @@ def load_fiji_results(path):
         raise ValueError(
             "This Fiji table has no X/Y centroid columns (found: %s). In Fiji: Analyze > Set "
             "Measurements, tick 'Centroid' (and 'Area'), then Measure again and save the Results."
-            % ", ".join(str(c).strip() for c in df.columns[:12]))
+            % ", ".join(_col_name(c) for c in df.columns[:12]))
     out = pd.DataFrame({
         "frow": np.arange(1, len(df) + 1),
         "fx": pd.to_numeric(df[cols[xy[0]]], errors="coerce"),
