@@ -542,11 +542,15 @@ class StudyTab(QWidget):
             "customizable, with the summary tables shown right here.")
         intro.setObjectName("ModeHelp"); intro.setWordWrap(True)
 
-        learn = QLabel('<a href="STATS_EXPLAINED.html" style="color:#0a5c43;font-weight:600;'
-                       'text-decoration:none;">&#128218; New to these statistics? Read the plain-language '
-                       'guide (plate = unit, ANOVA vs t-test, control comparison) &rarr;</a>')
+        # CT-R2 F18: this link opened the AGREEMENT guide (Bland-Altman, ICC). It now opens the
+        # statistics engine's own section on how the Analyze test is chosen; the text promises
+        # only what that section covers
+        learn = QLabel('<a href="#stats" style="color:#0a5c43;font-weight:600;'
+                       'text-decoration:none;">&#128218; New to these statistics? Read how the test is '
+                       'chosen (plate = unit, t-test vs ANOVA, Welch) &rarr;</a>')
         learn.setTextFormat(Qt.RichText); learn.setOpenExternalLinks(False)
-        learn.linkActivated.connect(lambda _=None: self._open_doc("STATS_EXPLAINED.html"))
+        learn.linkActivated.connect(lambda _=None: self._open_stats_guide())
+        self.learn_lbl = learn
 
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(intro); lay.addWidget(learn)
@@ -2611,6 +2615,28 @@ class StudyTab(QWidget):
     def _warn(self, msg):
         self.err.setText(msg)
         self._status(msg, 6000)
+
+    # where the Analyze statistics are explained, first one found wins: the statistics engine's
+    # README section 4 (source checkout), else the User guide's paper section (the frozen app ships
+    # docs/ only -- see the report: plaque_stats/README.md is not in the build's datas)
+    _STATS_GUIDE = (("plaque_stats/README.md", "4-the-statistics-and-why-platelevel"),
+                    ("USER_GUIDE.md", "11-using-it-in-a-paper"))
+
+    def _open_stats_guide(self):
+        """CT-R2 F18: open the guide to the Analyze statistics, scrolled to its section."""
+        from app.ui import DocViewer, _DOC_VIEWERS, _resolve_doc
+        name, frag = self._STATS_GUIDE[-1]
+        for n, f in self._STATS_GUIDE:
+            if _resolve_doc(n)[0]:
+                name, frag = n, f
+                break
+        v = DocViewer(_resolve_doc(name)[0] or name, self.window())
+        _DOC_VIEWERS.append(v)
+        v.finished.connect(lambda _=0, vv=v: (vv in _DOC_VIEWERS) and _DOC_VIEWERS.remove(vv))
+        v.show(); v.raise_()
+        v.scroll_to(frag)
+        self._guide_viewer = v
+        return v
 
     def _open_doc(self, name):
         try:

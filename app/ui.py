@@ -2543,14 +2543,25 @@ class ValidateTab(QWidget):
             self.labels.setText(p)
 
     def _run(self):
+        # CT-R2 F17: every run starts clean, so a run that stops early (no folder, no label
+        # files) never leaves the previous run's tables and status beside the new folder
+        self._res = None
+        self.mode_model.set_dataframe(pd.DataFrame())
+        self.plate_model.set_dataframe(pd.DataFrame())
+        self.sentence.clear()
+        for b in (self.save_btn, self.sent_copy):
+            b.setEnabled(False)
+        self.status.setText("")
         d = self.labels.text().strip()
         if not d or not os.path.exists(d):
+            self.status.setText("No labels folder chosen.")
             QMessageBox.warning(self, "Pick labels", "Choose the folder with your labels_*.json files."); return
         modes = tuple(k for k, cb in self.mode_checks.items() if cb.isChecked())
         if not modes:
             QMessageBox.warning(self, "Pick engines", "Tick at least one engine to score."); return
         files, skipped = validate.collect_label_files(d)
         if not files:
+            self.status.setText("No label files in %s: nothing was scored." % d)
             QMessageBox.warning(self, "No label files",
                                 "No plaque label files were found in this folder%s. Make them in "
                                 "Measure: correct a plate by hand, then Export → Ground-truth labels."

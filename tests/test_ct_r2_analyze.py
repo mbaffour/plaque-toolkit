@@ -686,3 +686,64 @@ def test_no_button_off_screen_in_a_narrow_window(win, st, dialogs, qtbot, size):
             right = b.mapTo(st, b.rect().topRight()).x()
             assert right <= vw, (b.text(), right, vw)
     assert st.assign_btn.text() == "Import && assign…"     # shows 'Import & assign…'
+
+
+# --------------------------------------------------------------------------- F17 / F18 / F20
+def test_validate_clears_results_at_the_start_of_every_run(win, dialogs, tmp_path):
+    """CT-R2 F17: a run on a folder without label files used to leave the previous run's tables
+    and status ('Scored 2 plates x 1 engine') beside the new folder."""
+    vt = next(win.tabs.widget(i).widget() for i in range(win.tabs.count())
+              if win.tabs.tabText(i).strip() == "Validate")
+    vt.mode_model.set_dataframe(pd.DataFrame({"engine": ["current"], "F1": [0.9]}))     # an earlier run
+    vt.plate_model.set_dataframe(pd.DataFrame({"plate": ["a", "b"], "F1": [0.9, 0.8]}))
+    vt.status.setText("Scored 2 plates x 1 engine.")
+    vt.sentence.setText("Detection was validated …")
+    vt._res = {"n_label_files": 2}
+    vt.save_btn.setEnabled(True)
+    empty = tmp_path / "empty"; empty.mkdir()
+    vt.labels.setText(str(empty))
+    vt.run_btn.click()
+    assert any(k == "warning" for k, _ in dialogs["seen"])
+    assert vt.mode_model.rowCount() == 0 and vt.plate_model.rowCount() == 0
+    assert "Scored" not in vt.status.text() and "No label files" in vt.status.text()
+    assert vt.sentence.text() == "" and not vt.save_btn.isEnabled() and vt._res is None
+
+
+def test_analyze_guide_link_opens_the_analyze_statistics(st, dialogs):
+    """CT-R2 F18: the 'plain-language guide' link opened the agreement-statistics guide
+    (Bland-Altman, ICC). It opens the section that explains how the Analyze test is chosen."""
+    st.learn_lbl.linkActivated.emit("#stats")
+    v = st._guide_viewer
+    try:
+        assert v._path.endswith(os.path.join("plaque_stats", "README.md"))
+        text = v.browser.toPlainText()
+        for word in ("experimental unit", "Welch", "ANOVA", "Tukey", "Games"):
+            assert word in text, word
+        assert "STATS_EXPLAINED" not in v._path
+        cur = v.browser.textCursor().block().text()
+        assert cur.startswith("4. The statistics")              # scrolled to the section
+    finally:
+        v.close()
+
+
+def test_fiji_message_names_the_blank_first_column(tmp_path):
+    """CT-R2 F20: '(found: , Area)' -- Fiji's row-number column has a blank header."""
+    from app import fiji_match
+    f = tmp_path / "r.csv"
+    f.write_text(" ,Area\n1,12.5\n2,13.0\n")
+    with pytest.raises(ValueError) as e:
+        fiji_match.load_fiji_results(str(f))
+    assert "(found: (unnamed column), Area)" in str(e.value)
+
+
+def test_area_only_file_is_not_offered_area_as_the_diameter(st, dialogs, tmp_path):
+    """CT-R2 F20: an area-only CSV's AREA_MM2 was offered in 'Which column is the diameter?';
+    a refused file's message has no '. —' double punctuation."""
+    _fill(st, [("WT", "", [])])
+    st._select_sample(0)
+    a = tmp_path / "area_only.csv"; a.write_text("INDEX_COL,AREA_MM2\n1,2.5\n2,3.1\n")
+    j = tmp_path / "data.json"; j.write_text('{"DIAMETER_MM": [1, 2]}\n')
+    dialogs["openN"].append(([str(a), str(j)], ""))
+    st.add_csv_btn.click()
+    assert all("AREA_MM2" not in o for o in dialogs["offered"])
+    assert ". —" not in st.err.text() and "JSON, not a CSV table. Skipped." in st.err.text()
