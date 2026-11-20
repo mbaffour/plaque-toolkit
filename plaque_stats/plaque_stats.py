@@ -271,12 +271,21 @@ def read_table(path, return_info=False, *, text_columns=None):
     Returns the DataFrame, or (DataFrame, info) with return_info=True."""
     ext = os.path.splitext(str(path))[1].lower()
     info = {"delimiter": None, "decimal": ".", "rows": 0, "columns": [], "comment_lines": 0}
+    base = os.path.basename(str(path))
     if ext in (".xlsx", ".xls"):
-        raw = pd.read_excel(path, dtype=object, keep_default_na=False, na_values=[""])
+        # CT-R2: a file named .xlsx that is not a workbook (or an unreadable one) gave a traceback
+        try:
+            raw = pd.read_excel(path, dtype=object, keep_default_na=False, na_values=[""])
+        except Exception as e:                                         # noqa: BLE001
+            raise StatsError("could not read %s as an Excel workbook (%s: %s). Save it again from Excel "
+                             "as .xlsx, or export it as a CSV file." % (base, type(e).__name__, e))
         info["delimiter"] = "excel"
     else:
-        with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
-            lines = fh.read().splitlines()
+        try:
+            with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+                lines = fh.read().splitlines()
+        except OSError as e:
+            raise StatsError("could not open %s (%s)." % (base, e.strerror or e))
         kept = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
         info["comment_lines"] = sum(1 for ln in lines if ln.lstrip().startswith("#"))
         if not kept:
@@ -1071,8 +1080,9 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                       "parametric test is used. Override with `--parametric`." % uw)
         else:
             bad = [g for g, p in normal.items() if p == p and p <= 0.05]
-            choice = ("With at least 8 %ss per sample, Shapiro–Wilk rejects normality for %s (p ≤ 0.05), "
-                      "so a rank-based test is used. Override with `--parametric`." % (uw, ", ".join(map(str, bad))))
+            reject_txt = ("With at least 8 %ss per sample, Shapiro–Wilk rejects normality for %s (p ≤ 0.05)"
+                          % (uw, ", ".join(map(str, bad))))
+            choice = reject_txt + ", so a rank-based test is used. Override with `--parametric`."
     else:
         use_param = (parametric == "parametric")
         choice = "`--parametric %s` was chosen by the user." % parametric
@@ -1090,11 +1100,13 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         if ctrl not in order:
             raise StatsError("control %r is not one of the samples: %s" % (control, ", ".join(map(str, order))))
         if not use_param:
-            notes.append("Shapiro–Wilk rejects normality for at least one sample; Dunnett's test "
-                         "(parametric) was run because --posthoc dunnett was chosen.")
+            # CT-R2 N1: the choice text used to go on "so a rank-based test is used" although
+            # Dunnett's (parametric) test was run. Describe what ran.
+            choice = ("%s; Dunnett's test (parametric) was run because you chose it (`--posthoc dunnett`). "
+                      "Drop `--posthoc dunnett` to get the rank-based test." % reject_txt)
+        elif parametric == "auto":
+            choice = "`--posthoc dunnett` was chosen by the user (a parametric test). " + choice
         use_param = True
-        choice = "`--posthoc dunnett` was chosen by the user (a parametric test). " + choice \
-            if parametric == "auto" else choice
 
     if not use_param and min_n < 4:
         warns.append("Non-parametric test with <4 per group: significance can be UNREACHABLE "
@@ -1112,7 +1124,7 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                                "sd": float(np.std(v, ddof=1)) if len(v) > 1 else float("nan"),
                                "sem": float(np.std(v, ddof=1) / math.sqrt(len(v))) if len(v) > 1 else float("nan"),
                                "n": int(len(v))} for g, v in groups.items()}}
-    lev_txt = "Levene p = %s" % fmt_p(levene_p)
+    lev_txt = "Levene " + p_text(levene_p)            # CT-R2 N2: never "p = < 0.001"
     if k == 2:
         a, b = groups[order[0]], groups[order[1]]
         omni["test"] = "Welch t-test" if use_param else "Mann–Whitney U"
@@ -1177,8 +1189,8 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                     posthoc = games_howell({g: groups[g] for g in order})
                     omni["posthoc"] = "Games-Howell"
                     if equal_var == "auto":
-                        warns.append("Levene p = %s: group variances differ, so Welch's ANOVA and "
-                                     "Games-Howell (no equal-variance assumption) were used." % fmt_p(levene_p))
+                        warns.append("Levene %s: group variances differ, so Welch's ANOVA and "
+                                     "Games-Howell (no equal-variance assumption) were used." % p_text(levene_p))
             if not welch:
                 omni["test"] = "one-way ANOVA"
                 r = _quiet(st.f_oneway, *gv)
@@ -1199,21 +1211,42 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
             omni["variance_rule"] = rule
             ev = equal_variance_check({g: groups[g] for g in tg})
             omni["variance_check"] = ev
-            n_min_all = min(ns.values())
+            # CT-R2 N11: the n of the note is that of the samples that can be tested (a 1-plate
+            # sample is n/a and printed "With 1 plates per group")
+            n_min_t = min((ns[g] for g in tg), default=0)
+            # CT-R2 N9: Welch's ANOVA is undefined when a sample has zero spread, so it is never
+            # recommended then; CT-R2 N7: under Dunnett the advice must be one that can be followed
+            flat = [g for g in tg if np.ptp(groups[g]) == 0]
+            if flat:
+                advice = ("Welch's ANOVA is not an alternative here: %s %s no spread (identical %s values)."
+                          % (_and_list(list(map(str, flat))), "has" if len(flat) == 1 else "have",
+                             "plate-mean" if unit == "replicate" else "plaque"))
+            elif ctrl is not None:
+                advice = ("If you expect the groups to differ in spread, drop --posthoc dunnett and use "
+                          "--equal-var no (Welch ANOVA + Games-Howell).")
+            else:
+                advice = "If you expect the groups to differ in spread, choose --equal-var no (Welch)."
             # wording identical to plaque_stats/app.R spread_check(); only the last clause names the
             # CLI option where the R app names its "Variances: unequal (Welch)" control
-            if n_min_all < 5 and not welch:      # app.R: only when the classic path ran
+            if 2 <= n_min_t < 5 and not welch:      # app.R: only when the classic path ran
                 notes.append(
-                    "%s assume the groups have similar spread. With %d %s per group this cannot be "
-                    "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to "
-                    "differ in spread, choose --equal-var no (Welch)."
+                    "%s assume the groups have similar spread. With %s per group this cannot be "
+                    "checked reliably (largest/smallest SD ratio here: %s). %s"
                     % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
-                       n_min_all, _unit_word(unit), _ratio_txt(ev["sd_ratio"])))
+                       _plural(n_min_t, _unit_word(unit, 1)), _ratio_txt(ev["sd_ratio"]), advice))
             if not welch and ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
-                warns.append(
-                    "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
-                    "%s): Welch ANOVA + Games-Howell is the safer analysis."
-                    % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"])))
+                if flat:
+                    warns.append(
+                        "The spread differs between groups (SD ratio %s): %s Classic ANOVA + %s were "
+                        "used; check the values of %s." % (_ratio_txt(ev["sd_ratio"]), advice,
+                                                          "Dunnett's test" if ctrl is not None else "Tukey HSD",
+                                                          _and_list(list(map(str, flat)))))
+                else:
+                    warns.append(
+                        "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
+                        "%s): Welch ANOVA + Games-Howell is the safer analysis%s."
+                        % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"]),
+                           " (drop --posthoc dunnett and use --equal-var no)" if ctrl is not None else ""))
         else:
             hres = _quiet(st.kruskal, *gv)
             N = sum(len(x) for x in gv); kk = len(gv)
@@ -2338,8 +2371,8 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
                else "the data have no plate/replicate column")
         L.append("- **Statistical unit:** the plaque (%s). Plaques on one plate are not independent, "
                  "so these p-values are too small; %s.\n" % (why, _n_list(omni.get("n_per_group", {}), unit)))
-    L.append("- **Omnibus test:** %s, %s (Levene p = %s)\n"
-             % (omni["test"], p_text(omni["p"]), fmt_p(omni.get("levene_p"))))
+    L.append("- **Omnibus test:** %s, %s (Levene %s)\n"
+             % (omni["test"], p_text(omni["p"]), p_text(omni.get("levene_p"))))
     if omni.get("posthoc"):
         post = omni["posthoc"]
         if post == "Dunnett":
@@ -2378,7 +2411,8 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
         m = omni["equivalence_margin"]
         L.append("\n**Equivalence (TOST, two one-sided Welch t-tests on the %s, margin ±%g):** "
                  "a pair is called equivalent when TOST p < 0.05, i.e. the 90 %% CI of the "
-                 "difference lies inside ±%g.\n" % (uw, m, m))
+                 "difference lies inside ±%g. TOST p-values are per pair, not adjusted across pairs."
+                 "\n" % (uw, m, m))   # CT-R2 N11
         for r in pw:
             L.append("- %s vs %s: TOST %s — %s." % (r["group_a"], r["group_b"], p_text(r.get("tost_p")),
                                                    r.get("equivalence", "not testable")))
@@ -2424,7 +2458,8 @@ def power_sentence(pw, unit="replicate"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
     s = ("**Power:** (computed from the observed spread; treat as a rough guide) with %d %s per "
          "sample and the observed pooled SD of the %s (%.3g), a difference "
-         "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
+         "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test; for a "
+         "single two-sample comparison, without multiplicity adjustment)."
          % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
             pw["pooled_sd"], pw["detectable_diff"], round(100 * pw["power"]), pw["alpha"]))
     if not pw.get("equal_n", True):
@@ -3251,8 +3286,11 @@ def build_args():
                         "means; an error without a plate column) or plaque (pseudoreplicated)")
     p.add_argument("--parametric", choices=["auto", "parametric", "nonparametric"])
     p.add_argument("--equal-var", dest="equal_var", choices=["auto", "yes", "no"],
-                   help="3+ samples: auto = Levene decides (and a warning when the SDs differ more "
-                        "than 3-fold), no = Welch ANOVA + Games-Howell always, yes = ANOVA + Tukey always")
+                   help="3+ samples: auto = Levene decides (Welch ANOVA + Games-Howell when Levene "
+                        "p < 0.05, else ANOVA + Tukey; on the ANOVA path a note when a sample has fewer "
+                        "than 5 units and a warning when the largest and smallest SD differ by a "
+                        "Bonferroni-adjusted F test, p < 0.05), no = Welch ANOVA + Games-Howell "
+                        "always, yes = ANOVA + Tukey always")
     p.add_argument("--posthoc", choices=["auto", "dunnett"],
                    help="dunnett = every sample vs --control (or each subgroup vs the control in "
                         "grouped mode), with simultaneous 95%% CIs; assumes similar variances")
