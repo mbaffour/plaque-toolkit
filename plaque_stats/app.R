@@ -1390,13 +1390,31 @@ server <- function(input, output, session) {
     if (is.null(d)) character(0) else levels(d$group)
   })
   palette_seen <- NULL                        # the palette the registry was last assigned from
+  # CT-R2 N5: the registry as it was when each palette was left. Going back to a palette (clearing the
+  # custom box, choosing the previous theme) restores THOSE colours; it used to hand the palette out again
+  # in the order the samples happened to be in right then, so unchanged samples came back in other colours.
+  reg_snapshots <- list()
+  pre_style_reg <- NULL                       # the registry as it was just before a paper style merged in
+  src_key <- function(src) paste(src$name, paste(toupper(src$pal), collapse = ","), sep = "|")
   observe({
     lv <- current_levels(); sp <- style_palette()
     src <- list(name = input$palette_name %||% "", pal = palette_vec())
     old <- isolate(colour_registry()); reg <- old
     on <- isolate(style_on())
     if (!is.null(palette_seen) && !identical(src, palette_seen)) {
-      if (length(lv)) reg[lv] <- distinct_colours(src$pal, length(lv))
+      left <- old
+      if (on && length(sp)) {                  # the style's colours belong to the "paper" theme, not to this one
+        for (nm in names(sp)) {
+          if (!is.null(pre_style_reg) && nm %in% names(pre_style_reg)) left[[nm]] <- pre_style_reg[[nm]]
+          else left <- left[names(left) != nm]
+        }
+      }
+      reg_snapshots[[src_key(palette_seen)]] <<- left
+      snap <- reg_snapshots[[src_key(src)]]
+      if (!is.null(snap)) {
+        reg[names(snap)] <- unname(snap)
+        reg <- reg[!names(reg) %in% setdiff(lv, names(snap))]      # new since then: a fresh free colour
+      } else if (length(lv)) reg[lv] <- distinct_colours(src$pal, length(lv))
       on <- identical(src$name, "paper")
       style_on(on)
     }
@@ -1475,7 +1493,12 @@ server <- function(input, output, session) {
       hit <- lv[lv %in% names(sp)]
       parts <- c(parts,
         if (!length(lv)) sprintf("Sample colours for %d names are ready (no data loaded yet).", length(sp))
-        else if (!isTRUE(style_on())) sprintf("The colour theme was changed, so the style's %d sample colours are not in use; choose 'Paper style' under Colour theme to bring them back.", length(sp))
+        else if (!isTRUE(style_on())) {
+          pn <- input$palette_name %||% ""; th <- names(THEME_CHOICES)[match(pn, THEME_CHOICES)]
+          # CT-R2 N4: one rule -- a colour theme chosen after the style replaces the style's sample colours
+          sprintf("Colour theme %s replaced the paper style's sample colours (choose 'Paper style' to bring them back).",
+                  if (is.na(th)) pn else th)
+        }
         else if (!length(hit)) sprintf("None of the style's %d sample names (%s) is in this data, so no style colour is used.",
                                        length(sp), paste(utils::head(names(sp), 4), collapse = ", "))
         else sprintf("Sample colours: %d of the style's %d names are in this data (%s).", length(hit), length(sp),
@@ -1544,6 +1567,7 @@ server <- function(input, output, session) {
     pal <- unlist(s$sample_palette); kept <- list()
     if (length(pal) && !is.null(names(pal))) {
       reg <- isolate(colour_registry())
+      pre_style_reg <<- reg
       for (nm in names(pal)) {
         hx <- as.character(pal[[nm]])
         if (nzchar(nm) && valid_colour(hx)) {

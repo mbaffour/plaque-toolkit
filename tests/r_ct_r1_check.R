@@ -396,7 +396,8 @@ testServer(app, {
   chk("F15_style_colours_applied_by_name", identical(unname(style()$gcol["T4"]), "#000000") && !style()$neutral)
   session$setInputs(palette_name = "set2"); session$flushReact()
   chk("F15_theme_replaces_colours", !identical(unname(style()$gcol["T4"]), "#000000"))
-  chk("F15_status_says_theme_replaced", grepl("colour theme was changed", output$paper_style_status), output$paper_style_status)
+  chk("F15_status_says_theme_replaced", grepl("Colour theme Set2 replaced the paper style's sample colours \\(choose 'Paper style' to bring them back\\)", output$paper_style_status) &&
+        !grepl("of the style's", output$paper_style_status), output$paper_style_status)
   session$setInputs(palette_name = "paper"); session$flushReact()
   chk("F15_paper_style_choice_brings_it_back", identical(unname(style()$gcol["T4"]), "#000000") && identical(unname(style()$gcol["T7"]), "#D55E00"))
   session$setInputs(palette_name = "okabe"); session$flushReact(); session$setInputs(palette_name = "paper"); session$flushReact()
@@ -566,3 +567,36 @@ chk("R2_N2c_left_margin_grows_with_name_length", tilted_left_margin_pt(rep("x", 
       tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8) > 60 &&
       tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 28, 8) >
         tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8))
+
+# ---- N4 + N5: one colour rule ---------------------------------------------------------------------
+Sys.setenv(CFU_PAPER_STYLE = sty("t4black2.json", list(sample_palette = list(T4 = "#000000", T7 = "#D55E00", lambda = "#0072B2"))))
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("R2_N4_status_before_theme_names_style", grepl("3 of the style's 3 names", output$paper_style_status))
+  session$setInputs(palette_name = "cool"); session$flushReact()
+  chk("R2_N4_theme_after_style_replaces_and_status_says_so", !identical(unname(style()$gcol["T4"]), "#000000") &&
+        grepl("Colour theme Cool replaced the paper style's sample colours \\(choose 'Paper style' to bring them back\\)\\.", output$paper_style_status) &&
+        !grepl("3 of the style's", output$paper_style_status), output$paper_style_status)
+  session$setInputs(palette_name = ""); session$flushReact()
+  chk("R2_N4_custom_hex_replaces_too", grepl("Colour theme \\(custom hex below\\) replaced", output$paper_style_status), output$paper_style_status)
+  session$setInputs(palette_name = "cool"); session$flushReact(); session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("R2_N4_paper_choice_still_brings_style_back", identical(unname(style()$gcol[["T4"]]), "#000000") && identical(unname(style()$gcol[["lambda"]]), "#0072B2"))
+})
+Sys.setenv(CFU_PAPER_STYLE = file.path(out_dir, "no_paper_style.json"))
+# N5: the web tester's t2 sequence: type a palette, set an order, clear both, rename ONE sample
+testServer(app, {
+  raw(example); do.call(session$setInputs, modifyList(ui_defaults, list(vfill = "group"))); session$flushReact()
+  base_cols <- style()$gcol
+  session$setInputs(palette = "#000000,#D55E00,#0072B2"); session$flushReact()
+  chk("R2_N5_typed_palette_applies", identical(unname(style()$gcol), c("#000000", "#D55E00", "#0072B2")))
+  session$setInputs(order = "lambda,T7,T4"); session$flushReact()
+  session$setInputs(palette = ""); session$flushReact(); session$setInputs(order = ""); session$flushReact()
+  chk("R2_N5_clearing_palette_restores_colours_from_before", identical(style()$gcol, base_cols),
+      paste(style()$gcol, collapse = " "))
+  ren <- example; ren$group[ren$group == "T4"] <- "T4 renamed (new)"
+  raw(ren); session$flushReact()
+  g <- style()$gcol
+  chk("R2_N5_unrenamed_samples_keep_their_colour", identical(unname(g[["T7"]]), unname(base_cols[["T7"]])) &&
+        identical(unname(g[["lambda"]]), unname(base_cols[["lambda"]])) && !anyDuplicated(g), paste(names(g), g, collapse = " "))
+})
