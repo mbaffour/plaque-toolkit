@@ -392,3 +392,42 @@ def test_p1_tools_read_resaved_flags(tmp_path, col):
     r = _run("make_figure.py", ["--csv", str(tmp_path / "tidy.csv"), "--ymax", "0", "--out", "fig"], tmp_path)
     assert r.returncode == 0, r.stderr
     assert "Sizes from 3 of 5 plaques" in r.stdout
+
+
+# --------------------------------------------------------------------------- #
+#  Part 5: flags (N8, N9, N11)
+# --------------------------------------------------------------------------- #
+def _disc(x, area, **kw):
+    d = {"x": float(x), "y": 500.0, "area_px": float(area)}
+    d.update(kw)
+    return d
+
+
+def test_p5_large_uses_the_median_of_sized_rows_only():
+    """N8: ten dark-centre (CORE?) outlines no longer drag the median down."""
+    import plaque_qc
+    pl = [_disc(100 + 60 * i, 400.0) for i in range(5)]
+    pl += [_disc(500 + 60 * i, 60.0, core_only=True, source="small") for i in range(10)]
+    pl += [_disc(1300, 900.0), _disc(1400, 1100.0)]
+    f = [r[0] for r in plaque_qc.flag_plaques(pl, (2000, 2000))]
+    # median of the sized rows = 400 px^2: 900 is 2.25x (not LARGE?), 1100 is 2.75x (LARGE?)
+    assert f[-2] == "OK" and f[-1] == "LARGE?"
+    assert sum("LARGE?" in x for x in f) == 1
+
+
+def test_p5_merged_shape_test_skips_core_outlines():
+    """N9: a CORE? outline's shape says nothing about two plaques merged."""
+    import plaque_qc
+    core = _disc(100, 3.1416 * 20 ** 2, solidity=0.6, core_only=True, source="small")
+    plain = _disc(400, 3.1416 * 20 ** 2, solidity=0.6)
+    f = [r[0] for r in plaque_qc.flag_plaques([core, plain], (1000, 1000))]
+    assert f == ["CORE?", "MERGED?"]
+
+
+def test_p5_tiny_cut_is_16_px():
+    """N11: outlines 12-16 px across are +25 to +53 % too big on the frozen benchmark."""
+    import plaque_qc
+    assert plaque_qc.TINY_DIAM_PX == 16
+    a = lambda d: 3.14159265 * (d / 2.0) ** 2   # noqa: E731
+    f = [r[0] for r in plaque_qc.flag_plaques([_disc(100, a(14.0)), _disc(400, a(17.0))], (1000, 1000))]
+    assert f == ["TINY", "OK"]

@@ -13,19 +13,21 @@ Flags (several may apply, joined with `|`; `OK` when none):
 * ``EDGE``     the plaque's area-equivalent disk touches the image border or reaches the LAWN
                edge, ``rim_frac`` (0.93) of the dish radius. (Until 2026-11 it was 0.98 of the
                radius, beyond where the lawn ends, so it never fired on a real plate; CT-R1 F11.)
-* ``LARGE?``   area is more than ``merged_factor`` x the plate's median plaque area while the
-               shape is normal -- a big plaque, worth a look, not necessarily two.
+* ``LARGE?``   area is more than ``merged_factor`` x the plate's median SIZED plaque area (CORE?
+               and NO_SIZE rows left out of the median; CT-R2 N8) while the shape is normal -- a
+               big plaque, worth a look, not necessarily two.
 * ``MERGED?``  the outline is not one convex blob: solidity (raw contour area / convex-hull
                area) below ``min_solidity`` (0.9) for outlines at least 25 px across (smaller
                ones are jagged from pixelation alone), or a fitted ellipse longer than
                ``max_axis_ratio`` (1.5) x its width -- likely two plaques, or an outline that
                did not close. (The old circularity test could never fire; CT-R1 F12.) A
-               ``circularity`` below ``min_circularity`` still counts when it is given.
+               ``circularity`` below ``min_circularity`` still counts when it is given. Not on
+               SPLIT pieces or CORE? outlines (CT-R2 N9).
 * ``NESTED``   its centre lies inside a LARGER plaque's outline (a core and its halo, or a plaque
                counted inside another; CT-R1 F14).
 * ``TINY``     the outline is too few pixels for a reliable size: area-equivalent diameter below
-               ``tiny_diam_px`` (12 px), where one pixel of edge error is more than 15 % of the
-               area; the reason gives px and mm. Pixel outlines only (not circles). Being found
+               ``tiny_diam_px`` (16 px; 12 until CT-R2 N11: outlines 12-16 px across are +25 to
+               +53 % too big on the frozen benchmark); the reason gives px and mm. Pixel outlines only (not circles). Being found
                only by the small pass is not a flag: SOURCE says so (CT-R1 detection D9).
 * ``BRIGHT``   the plaque interior is brighter than a ring around it by more than
                ``bright_margin`` grey levels: a bubble or glare, not a clearing (CT-R1 F19). Only
@@ -50,7 +52,9 @@ import math
 
 STANDARD_ENCL_DIAM_MIN = 30      # plaque_size_tool.filter_contours: green_diam_min without -small
 LAWN_EDGE_FRAC = 0.93            # where the lawn ends, as a fraction of the dish radius (F11)
-TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9)
+TINY_DIAM_PX = 16                # area-equivalent diameter below this: too few pixels (D9).
+                                 # CT-R2 N11: was 12; on the frozen benchmark every outline
+                                 # 12-16 px across is +25 to +53 % too big (10 of 10)
 MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from this diameter (D9)
 
 
@@ -219,7 +223,11 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         a = max(float(p.get("area_px", 0.0) or 0.0), 0.0)
         r = math.sqrt(a / math.pi) if a > 0 else 0.0
         geo.append((float(p["x"]), float(p["y"]), r, a))
-    areas = sorted(g[3] for g in geo if g[3] > 0)
+    # CT-R2 detection N8: LARGE? compares with the median of the SIZED plaques only -- CORE?
+    # outlines (dark centres) and NO_SIZE pieces pulled the median down, so 26 % of Plate_6
+    # was "LARGE?"
+    areas = sorted(g[3] for g, p in zip(geo, plaques)
+                   if g[3] > 0 and not p.get("core_only") and not p.get("size_unreliable"))
     median_area = areas[len(areas) // 2] if areas else 0.0
 
     # pairwise overlap of area-equivalent disks (O(n^2); plates have at most a few hundred)
@@ -272,7 +280,9 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         if circ is not None and circ == circ and float(circ) < min_circularity:
             shape_why.append("circularity %.2f" % float(circ))
         split = p.get("source") == "split"
-        if shape_why and not split:          # a split piece's shape is the cut, not a merge
+        # a split piece's shape is the cut, not a merge; a CORE? outline is a dark centre whose
+        # shape says nothing about merging (CT-R2 detection N9: MERGED? fired on them)
+        if shape_why and not split and not p.get("core_only"):
             why_m = "; ".join(shape_why)
             if big:
                 why_m = "area %.1fx the plate median; " % (a / median_area) + why_m
@@ -292,7 +302,7 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
             why.append("%s: size not reliable, left out of size summaries"
                        % (p.get("size_reason") or "split piece"))
         # TINY (CT-R1 detection D9): the outline is too few pixels for a reliable size -- below
-        # tiny_diam_px (12) across, one pixel of edge error is > 15 % of the area. Being found
+        # tiny_diam_px (16 px since CT-R2 N11) across the size is not reliable. Being found
         # only by the small pass is not a flag (SOURCE says so); 389 of 767 rows were TINY.
         if p.get("pixel_outline", True) and a > 0 and 2.0 * r < tiny_diam_px:
             if mm_per_px:
