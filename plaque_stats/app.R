@@ -302,7 +302,7 @@ figure_sentence <- function(center, error, superplot, show_points = TRUE, show_n
     } else {
       ns <- sort(unique(as.integer(n_units[!is.na(n_units)])))
       ntxt <- if (!length(ns)) "" else if (length(ns) == 1) paste0(ns, " ") else paste0(ns[1], " to ", ns[length(ns)], " ")
-      bar <- paste0("mean of the ", ntxt, "plate means")
+      bar <- if (identical(ns, 1L)) "the single plate mean" else paste0("mean of the ", ntxt, "plate means")
       wh <- if (error %in% names(err_words)) paste(err_words[[error]], "of the plate means") else NULL
     }
     bits <- c(bits, paste0("Bar: ", bar, "."), if (!is.null(wh)) paste0("Whisker: ", wh, ".") else "No whisker.")
@@ -709,8 +709,8 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   if (length(vcol) == 1 && !is.na(vcol) && grepl("diam|area|radius|mm|um", tolower(vcol))) {
     nz <- sum(d$value <= 0, na.rm = TRUE)
     if (nz > 0)
-      warns <- c(warns, sprintf("%d value%s %s zero or negative: a plaque size cannot be; check the column (%s included in this analysis).",
-                                nz, if (nz == 1) "" else "s", if (nz == 1) "is" else "are", if (nz == 1) "it is" else "they are"))
+      warns <- c(warns, sprintf("%d value%s %s zero or negative: a plaque size cannot be; check the column (they are included in this analysis).",
+                                nz, if (nz == 1) "" else "s", if (nz == 1) "is" else "are"))
   }
   # CT-R1 F2: the unit REPORTED is the unit TESTED. plaque_stats.py keeps the label
   # "replicate" when --unit replicate is forced on a file without a plate column although it
@@ -758,6 +758,13 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       sprintf("With at least 8 %ss per sample, %s rejects normality for %s (%s), so a rank-based test is used. Override with 'Test type'.",
               uw, sw_how, who, if (length(bad) > 1) thr_txt else paste0(ptxt(normal[[bad]]), ", ", thr_txt))
     })
+  }
+  # CT-R3 F9 (merged Python text): nothing can be tested, e.g. one plate per sample
+  if (length(tg_n) < 2) {
+    uwn <- if (unit == "replicate") "plate" else "plaque"; nv <- as.integer(ns)
+    nl <- if (!length(nv)) "n/a" else if (length(unique(nv)) == 1) sprintf("%d %s per sample", nv[1], uwn)
+          else paste0(paste(lev, nv, collapse = ", "), " ", uwn, "s")
+    notes <- c(notes, sprintf("No test can be run: fewer than 2 samples have 2 or more %ss (%s).", uwn, nl))
   }
   if (unit == "plaque") {
     one <- lev[plates < 2]
@@ -985,7 +992,9 @@ median_sentence <- function(metric, summ, st, ct, error = "auto") {
   nl <- as.integer(nun[g_]); uw <- if (repl) "plate" else "plaque"
   nlist <- if (length(unique(nl)) == 1) sprintf("%s per sample", plural_word(nl[1], uw))
            else paste0(paste(g_, nl, collapse = ", "), " ", uw, "s")
-  verdict <- if (is.na(st$p)) sprintf("%s was not tested across the %d samples (%s; p = n/a)", metric, k, st$test)
+  verdict <- if (is.na(st$p) && startsWith(st$test, "n/a (") && endsWith(st$test, ")"))
+      sprintf("%s was not tested across the %d samples (no test: %s)", metric, k, substr(st$test, 6, nchar(st$test) - 1))
+    else if (is.na(st$p)) sprintf("%s was not tested across the %d samples (%s; p = n/a)", metric, k, st$test)
     else sprintf("%s %s between the %d samples (%s on %s, %s, %s)", metric,
                  if (st$p < 0.05) "differed" else "did not differ significantly", k, st$test, on, nlist, p_eq(st$p))
   out <- sprintf("%s. Values are %s: %s.", verdict, what, vals)

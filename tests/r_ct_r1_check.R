@@ -896,7 +896,7 @@ chk("R3_F8_zeros_stay_in_the_analysis", near(stZ$p, 6.24e-03, 0.01e-3) || abs(st
 dTit <- tidy(fx("ct_r3_k_zeros.csv")); attr(dTit, "info")$value_col <- "titer"
 chk("R3_F8_no_warning_for_a_column_that_is_not_a_size", !any(grepl("zero or negative", plaque_run_stats(dTit)$warnings)))
 dOne <- tidy(fx("ct_r3_k_zeros.csv")); dOne$value[dOne$value <= 0] <- 1.5; dOne$value[1] <- 0
-chk("R3_F8_singular", any(grepl("^1 value is zero or negative: a plaque size cannot be; check the column \\(it is included in this analysis\\)\\.$", plaque_run_stats(dOne)$warnings)))
+chk("R3_F8_singular", any(grepl("^1 value is zero or negative: a plaque size cannot be; check the column \\(they are included in this analysis\\)\\.$", plaque_run_stats(dOne)$warnings)))
 stI <- plaque_run_stats(tidy(fx("ct_r3_all_identical.csv")))
 chk("R3_F11_all_identical_says_na_not_inf", grepl("SD ratio here: n/a\\)", stI$spread_note %||% "") && !grepl("Inf", paste(stI$spread_note, stI$warnings)), stI$spread_note %||% "none")
 stNP <- plaque_run_stats(tidy(fx("ct_r1_D_two_12v14.csv")), parametric = "nonparametric", unit = "plaque")
@@ -906,3 +906,15 @@ chk("R3_F11_fewer_than_4_wording_as_python", any(stSm$warnings == "Non-parametri
     paste(stSm$warnings, collapse = " | "))
 chk("R3_F11_en_dashes", identical(stSm$test, "Kruskal–Wallis") && grepl("Mann–Whitney U", plaque_run_stats(tidy(fx("ct_r2_mwu_5v6_noties.csv")), parametric = "nonparametric")$test, fixed = TRUE) &&
       !any(grepl("Mann-Whitney|Kruskal-Wallis", c(stSm$warnings, stSm$notes))), stSm$test)
+
+# ---- merged Python wording (CT-R3 stats): nothing testable, single plate ----------------------------
+dOneP <- data.frame(group = factor(rep(c("A", "B"), each = 6), levels = c("A", "B")), replicate = rep(c("p1", "p1"), each = 6),
+                    value = c(2, 2.1, 1.9, 2.2, 2.0, 2.1, 3, 3.1, 2.9, 3.2, 3.0, 3.1), stringsAsFactors = FALSE)
+stOneP <- plaque_run_stats(dOneP)
+chk("R3_py_no_test_can_be_run", any(stOneP$notes == "No test can be run: fewer than 2 samples have 2 or more plates (1 plate per sample)."),
+    paste(stOneP$notes, collapse = " | "))
+chk("R3_py_no_brackets_when_nothing_testable", {
+  sel <- pairs_to_draw(stOneP$pairwise, levels(dOneP$group), "auto", stOneP$posthoc)
+  nrow(sel$pairs) == 0 && is.null(sel$vsref) && is.null(sel$note) && is.null(sel$sentence) })
+chk("R3_py_single_plate_bar_wording", grepl("Bar: the single plate mean.", figure_sentence("mean", "sem", TRUE, TRUE, TRUE, c(1L, 1L)), fixed = TRUE))
+chk("R3_py_median_iqr_wording_as_python", grepl("Bar: median of all plaques. Whisker: IQR of the plaques (25th to 75th percentile).", figure_sentence("median", "iqr", TRUE), fixed = TRUE))
