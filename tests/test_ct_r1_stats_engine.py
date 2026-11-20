@@ -557,8 +557,10 @@ def test_A6_every_allowed_center_error_runs_end_to_end(tmp_path, center, error):
     res = ps.run(_args(tmp_path, _frame(), center=center, error=error, stats_table=True))
     assert "Whisker" in res["figure_sentence"] or "No whisker" in res["figure_sentence"]
     if (center, error) == ("median", "ci95"):
-        assert "95 % CI of the median (plates resampled, 2,000 bootstrap resamples, seed 7)" in res["figure_sentence"]
-        assert "median (bootstrap 95 % CI) of all plaques" in res["paste_sentence"] or len(res["order"]) > 2
+        # CT-R2 N3: 3 plates per sample -> the plate bootstrap is called approximate, not a 95 % CI
+        assert ("bootstrap interval of the median (approximate: too narrow with fewer than about 10 plates) "
+                "(plates resampled, 2,000 bootstrap resamples, seed 7)") in res["figure_sentence"]
+        assert "95 % CI" not in res["figure_sentence"]
 
 
 def test_gate_shipped_example_default_numbers_unchanged_from_1_3_0(tmp_path):

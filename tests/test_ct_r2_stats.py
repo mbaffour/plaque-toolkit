@@ -310,3 +310,92 @@ def test_N8_cli_report_grades_the_interval(tmp_path):
     assert "; %s, graded on the interval) |" % g in txt
     stats_csv = [f for f in os.listdir(tmp_path / "o") if f.startswith("agreement_stats")][0]
     assert pd.read_csv(tmp_path / "o" / stats_csv)["icc_grade_ci"].iloc[0] == g
+
+
+# =========================================================================== 4. grouped mode options
+def _grouped_frame(plates=3, seed=8):
+    r = np.random.default_rng(seed)
+    rows = []
+    for g, base in (("T4", 2.0), ("T7", 2.6)):
+        for s, shift in (("ctrl", 0.0), ("hostB", 0.4), ("hostC", -0.1)):
+            for p in range(plates):
+                m = base + shift + r.normal(0, 0.15)
+                for v in r.normal(m, 0.2, 5):
+                    rows.append({"group": g, "subgroup": s, "replicate": "p%d" % p, "value": float(v)})
+    return pd.DataFrame(rows)
+
+
+def test_N5_grouped_mode_says_which_options_it_does_not_use(tmp_path):
+    res, out = _run(tmp_path, _grouped_frame(), subgroup="subgroup", control="ctrl",
+                    equivalence_margin=0.2, equal_var="no", annotate="letters", detect=0.3)
+    rep = _report(res)
+    for start in ("--equivalence-margin is not used in grouped mode", "--equal-var no is not used in grouped mode",
+                  "--annotate letters is not available in grouped mode", "--detect is not used in grouped mode"):
+        assert any(n.startswith(start) for n in res["notes"]), start
+        assert start in out and start in rep
+    # the defaults the apps pass: no note
+    res2, out2 = _run(tmp_path / "d", _grouped_frame(), subgroup="subgroup", control="ctrl")
+    assert not any("grouped mode" in n for n in res2["notes"]) and "grouped mode" not in out2
+
+
+# =========================================================================== 5. intervals and labels
+def test_N4_grouped_ci_is_labelled_unadjusted_and_csv_has_ci_method(tmp_path):
+    res, _ = _run(tmp_path, _grouped_frame(), subgroup="subgroup", control="ctrl")
+    comp = res["comparisons"]
+    assert set(comp["ci_method"]) == {"Welch t, unadjusted"}
+    csv = [f for f in os.listdir(res["out"]) if f.startswith("control_comparisons")][0]
+    assert "ci_method" in pd.read_csv(os.path.join(res["out"], csv)).columns
+    rep = _report(res)
+    assert "difference (95 % CI (unadjusted))" in rep
+    assert "a CI that excludes 0 beside a Holm-adjusted 'ns' is not a contradiction" in rep
+    resd, _ = _run(tmp_path / "d", _grouped_frame(), subgroup="subgroup", control="ctrl", posthoc="dunnett")
+    assert set(resd["comparisons"]["ci_method"]) == {"Dunnett simultaneous"}
+    assert "difference (simultaneous 95 % CI)" in _report(resd)
+
+
+def test_N10_rank_rows_have_no_parametric_ci_or_effect_sizes(tmp_path):
+    g = _skewed_c()
+    res, _ = _run(tmp_path, _units(g))
+    om = res["omni"]
+    assert om["test"] == "Kruskal–Wallis" and om["p_method"] == "asymptotic"
+    for r in om["pairwise"]:
+        assert all(math.isnan(r[k]) for k in ("diff_ci95_lo", "diff_ci95_hi", "cohens_d", "hedges_g"))
+        assert r["median_diff"] == pytest.approx(np.median(g[r["group_a"]]) - np.median(g[r["group_b"]]))
+    rep = _report(res)
+    assert "Kruskal–Wallis (asymptotic p), p" in rep
+    assert "Difference and effect sizes are not shown for rank tests" in rep
+    assert "difference of medians (A−B)" in rep
+    # grouped mode: Mann-Whitney rows too
+    rg, _ = _run(tmp_path / "g", _grouped_frame(), subgroup="subgroup", control="ctrl", parametric="nonparametric")
+    c = rg["comparisons"]
+    assert c["hedges_g"].isna().all() and c["diff_ci95_lo"].isna().all() and (c["ci_method"] == "").all()
+
+
+def test_N10_mann_whitney_says_exact_or_asymptotic():
+    a, b = [1.0, 1.2, 1.4, 1.1], [2.0, 2.2, 2.1, 2.5]          # 4 vs 4, no ties: exact, 2/70
+    om = ps.run_stats(_units({"A": a, "B": b}), ["A", "B"], "auto", "nonparametric")[0]
+    assert om["p_method"] == "exact"
+    assert om["p"] == pytest.approx(st.mannwhitneyu(a, b, method="exact").pvalue) == pytest.approx(2 / 70)
+    assert om["effect"] == {} and any(n.startswith("Mann–Whitney U p is exact") for n in om["notes"])
+    om = ps.run_stats(_units({"A": a + [1.0], "B": b}), ["A", "B"], "auto", "nonparametric")[0]
+    assert om["p_method"] == "asymptotic"                       # a tie
+
+
+def test_N3_plate_bootstrap_of_the_median_is_approximate_below_10_plates(tmp_path):
+    def frame(plates):
+        r = np.random.default_rng(1)
+        return pd.DataFrame([{"group": g, "replicate": "p%d" % p, "value": float(v)}
+                             for g, mu in (("A", 2.0), ("B", 2.5)) for p in range(plates)
+                             for v in r.normal(mu + r.normal(0, .1), .3, 6)])
+    res, _ = _run(tmp_path, frame(4), center="median", error="ci95")
+    fs, rep = res["figure_sentence"], _report(res)
+    want = "bootstrap interval of the median (approximate: too narrow with fewer than about 10 plates)"
+    assert want in fs and "95 % CI" not in fs
+    assert "median (%s) of all plaques" % want in res["paste_sentence"] and "95 % CI" not in res["paste_sentence"]
+    assert want in rep
+    res10, _ = _run(tmp_path / "ten", frame(10), center="median", error="ci95")
+    assert "95 % CI of the median (plates resampled" in res10["figure_sentence"]
+    assert "approximate" not in res10["figure_sentence"]
+    # no plates: the plaque bootstrap keeps its name (its coverage is 0.93-0.95)
+    assert "95 % CI of the median (2,000 bootstrap resamples of the plaques" in ps.figure_sentence(
+        {"center": "median", "error": "ci95"}, False, [4, 4])

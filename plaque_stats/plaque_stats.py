@@ -632,6 +632,14 @@ def pairwise_mwu(groups):
     return _holm(raw)
 
 
+def _mwu_method(a, b):
+    """'exact' or 'asymptotic': scipy.stats.mannwhitneyu's own automatic choice (exact when one
+    side has at most 8 values and there are no ties), made explicit so it can be reported."""
+    allv = np.concatenate([np.asarray(a, float), np.asarray(b, float)])
+    ties = len(np.unique(allv)) < len(allv)
+    return "asymptotic" if (len(a) > 8 and len(b) > 8) or ties else "exact"
+
+
 def tukey(groups):
     """Tukey HSD (Tukey-Kramer for unequal n). Groups with fewer than 2 values cannot be
     tested: they get p = NaN (reported as n/a) instead of crashing scipy (AUDIT-2026-10.md)."""
@@ -892,13 +900,16 @@ def pairwise_table(groups, posthoc, omni, margin=None):
             qcache[key] = float(st.studentized_range.ppf(0.95, k, dfree))
         return qcache[key]
 
+    # CT-R2 N10: a rank test's row carries no parametric CI, Cohen's d or Hedges' g (they described
+    # a different analysis than the p beside them); the difference of medians is given instead
+    rank = name == "Dunn (Holm)" or omni.get("test") == "Mann–Whitney U"
     rows = []
     for (a, b), p in posthoc.items():
         xa, xb = np.asarray(groups.get(a, []), float), np.asarray(groups.get(b, []), float)
         ma = float(np.mean(xa)) if len(xa) else float("nan")
         mb = float(np.mean(xb)) if len(xb) else float("nan")
         lo = hi = float("nan"); method = ""
-        if len(xa) >= 2 and len(xb) >= 2:
+        if len(xa) >= 2 and len(xb) >= 2 and not rank:
             diff = ma - mb
             se, dfree = _welch_se_df(xa, xb)
             with np.errstate(all="ignore"):
@@ -918,7 +929,10 @@ def pairwise_table(groups, posthoc, omni, margin=None):
                "p_adj": p, "signif": stars(p),
                "n_a": int(len(xa)), "n_b": int(len(xb)),
                "diff_ci95_lo": lo, "diff_ci95_hi": hi, "ci_method": method,
-               "cohens_d": cohens_d(xa, xb), "hedges_g": hedges_g(xa, xb)}
+               "median_diff": (float(np.median(xa) - np.median(xb)) if len(xa) and len(xb)
+                               else float("nan")),
+               "cohens_d": float("nan") if rank else cohens_d(xa, xb),
+               "hedges_g": float("nan") if rank else hedges_g(xa, xb)}
         if margin:
             tp = tost_p(xa, xb, margin)
             row["tost_p"] = tp
@@ -1149,13 +1163,24 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         omni["test"] = "Welch t-test" if use_param else "Mann–Whitney U"
         p = np.nan
         if len(a) >= 2 and len(b) >= 2:
-            r = (_quiet(st.ttest_ind, a, b, equal_var=False) if use_param
-                 else _quiet(st.mannwhitneyu, a, b, alternative="two-sided"))
+            if use_param:
+                r = _quiet(st.ttest_ind, a, b, equal_var=False)
+            else:
+                # CT-R2 N10: scipy's own choice (exact below 9 per side without ties), made explicit
+                # so the report can say which p it is
+                how = _mwu_method(a, b)
+                omni["p_method"] = how
+                r = _quiet(st.mannwhitneyu, a, b, alternative="two-sided", method=how)
             p = float(r.pvalue) if r is not None else np.nan
             if p != p:
                 notes.append("The two samples have no spread (identical values), so no test is possible (p = n/a).")
         omni["p"] = p
-        omni["effect"] = {"cohens_d": cohens_d(a, b), "hedges_g": hedges_g(a, b)}
+        omni["effect"] = ({"cohens_d": cohens_d(a, b), "hedges_g": hedges_g(a, b)} if use_param else {})
+        if not use_param:
+            notes.append("Mann–Whitney U p is %s; difference and effect sizes are not shown for rank tests "
+                         "(the pairwise table gives the difference of medians)."
+                         % ("exact (no ties, at most 8 per side)" if omni.get("p_method") == "exact"
+                            else "asymptotic (normal approximation with tie and continuity correction)"))
         omni["variance_rule"] = ("Welch's t-test does not assume equal variances." if use_param
                                  else "Mann–Whitney U is rank-based (no variance assumption).")
         if posthoc_req == "dunnett":
@@ -1283,7 +1308,12 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                                   "eta_squared_H": (H - kk + 1) / (N - kk) if N > kk else float("nan")}
                 posthoc = dunn({g: groups[g] for g in tg})
             omni["posthoc"] = "Dunn (Holm)"
+            omni["p_method"] = "asymptotic"
             omni["variance_rule"] = "Kruskal–Wallis and Dunn's test are rank-based (no variance assumption)."
+            notes.append("Kruskal–Wallis and Dunn's p are asymptotic (chi-squared / normal approximation; "
+                         "with few values per sample they can be far from exact). Difference and effect "
+                         "sizes are not shown for rank tests (the pairwise table gives the difference of "
+                         "medians).")
         if ctrl is None:
             posthoc = {(a, b): posthoc.get((a, b), posthoc.get((b, a), float("nan")))
                        for a, b in itertools.combinations(order, 2)}
@@ -1454,6 +1484,9 @@ def center_table(df, order, opts, by=("group",)):
     return out
 
 
+BOOT_MIN_PLATES = 10            # from here on the plate bootstrap of the median keeps its 95 % CI name
+BOOT_APPROX = ("bootstrap interval of the median (approximate: too narrow with fewer than about "
+               "%d plates)" % BOOT_MIN_PLATES)
 _ERR_WORDS = {"sd": "SD", "sem": "SEM", "ci95": "95 % CI", "iqr": "IQR (25th to 75th percentile)"}
 
 
@@ -1490,8 +1523,18 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
         bits.append("Large points: plate means.")
         if center == "median":
             bar = "median of all plaques"
-            wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
-                  % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
+            # CT-R2 N3: the plate-cluster bootstrap covers only 73-90 % at 3-8 plates, so below
+            # 10 plates (or when the count is unknown) it is not called a 95 % CI
+            if error == "ci95" and ns and ns[-1] < 2:
+                # one plate per sample: center_table() resamples the plaques, not plates
+                wh = ("95 %% CI of the median (%s bootstrap resamples of the plaques, seed %d)"
+                      % (format(BOOT_N, ","), BOOT_SEED))
+            elif error == "ci95" and not (ns and ns[0] >= BOOT_MIN_PLATES):
+                wh = ("%s (plates resampled, %s bootstrap resamples, seed %d)"
+                      % (BOOT_APPROX, format(BOOT_N, ","), BOOT_SEED))
+            else:
+                wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
+                      % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
             if error == "iqr":
                 wh = "IQR of the plaques (25th to 75th percentile)"
         else:
@@ -2237,9 +2280,13 @@ def _centers_from(summ, omni, center, error):
     return out
 
 
-def _what_values(center, error, have_rep, unit):
-    """'mean ± SEM of the plate means' -- what the quoted numbers are."""
+def _what_values(center, error, have_rep, unit, n_min=None):
+    """'mean ± SEM of the plate means' -- what the quoted numbers are. `n_min`: the fewest plates
+    behind a plate-bootstrap median interval (CT-R2 N3: approximate below 10 plates)."""
     stat = _CENTER_WORDS.get((center, error), center)
+    if (center, error) == ("median", "ci95") and have_rep and unit == "replicate" \
+            and not (n_min is not None and (n_min >= BOOT_MIN_PLATES or n_min < 2)):
+        stat = "median (%s)" % BOOT_APPROX
     if center == "median":
         return "%s of all plaques" % stat
     return "%s of the %s" % (stat, "plate means" if (have_rep and unit == "replicate") else "plaques")
@@ -2284,7 +2331,8 @@ def paste_sentence(metric, summ=None, omni=None, unit=None, have_rep=None, opts=
         have_rep = unit == "replicate"
     order = list(summ["group"])
     cen = centers or _centers_from(summ, omni, center, error)
-    what = _what_values(center, error, have_rep, unit)
+    n_cen = [c[3] for c in cen.values() if c is not None and c[3] is not None]
+    what = _what_values(center, error, have_rep, unit, min(n_cen) if n_cen else None)
     on = ("plate means" if unit == "replicate" else
           "single plaques (pseudoreplicated: plaques of one plate are not independent)")
     nplq = {r["group"]: int(r["n"]) for _, r in summ.iterrows()}
@@ -2390,8 +2438,9 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
                else "the data have no plate/replicate column")
         L.append("- **Statistical unit:** the plaque (%s). Plaques on one plate are not independent, "
                  "so these p-values are too small; %s.\n" % (why, _n_list(omni.get("n_per_group", {}), unit)))
-    L.append("- **Omnibus test:** %s, %s (Levene %s)\n"
-             % (omni["test"], p_text(omni["p"]), p_text(omni.get("levene_p"))))
+    pm = omni.get("p_method")
+    L.append("- **Omnibus test:** %s%s, %s (Levene %s)\n"
+             % (omni["test"], " (%s p)" % pm if pm else "", p_text(omni["p"]), p_text(omni.get("levene_p"))))
     if omni.get("posthoc"):
         post = omni["posthoc"]
         if post == "Dunnett":
@@ -2413,19 +2462,29 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
     if posthoc:
         L.append("\n**Pairwise (adjusted p; differences, CIs and effect sizes on the %s):**\n" % uw)
         rows = []
+        rank = omni.get("posthoc") == "Dunn (Holm)" or omni.get("test") == "Mann–Whitney U"
         for r in pw:
             ci = ("[%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
                   if r.get("diff_ci95_lo") == r.get("diff_ci95_lo") else "n/a")
-            row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
-                   "difference (A−B)": _num(r["mean_diff"], 3), "95 % CI": ci,
-                   "CI type": r.get("ci_method") or "", "Cohen's d": _num(r["cohens_d"]),
-                   "Hedges' g": _num(r["hedges_g"]), "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
+            if rank:                  # CT-R2 N10: no parametric CI / d / g beside a rank p
+                row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
+                       "difference of medians (A−B)": _num(r.get("median_diff"), 3),
+                       "95 % CI": "", "Cohen's d": "", "Hedges' g": "",
+                       "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
+            else:
+                row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
+                       "difference (A−B)": _num(r["mean_diff"], 3), "95 % CI": ci,
+                       "CI type": r.get("ci_method") or "", "Cohen's d": _num(r["cohens_d"]),
+                       "Hedges' g": _num(r["hedges_g"]), "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
             if "tost_p" in r:
                 row["TOST p"] = fmt_p(r["tost_p"])
             rows.append(row)
         if not rows:
             rows = [{"pair": f"{a} vs {b}", "p_adj": fmt_p(p), "signif": stars(p)} for (a, b), p in posthoc.items()]
         L.append(_md(pd.DataFrame(rows)))
+        if rank and pw:
+            L.append("\n_Difference and effect sizes are not shown for rank tests; the difference of "
+                     "medians is given instead._")
     if omni.get("equivalence_margin") and pw:
         m = omni["equivalence_margin"]
         L.append("\n**Equivalence (TOST, two one-sided Welch t-tests on the %s, margin ±%g):** "
@@ -2766,20 +2825,25 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto", unit="
                 warns.append("%s / %s has %s: it cannot be tested; add %s (its comparison is n/a)."
                              % (g, s, _plural(len(vals), _unit_word(unit, 1)), uw))
             if s != control and len(ctrl) and len(vals):
+                rank = False
                 if posthoc == "dunnett":
                     p = dn_p.get((s, control), float("nan"))
                     lo, hi = dn_ci.get((s, control), (float("nan"), float("nan")))
                     test = "Dunnett" if p == p else "n/a (need ≥2 per side)"
+                    cim = "Dunnett simultaneous" if lo == lo else ""
                 else:
                     p, test = _two_sample_test(ctrl, vals, parametric)
-                    lo = hi = float("nan")
-                    if len(ctrl) >= 2 and len(vals) >= 2:
+                    lo = hi = float("nan"); cim = ""
+                    rank = test.startswith("Mann")
+                    # CT-R2 N4/N10: an unadjusted Welch-t interval, labelled so; none beside a rank test
+                    if len(ctrl) >= 2 and len(vals) >= 2 and not rank:
                         se, dfree = _welch_se_df(vals, ctrl)
                         if se > 0 and dfree == dfree:
                             h = float(st.t.ppf(0.975, dfree)) * se
                             lo, hi = float(np.mean(vals) - np.mean(ctrl) - h), float(np.mean(vals) - np.mean(ctrl) + h)
+                            cim = "Welch t, unadjusted"
                 mc, mm = float(np.mean(ctrl)), float(np.mean(vals))
-                cd = cohens_d(vals, ctrl)
+                cd = float("nan") if rank else cohens_d(vals, ctrl)
                 comps.append({"group": g, "subgroup": s, "control": control,
                               "mean_control": round(mc, 4), "mean_subgroup": round(mm, 4),
                               # CT-R1 SM-F14: a % change of a control mean <= 0 is meaningless
@@ -2790,7 +2854,9 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto", unit="
                               # tested 'ns'; label it n/a so the report/plot don't imply a null result
                               "test": test, "p": p, "signif": stars(p) if p == p else "n/a",
                               "mean_diff": mm - mc, "diff_ci95_lo": lo, "diff_ci95_hi": hi,
-                              "hedges_g": hedges_g(vals, ctrl)})
+                              "ci_method": cim,
+                              "median_diff": float(np.median(vals) - np.median(ctrl)),
+                              "hedges_g": float("nan") if rank else hedges_g(vals, ctrl)})
     comps_df = pd.DataFrame(comps)
     if len(comps_df):
         comps_df["p_raw"] = comps_df["p"]
@@ -3040,8 +3106,8 @@ def _write_grouped_report(path, metric, summ, comp, unit, control, args):
         L.append("")
     L.append("Each subgroup is compared with the control **%s** within its group, on %s.\n" % (control, unote))
     if len(comp):
-        L.append("| group | subgroup | control mean | subgroup mean | difference (95 % CI) | change | "
-                 "Hedges' g | test | p | |")
+        L.append("| group | subgroup | control mean | subgroup mean | difference (%s) | change | "
+                 "Hedges' g | test | p | |" % ("simultaneous 95 % CI" if dunn else "95 % CI (unadjusted)"))
         L.append("|---|---|---:|---:|---:|---:|---:|---|---:|---|")
         for _, r in comp.iterrows():
             ci = (" [%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
@@ -3055,7 +3121,11 @@ def _write_grouped_report(path, metric, summ, comp, unit, control, args):
              + ("p-values and simultaneous 95 % CIs are Dunnett's (each subgroup vs the control within "
                 "its group); Dunnett's test assumes similar variances. " if dunn else
                 "p-values are Holm-adjusted within each group (raw p in the CSV as p_raw); the CI is a "
-                "plain Welch-t interval. ")
+                "plain Welch-t interval, NOT adjusted (ci_method in the CSV), so a CI that excludes 0 "
+                "beside a Holm-adjusted 'ns' is not a contradiction. "
+                + ("Rank tests (Mann–Whitney) get no CI or Hedges' g: difference and effect sizes are "
+                   "not shown for rank tests (median_diff in the CSV). "
+                   if len(comp) and comp["test"].astype(str).str.startswith("Mann").any() else ""))
              + "Change = (subgroup − control)/control, n/a when the control mean is ≤ 0._\n")
     L.append("## Paste-ready sentence\n")
     L.append("> " + paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args))
@@ -3098,6 +3168,26 @@ def _save_fig(fig, base, args):
             fig.savefig("%s.%s" % (base, fmt), **kw)
 
 
+def grouped_ignored_notes(args):
+    """One sentence per one-factor option that grouped mode does not use, when it is set to a
+    non-default value (CT-R2 N5). The defaults the apps pass produce nothing."""
+    out = []
+    if args.get("equivalence_margin") not in (None, ""):
+        out.append("--equivalence-margin is not used in grouped mode (no equivalence test is run); "
+                   "run the samples without --subgroup for TOST equivalence tests.")
+    ev = {True: "yes", False: "no"}.get(args.get("equal_var"), args.get("equal_var"))
+    if str(ev or "auto").strip().lower() != "auto":
+        out.append("--equal-var %s is not used in grouped mode: each subgroup is compared with the control "
+                   "by a Welch t-test (no equal-variance assumption), or by Dunnett's test (similar "
+                   "variances assumed) with --posthoc dunnett." % str(ev).strip().lower())
+    if str(args.get("annotate") or "auto").strip().lower() == "letters":
+        out.append("--annotate letters is not available in grouped mode (each subgroup is compared only "
+                   "with its control); stars are shown instead.")
+    if args.get("detect") not in (None, ""):
+        out.append("--detect is not used in grouped mode (no power calculation is made).")
+    return out
+
+
 def run_grouped(args):
     """Grouped control-comparison mode. Optional args: data may be a DataFrame; sub_order (the
     on-screen subgroup order), _sublabel (key title), posthoc (auto|dunnett), unit.
@@ -3123,6 +3213,8 @@ def run_grouped(args):
     elif control not in sub_order:
         sub_order = [control] + sub_order
     df = df[df["group"].isin(group_order) & df["subgroup"].isin(sub_order)].reset_index(drop=True)
+    # CT-R2 N5: options of the one-factor analysis used to be ignored here without a word
+    notes += grouped_ignored_notes(args)
     o = _plot_opts(args)                                   # option errors before any file is written
     _, log_note = _log_guard(df["value"].values, o)
     if log_note:                                           # CT-R1 SM-F13: say how many are hidden
