@@ -968,6 +968,13 @@ def _n_range(ns, tg, uw):
     return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
 
 
+class PosthocResult(dict):
+    """The {(a, b): adjusted p} dict run_stats() has always returned, plus `.name`: the post-hoc
+    test that produced it ("Tukey HSD, adjusted p", "Welch t-test", ...). Figures read the name
+    so the legend text starter can say which test the stars come from (CT-R1 S3)."""
+    name = None
+
+
 def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", control=None,
               equivalence_margin=None):
     """Compute normality, an omnibus test, and pairwise post-hoc p-values on the chosen unit.
@@ -1244,6 +1251,10 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     omni["power"] = power_summary(groups)
     omni["icc"] = plate_variance_share(df)
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
+    posthoc = PosthocResult(posthoc or {})
+    post = omni.get("posthoc")
+    posthoc.name = ("%s, adjusted p" % post if post in ("Tukey HSD", "Games-Howell", "Dunnett",
+                                                        "Dunn (Holm)") else omni.get("test"))
     return omni, posthoc, unit, have_rep
 
 
@@ -1524,23 +1535,32 @@ def _log_axis(ax, lo, hi):
 
 
 def _fit_xticklabels(fig, ax):
-    """Rotate the x tick labels 30° (right-aligned) when they would run into each other
-    (CT-R1 DA-F10, web F14)."""
+    """Rotate the x tick labels (right-aligned) when they would run into each other (CT-R1
+    DA-F10, web F14): 30° when that separates them, else 45°, else 90°. Long names get a smaller
+    font instead of being wrapped (two-line labels collide when rotated: follow-up S1)."""
     labs = [t for t in ax.get_xticklabels() if t.get_text()]
     if len(labs) < 2:
         return False
     try:
         r = _renderer(fig)
         w = max(t.get_window_extent(r).width for t in labs)
+        h = max(t.get_window_extent(r).height for t in labs)
         xs = sorted(ax.transData.transform((t.get_position()[0], 0))[0] for t in labs)
         gap = min(b - a for a, b in zip(xs, xs[1:]))
     except Exception:                                    # noqa: BLE001
         return False
-    if w > 0.92 * gap:
+    if w <= 0.92 * gap:
+        return False
+    if max(len(t.get_text()) for t in labs) > 18:
+        fs = labs[0].get_fontsize()
         for t in labs:
-            t.set_rotation(30); t.set_ha("right"); t.set_rotation_mode("anchor")
-        return True
-    return False
+            t.set_fontsize(min(fs, 9.5))
+        h *= min(fs, 9.5) / fs
+    angle = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+    for t in labs:
+        t.set_rotation(angle); t.set_ha("right" if angle < 90 else "center")
+        t.set_rotation_mode("anchor" if angle < 90 else "default")
+    return True
 
 
 def _wrap_title(fig, ax, opts):
@@ -1564,12 +1584,82 @@ def _caption(fig, bits):
     bits = [b for b in bits if b]
     if not bits:
         return None
-    return fig.text(0.012, 0.008, " · ".join(bits) + ".", ha="left", va="bottom", fontsize=7.5,
+    import textwrap
+    txt = " · ".join(bits) + "."
+    per = max(40, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))   # wrap to the figure width
+    txt = "\n".join(textwrap.wrap(txt, per)) or txt
+    return fig.text(0.012, 0.008, txt, ha="left", va="bottom", fontsize=7.5,
                     color="#5b6a65", style="italic")
 
 
+def _tight(fig, caption=None):
+    """tight_layout that keeps the strip under the axes for a key placed below them (and the
+    caption line)."""
+    kb = float(getattr(fig, "_key_below_in", 0.0) or 0.0)
+    H = fig.get_size_inches()[1]
+    cap_h = 0.0
+    if caption is not None:
+        try:
+            cap_h = caption.get_window_extent(_renderer(fig)).height / fig.dpi + 0.03
+        except Exception:                                # noqa: BLE001
+            cap_h = 0.04 * H
+    if kb > 0:
+        extra = max(0.0, cap_h - KEY_CAPTION_IN)         # a caption taller than the strip kept for it
+        if extra:
+            W = fig.get_size_inches()[0]
+            fig.set_size_inches(W, H + extra); H += extra
+            kb += extra; fig._key_below_in = kb
+            leg = fig.axes[0].get_legend() if fig.axes else None
+            if leg is not None:
+                leg.set_bbox_to_anchor((0.5, cap_h / H), transform=fig.transFigure)
+        fig.tight_layout(rect=(0, kb / H, 1, 1))
+    else:
+        fig.tight_layout(rect=(0, max(0.04, cap_h / H), 1, 1) if caption is not None else None)
+
+
 def _layout(fig, caption):
-    fig.tight_layout(rect=(0, 0.04, 1, 1) if caption is not None else None)
+    _tight(fig, caption)
+
+
+KEY_RIGHT_MAX_FRAC = 0.28      # the embedded key stays at the right only while this narrow
+KEY_CAPTION_IN = 0.20          # inches kept for one caption line under a key placed below
+
+
+def _place_key(fig, ax, key, **kw):
+    """Put the figure's key ON the figure (CT-R1 follow-up S1). At the right of the axes, in one
+    column, while it takes at most 28 % of the figure width and fits its height; otherwise BELOW
+    the axes in as many columns as fit the figure width, and the figure grows by the key's height
+    so the axes keep their size (the saved figure is then taller than --height). Entries are the
+    key's, so the standalone key still matches entry for entry."""
+    fig._key_below_in = 0.0
+    if not key or not key.get("entries"):
+        return None
+    W, H = fig.get_size_inches()
+    leg = _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), ncol=1, **kw)
+    r = _renderer(fig)
+    bb = leg.get_window_extent(r)
+    w1, h1 = bb.width / fig.dpi, bb.height / fig.dpi
+    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= 0.98 * H:
+        return leg
+    leg.remove()
+    nrows = len(_lk.rows(key)[0])
+    ncol = max(1, min(nrows, int((0.97 * W) // max(w1 * 0.9, 0.3))))
+    while True:
+        leg = _lk.embed(ax, key, loc="lower center", bbox_to_anchor=(0.5, 0.0),
+                        bbox_transform=fig.transFigure, ncol=ncol, **kw)
+        bb = leg.get_window_extent(r)
+        if bb.width / fig.dpi <= 0.98 * W or ncol == 1:
+            break
+        leg.remove(); ncol -= 1
+    leg.set_in_layout(False)
+    cap_in = KEY_CAPTION_IN                        # room for the caption line under the key
+    hk = bb.height / fig.dpi
+    fig.set_size_inches(W, H + hk + cap_in + 0.06)
+    Hn = H + hk + cap_in + 0.06
+    leg.set_bbox_to_anchor((0.5, cap_in / Hn), transform=fig.transFigure)
+    fig._key_below_in = hk + cap_in + 0.06
+    fig.key_placement = "below"
+    return leg
 
 
 def _n_label_plan(fig, labels_full, labels_short, slot_in):
@@ -1652,12 +1742,20 @@ def annotation_plan(order, posthoc, opts):
         if len(order) > 5:
             ref = (opts or {}).get("control")
             ref = ref if ref in order else order[0]
-            plan["pairs"] = [pr for pr in sig if ref in pr]
-            plan["note"] += ("With %d samples the figure shows only the significant comparisons "
-                             "against %s (%d of the %d significant pairs, out of %d pairs tested). "
-                             "Every pair is in the pairwise table. `--annotate letters` gives a "
-                             "compact letter display, `--annotate all` every bracket."
-                             % (len(order), ref, len(plan["pairs"]), len(sig), len(allpairs)))
+            # CT-R1 follow-up S5: ten stacked brackets took half the axis. Each sample's comparison
+            # with the reference is written as stars directly above it, in one row, no lines.
+            plan["pairs"] = [pr for pr in allpairs if ref in pr]
+            plan["mode"] = "vsref"
+            plan["ref"] = ref
+            plan["letters"] = {(b if a == ref else a): stars(_p(pr) if _has(pr) else float("nan"))
+                               for pr in plan["pairs"] for a, b in [pr]}
+            nsig = sum(1 for pr in plan["pairs"] if _p(pr) < 0.05)
+            plan["note"] += ("With %d samples each sample is compared with %s only: the stars above "
+                             "each sample give that comparison (%d of %d with adjusted p < 0.05; %s "
+                             "itself is marked ref.). Every pair is in the pairwise table. `--annotate "
+                             "letters` gives a compact letter display, `--annotate all` every bracket."
+                             % (len(order), ref, nsig, len(plan["pairs"]), ref))
+            return plan
         else:
             plan["pairs"] = sig or [(order[i], order[i + 1]) for i in range(len(order) - 1)]
             plan["note"] += ("Brackets: the significant pairs." if sig else
@@ -1665,6 +1763,19 @@ def annotation_plan(order, posthoc, opts):
     if not plan["pairs"]:
         plan["mode"] = "none"
     return plan
+
+
+def annotation_sentence(plan, opts):
+    """What the annotation on the figure means, for the legend text starter (CT-R1 S3): the
+    annotation_plan note plus the star thresholds and the test they come from."""
+    if not plan or plan.get("mode") == "none":
+        return ""
+    s = " " + plan["note"].strip().replace("`", "")
+    if plan["mode"] in ("brackets", "vsref"):
+        test = (opts or {}).get("_posthoc_name")
+        s += (" Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant%s."
+              % ((" (%s)" % test) if test else " (adjusted p)"))
+    return s
 
 
 def _pairs_to_annotate(order, posthoc, mode):
@@ -1697,6 +1808,40 @@ def violin_colours(df, order, opts, rm=None):
     return gcol, rcol, neutral, reps
 
 
+REPEAT_HATCHES = [None, "////", "\\\\\\\\", "xxxx", "....", "++++"]
+
+
+def _palette_name(pal):
+    low = [str(c).lower() for c in (pal or [])]
+    for name, colours in PALETTES.items():
+        if low == [c.lower() for c in colours]:
+            return name
+    return None
+
+
+def colour_repeats(items, opts):
+    """{item: cycle} -- 0 for the first pass through the palette, 1 for the first repeat, ...
+    A NAMED palette shorter than the items cycles; each repeat then gets a second distinguishing
+    property (a hatch on violins / key patches, another marker for points), so no two samples
+    look alike (CT-R1 follow-up S2). A custom list that is too short is refused instead."""
+    pal = clean_palette(opts.get("palette"))
+    return {g: i // len(pal) for i, g in enumerate(items)}
+
+
+def palette_repeat_note(items, opts, what="sample", how="a hatch"):
+    """'12 samples but the tab10 palette has 10 colours: samples 11-12 reuse colours with a hatch'
+    (None when every item has its own colour)."""
+    pal = clean_palette(opts.get("palette"))
+    if len(items) <= len(pal):
+        return None
+    name = _palette_name(opts.get("palette") if not isinstance(opts.get("palette"), str)
+                         else PALETTES.get(str(opts["palette"]).lower())) or "chosen"
+    first = len(pal) + 1
+    span = ("%s %d" % (what, first) if first == len(items) else "%ss %d-%d" % (what, first, len(items)))
+    return ("%d %ss but the %s palette has %d colours: %s reuse colours with %s."
+            % (len(items), what, name, len(pal), span, how))
+
+
 def _and_list(names):
     names = [str(n) for n in names]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -1709,17 +1854,20 @@ def violin_key(order, gcol, rcol, reps, neutral, have_rep, opts):
     afac = float(opts.get("violin_alpha", 0.55)) / 0.55
     entries = []
     pts_by_group = (not have_rep) and opts.get("show_points", True)
+    cyc = colour_repeats(order, opts)
     if not neutral or pts_by_group:
         for g in order:
             c = gcol[g]
-            em = (dict(marker="o", colour=c, edge="none", alpha=0.42, size=5.0)
+            mk = PLATE_MARKERS[cyc[g] % len(PLATE_MARKERS)]
+            em = (dict(marker=mk, colour=c, edge="none", alpha=0.42, size=5.0)
                   if pts_by_group else None)
             if not neutral:
                 entries.append(_lk.entry(g, c, kind="patch", edge=_darken(c),
                                          alpha=min(1.0, 0.22 * afac), linewidth=0.9,
-                                         shape="violin", section="sample", extra_marker=em))
+                                         shape="violin", section="sample", extra_marker=em,
+                                         hatch=REPEAT_HATCHES[cyc[g] % len(REPEAT_HATCHES)]))
             else:
-                entries.append(_lk.entry(g, c, kind="marker", marker="o", edge="none", alpha=0.42,
+                entries.append(_lk.entry(g, c, kind="marker", marker=mk, edge="none", alpha=0.42,
                                          size=5.0, section="sample"))
     if have_rep:
         _, rmark = _plate_style(reps, opts, neutral)
@@ -1751,6 +1899,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     # the colour mapping this figure is drawn from -- and its legend key is built from
     gcol, rcol, neutral, reps = violin_colours(df, order, opts, rm)
     _, rmark = _plate_style(reps, opts, neutral)
+    cyc = colour_repeats(order, opts)
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]                                     # what can be DRAWN (all of it, unless log)
@@ -1773,6 +1922,12 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             else:
                 c = gcol[order[i]]
                 b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(min(1.0, 0.22 * afac))
+                hz = REPEAT_HATCHES[cyc[order[i]] % len(REPEAT_HATCHES)]
+                if hz:                                    # CT-R1 S2: a repeated palette colour
+                    from matplotlib.colors import to_rgba
+                    a_ = min(1.0, 0.22 * afac)
+                    b.set_alpha(None); b.set_facecolor(to_rgba(c, a_))
+                    b.set_edgecolor(to_rgba(_darken(c), min(1.0, a_ * 3.5))); b.set_hatch(hz)
             b.set_linewidth(0.9)
             verts = b.get_paths()[0].vertices                 # trim the violin to the data range
             if log_y:
@@ -1824,7 +1979,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         else:                                             # -------- no replicates: bar on the plaques --------
             if opts["show_points"] and len(v):
                 jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
-                ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3)
+                ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3,
+                           marker=PLATE_MARKERS[cyc[g] % len(PLATE_MARKERS)])
             if ok_bar:
                 ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
                 ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
@@ -1852,9 +2008,10 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     key = violin_key(order, gcol, rcol, reps, neutral, rm is not None, opts)
     key["note"] = figure_sentence(opts, rm is not None, n_units)
     _lk.attach(fig, key)
-    if opts.get("legend", True):                 # "Place key on figure": the SAME key, outside right
-        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), handletextpad=0.3,
-                  borderaxespad=0.2)
+    fig.key_placement = "off"
+    if opts.get("legend", True):                 # "Place key on figure": the SAME key
+        fig.key_placement = "right"
+        _place_key(fig, ax, key, handletextpad=0.3, borderaxespad=0.2)
 
     caption_bits = [log_note]
     if opts.get("show_value", True) and not show_val:
@@ -1863,9 +2020,9 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
-    fig.tight_layout()                           # first pass: the axes get their real size
+    _tight(fig)                                  # first pass: the axes get their real size
     if _fit_xticklabels(fig, ax):
-        fig.tight_layout()
+        _tight(fig)
     aw, ah = _axes_in(fig, ax)
 
     # ---- everything above the data is laid out in INCHES and converted to data units at the
@@ -1897,7 +2054,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         nlev = 0
         if plan["mode"] == "brackets":
             placed, nlev = _bracket_levels(plan["pairs"], order)
-        elif plan["mode"] == "letters":
+        elif plan["mode"] in ("letters", "vsref"):
             nlev = 1
         hn = 0.0
         if n_plan:
@@ -1930,6 +2087,16 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             for i, g in enumerate(order):
                 ax.text(pos[i], Ti(base), plan["letters"].get(g) or "n/a", ha="center", va="bottom",
                         fontsize=star_fs, fontweight="bold", color="#12211d")
+        elif plan["mode"] == "vsref":                   # CT-R1 S5: one row of stars, no brackets
+            for i, g in enumerate(order):
+                if g == plan["ref"]:
+                    ax.text(pos[i], Ti(base), "ref.", ha="center", va="bottom", fontsize=star_fs * 0.8,
+                            style="italic", color="#5b6a65")
+                else:
+                    ax.text(pos[i], Ti(base), plan["letters"].get(g) or "n/a", ha="center", va="bottom",
+                            fontsize=star_fs, color="#12211d")
+            caption_bits.append("Stars above each sample: its comparison with %s (ref.)"
+                                 % _lk.safe_text(str(plan["ref"])))
         if n_plan:                                      # n labels INSIDE the box, at the top
             import matplotlib.transforms as mtransforms
             texts, fs, stagger, h_in, used_short = n_plan
@@ -1940,6 +2107,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                         fontsize=fs, fontweight="bold", color="#33413c", linespacing=1.15)
             if used_short and rm is not None:
                 caption_bits.append("n = plaques, N = plates")
+    key["note"] = (key.get("note") or "") + annotation_sentence(
+        plan, dict(opts, _posthoc_name=opts.get("_posthoc_name") or getattr(posthoc, "name", None)))
     if log_y:                                     # ticks for the FINAL range (CT-R1 DA-F15)
         _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
@@ -2253,7 +2422,8 @@ def power_sentence(pw, unit="replicate"):
     uw = _unit_word(unit)
     if not pw or not pw.get("available"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
-    s = ("**Power:** with %d %s per sample and the observed pooled SD of the %s (%.3g), a difference "
+    s = ("**Power:** (computed from the observed spread; treat as a rough guide) with %d %s per "
+         "sample and the observed pooled SD of the %s (%.3g), a difference "
          "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
          % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
             pw["pooled_sd"], pw["detectable_diff"], round(100 * pw["power"]), pw["alpha"]))
@@ -2261,13 +2431,25 @@ def power_sentence(pw, unit="replicate"):
         s = s.replace("with %d %s per sample" % (pw["n_per_group"], uw),
                       "with %d %s per sample (the smallest sample)" % (pw["n_per_group"], uw))
 
-    def need(n):
-        return ("more than 1,000 %s" % uw) if n is None else _plural(n, _unit_word(unit, 1))
+    # CT-R1 follow-up S4: never recommend fewer than 3 plates from an observed effect
+    floor = MIN_UNITS_ADVISED
+
+    def need(n, what, d):
+        if n is None:
+            return "detecting the %s observed difference (%.3g) needs more than 1,000 %s per sample" % (what, d, uw)
+        if n < floor:
+            return ("for the %s observed difference (%.3g) the minimum of %d %s per sample is enough"
+                    % (what, d, floor, uw))
+        return "detecting the %s observed difference (%.3g) needs %s per sample" % (
+            what, d, _plural(n, _unit_word(unit, 1)))
     if "largest_diff" in pw:
-        s += (" Detecting the largest observed difference (%.3g) needs %s per sample; the smallest "
-              "(%.3g) needs %s." % (pw["largest_diff"], need(pw["n_for_largest"]),
-                                   pw["smallest_diff"], need(pw["n_for_smallest"])))
+        a = need(pw["n_for_largest"], "largest", pw["largest_diff"])
+        b = need(pw["n_for_smallest"], "smallest", pw["smallest_diff"])
+        s += " %s%s; %s." % (a[0].upper(), a[1:], b)
     return s
+
+
+MIN_UNITS_ADVISED = 3          # plates per sample: the floor any power advice recommends
 
 
 def _md(df):
@@ -2600,6 +2782,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
     pal = clean_palette(opts.get("palette"), needed=len(sub_order), what="subgroup level")
     scol = {s: pal[i % len(pal)] for i, s in enumerate(sub_order)}          # colour per subgroup
+    smark = {s: PLATE_MARKERS[c % len(PLATE_MARKERS)]                        # CT-R1 S2: repeats
+             for s, c in colour_repeats(sub_order, opts).items()}
     pm = _plate_means_gs(df)
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
@@ -2635,18 +2819,19 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
                 if opts.get("show_points", True):        # faint raw plaques behind the plate means
                     jr = x + rng.uniform(-slot * 0.30, slot * 0.30, size=len(vals))
                     ax.scatter(jr, vals, s=opts["point_size"] * 0.7, color=c, alpha=0.20,
-                               edgecolor="none", zorder=2)
+                               edgecolor="none", zorder=2, marker=smark[s])
                 um = pm[(pm["group"] == g) & (pm["subgroup"] == s)]["value"].values
                 if log_y:
                     um = um[um > 0]
                 jx = (x + np.linspace(-0.03, 0.03, len(um))) if len(um) > 1 else np.array([float(x)])
                 if len(um):
                     ax.scatter(jx[:len(um)], um, s=opts["point_size"] * 4.0, color=c, edgecolor="#12211d",
-                               linewidth=0.8, zorder=6)
+                               linewidth=0.8, zorder=6, marker=smark[s])
                     top = max(top, float(np.max(um)))
             else:
                 jx = x + rng.uniform(-slot * 0.25, slot * 0.25, size=len(vals))
-                ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3)
+                ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3,
+                           marker=smark[s])
             cen, lo, hi, _n = cen_tab.get((g, s), (float("nan"),) * 4)
             if log_y:
                 lo = lo if lo > 0 else (cen if cen > 0 else float("nan"))
@@ -2674,16 +2859,19 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     _style_axes(ax, opts)
     # legend key from the SAME subgroup -> colour dict the marks were drawn with
     n_units = [v[3] for v in cen_tab.values()]
-    key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup")
+    key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup",
+                      smark=smark)
     key["note"] = figure_sentence(opts, pm is not None, n_units)
     _lk.attach(fig, key)
+    fig.key_placement = "off"
     if opts.get("legend", True):                 # "Place key on figure"
-        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+        fig.key_placement = "right"
+        _place_key(fig, ax, key)
     caption_bits = [log_note]
     _wrap_title(fig, ax, opts)
-    fig.tight_layout()
+    _tight(fig)
     if _fit_xticklabels(fig, ax):
-        fig.tight_layout()
+        _tight(fig)
     aw, ah = _axes_in(fig, ax)
 
     # ---- headroom laid out in inches (CT-R1 SM-F13: log axis; brackets never touch n labels)
@@ -2710,6 +2898,13 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
             treat.sort(key=lambda s: abs(offs[s] - offs[control]))     # nearest bracket lowest
             if treat and (g, control) in fin:
                 brackets[g] = treat
+    if brackets:                                   # CT-R1 S3: the text starter explains the stars
+        tests = [t for t in dict.fromkeys(comp["test"]) if not str(t).startswith("n/a")] if len(comp) else []
+        adj = "Dunnett-adjusted p" if "Dunnett" in tests else "Holm-adjusted p within each group"
+        key["note"] = (key.get("note") or "") + (
+            " Brackets: each %s vs the control %s within its group. Stars: * p < 0.05, ** p < 0.01, "
+            "*** p < 0.001, ns = not significant (%s, %s)."
+            % (opts.get("_sublabel") or "subgroup", control, " / ".join(map(str, tests)) or "n/a", adj))
     star_fs, gap = 10.0, 0.08
     pitch = star_fs / 72.0 * 1.75
     nmax = max([len(v) for v in brackets.values()] or [0])
@@ -2761,16 +2956,18 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     return fig
 
 
-def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup"):
+def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup", smark=None):
     """Legend key of the grouped plot: one entry per subgroup, styled as its marks are drawn
-    (plate means: filled circles with a dark outline; no replicates: plain translucent points)."""
+    (plate means: filled circles with a dark outline; no replicates: plain translucent points;
+    `smark` = subgroup -> marker when palette colours repeat)."""
     entries = []
     for s in sub_order:
         lab = "%s (control)" % s if s == control else s
+        mk = (smark or {}).get(s, "o")
         if have_rep:
-            entries.append(_lk.entry(lab, scol[s], marker="o", edge="#12211d", size=8))
+            entries.append(_lk.entry(lab, scol[s], marker=mk, edge="#12211d", size=8))
         else:
-            entries.append(_lk.entry(lab, scol[s], marker="o", edge="none", alpha=0.40, size=6))
+            entries.append(_lk.entry(lab, scol[s], marker=mk, edge="none", alpha=0.40, size=6))
     return _lk.make_key(entries, title=sublabel, fontsize=9, frameon=True)
 
 
@@ -2894,6 +3091,9 @@ def run_grouped(args):
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     plt.close(fig)
 
+    rn = palette_repeat_note(sub_order, o, "subgroup level", "a different marker")
+    if rn:
+        notes.append(rn)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _have_rep=unit == "replicate")
     _write_grouped_report(os.path.join(out, "grouped_report_%s.md" % mt),
                           metric, summ, comp, unit, control, rargs)
@@ -2991,6 +3191,11 @@ def run(args):
 
     if log_note:
         notes.append(log_note[0].upper() + log_note[1:] + ".")
+    _gc, _rc, _neutral, _r = violin_colours(df, order, o)
+    if (not _neutral) or rep is None:                      # colour encodes the samples
+        rn = palette_repeat_note(order, o, "sample", "a hatch" if not _neutral else "a different marker")
+        if rn:
+            notes.append(rn)
     centers = center_table(df, order, o)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _centers=centers,
                  _annotation_note=ann)

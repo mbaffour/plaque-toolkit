@@ -231,8 +231,8 @@ def test_A5_unit_columns_n_labels_and_figure_sentence(tmp_path):
     h = st.t.ppf(0.975, 2) * t4.std(ddof=1) / math.sqrt(3)
     assert s.loc["T4", "unit_ci95_lo"] == pytest.approx(t4.mean() - h)
     text = (tmp_path / "out" / "violin_diameter_mm_legend_text.txt").read_text(encoding="utf-8")
-    assert text.strip().endswith("Bar: mean of the 3 plate means. Whisker: SEM of the plate means. "
-                                 "n = plaques, N = plates.")
+    assert ("Bar: mean of the 3 plate means. Whisker: SEM of the plate means. "
+            "n = plaques, N = plates.") in text            # then the annotation sentence (S3)
     fig = ps.plot_violin(_tidy(df), ["T4", "T7", "lambda"], dict(ps.DEFAULTS), "d", res["posthoc"])
     labels = [t.get_text() for t in fig.axes[0].texts]
     assert any(t.startswith("n = 60 plaques") and "N = 3 plates" in t for t in labels) or \
@@ -648,3 +648,124 @@ def test_C_caption_keeps_the_lowercase_n():
     cap = [t.get_text() for t in fig.texts]
     assert "Bar values are in the summary table · n = plaques, N = plates." in cap
     plt.close(fig)
+
+
+
+# =========================================================================== follow-up S1..S5
+def test_S4_power_sentence_never_advises_fewer_than_3_plates():
+    pw = {"available": True, "pooled_sd": 0.1, "n_per_group": 3, "power": 0.8, "alpha": 0.05,
+          "equal_n": True, "detectable_diff": 0.3, "largest_diff": 1.37, "n_for_largest": 2,
+          "smallest_diff": 0.2, "n_for_smallest": 7}
+    s = ps.power_sentence(pw)
+    assert "needs 2 plates" not in s
+    assert "For the largest observed difference (1.37) the minimum of 3 plates per sample is enough" in s
+    assert "detecting the smallest observed difference (0.2) needs 7 plates per sample" in s
+    assert s.count("(computed from the observed spread; treat as a rough guide)") == 1
+    assert s.startswith("**Power:**")                       # the desktop tab strips ** and looks for it
+
+
+LONG12 = ["Wild-type MG1655 control %d" % i if i % 3 == 0 else "ΔompC::kan strain %d" % i for i in range(12)]
+
+
+def _long12(rep=True):
+    df = _tidy(_frame(groups=LONG12, mus=tuple(np.linspace(1.0, 2.1, 12)), n=8))
+    if not rep:
+        df["replicate"] = np.nan
+    return df
+
+
+def _ph(order, p=0.0001):
+    return {pr: p for pr in itertools.combinations(order, 2)}
+
+
+def test_S1_many_key_rows_go_below_and_the_figure_grows():
+    o = dict(ps.DEFAULTS, violin_fill="group", width=6.0)      # the desktop tab's narrower figure
+    fig = ps.plot_violin(_long12(), LONG12, o, "d", _ph(LONG12))
+    leg = fig.axes[0].get_legend()
+    W, H = fig.get_size_inches()
+    assert fig.key_placement == "below" and H > o["height"] + 0.5 and W == o["width"]
+    assert leg._ncols > 1
+    ax_w = fig.axes[0].get_position().width * W
+    assert ax_w > 0.55 * W                                  # the axes keep their width
+    key = lk.from_figure(fig)
+    alone = lk.key_figure(key).legends[0]
+    assert [t.get_text() for t in leg.get_texts()] == [t.get_text() for t in alone.get_texts()]
+    plt.close(fig)
+    small = ps.plot_violin(_tidy(_frame()), ["T4", "T7", "lambda"], dict(ps.DEFAULTS), "d", {})
+    assert small.key_placement == "right" and tuple(small.get_size_inches()) == (8.0, 5.2)
+    plt.close(small)
+    g = _tidy(_frame(groups=("T4", "T7"), mus=(2.0, 2.5), plates=3, n=6))
+    hosts = ["E. coli LE392 (permissive) host %d" % i for i in range(6)]
+    g = pd.concat([g.assign(subgroup=h) for h in hosts], ignore_index=True)
+    fg = ps.plot_grouped(g, ["T4", "T7"], hosts, hosts[0], dict(ps.DEFAULTS), "d", pd.DataFrame())
+    assert fg.key_placement in ("right", "below")
+    if fg.key_placement == "below":
+        assert fg.get_size_inches()[1] > 5.2
+    plt.close(fg)
+
+
+def test_S2_named_palette_repeats_get_a_hatch_and_a_note(tmp_path):
+    o = dict(ps.DEFAULTS, violin_fill="group", palette="tab10")
+    fig = ps.plot_violin(_long12(), LONG12, o, "d", {})
+    key = lk.from_figure(fig)
+    looks = [(e["colour"], e.get("hatch")) for e in key["entries"] if e["section"] == "sample"]
+    assert len(set(looks)) == 12
+    assert [e.get("hatch") for e in key["entries"][:12]] == [None] * 10 + ["////", "////"]
+    bodies = [c for c in fig.axes[0].collections if c.__class__.__name__ in ("PolyCollection", "FillBetweenPolyCollection")]
+    assert [b.get_hatch() for b in bodies][-2:] == ["////", "////"]
+    text = lk.text_starter(key)
+    assert "%s (blue, hatched, filled violin" % LONG12[10] in text
+    plt.close(fig)
+    res = ps.run(_args(tmp_path, _long12().rename(columns={"value": "diameter_mm"}),
+                       violin_fill="group", palette=list(ps.PALETTES["tab10"])))
+    note = "12 samples but the tab10 palette has 10 colours: samples 11-12 reuse colours with a hatch."
+    assert note in res["notes"]
+    assert note in (tmp_path / "out" / "report_diameter_mm.md").read_text(encoding="utf-8")
+    # points without plates: a different marker
+    f2 = ps.plot_violin(_long12(rep=False), LONG12, dict(ps.DEFAULTS, violin_fill="neutral", palette="tab10"), "d", {})
+    k2 = lk.from_figure(f2)
+    assert len({(e["colour"], e["marker"]) for e in k2["entries"]}) == 12
+    plt.close(f2)
+
+
+def test_S3_text_starter_explains_the_annotation(tmp_path):
+    fig = ps.plot_violin(_long12(), LONG12, dict(ps.DEFAULTS, _posthoc_name="Tukey HSD, adjusted p"),
+                         "d", _ph(LONG12))
+    text = lk.text_starter(lk.from_figure(fig))
+    assert "With 12 samples each sample is compared with %s only" % LONG12[0] in text
+    assert "Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant (Tukey HSD, adjusted p)." in text
+    plt.close(fig)
+    order = ["T4", "T7", "lambda"]
+    f2 = ps.plot_violin(_tidy(_frame()), order, dict(ps.DEFAULTS, annotate="letters"), "d", _ph(order))
+    t2 = lk.text_starter(lk.from_figure(f2))
+    assert "compact letter display" in t2 and "Stars:" not in t2
+    plt.close(f2)
+    # the name travels with the run_stats() result, so a GUI that draws from it says the same
+    df = _tidy(_frame())
+    _o, ph, _u, _h = ps.run_stats(df, order, "auto", "auto")
+    assert ph.name == "Tukey HSD, adjusted p" and isinstance(ph, dict)
+    f3 = ps.plot_violin(df, order, dict(ps.DEFAULTS), "d", ph)
+    screen = lk.text_starter(lk.from_figure(f3))
+    plt.close(f3)
+    ps.run(_args(tmp_path, _frame()))
+    tf = (tmp_path / "out" / "violin_diameter_mm_legend_text.txt").read_text(encoding="utf-8")
+    assert tf.strip() == screen
+    assert "Brackets: the significant pairs. Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not " \
+           "significant (Tukey HSD, adjusted p)." in tf
+
+
+def test_S5_many_samples_get_one_row_of_stars_not_brackets():
+    df = _long12()
+    fig = ps.plot_violin(df, LONG12, dict(ps.DEFAULTS), "d", _ph(LONG12))
+    ax = fig.axes[0]
+    assert not [ln for ln in ax.lines if len(ln.get_xdata()) == 4]           # no bracket lines
+    txt = [t.get_text() for t in ax.texts]
+    assert txt.count("***") == 11 and txt.count("ref.") == 1
+    assert any("Stars above each sample: its comparison with %s (ref.)" % LONG12[0] in t.get_text()
+               for t in fig.texts)
+    top = df["value"].max()
+    assert ax.get_ylim()[1] < top + 0.6 * (top - ax.get_ylim()[0])          # no half-axis bracket stack
+    plt.close(fig)
+    fa = ps.plot_violin(df, LONG12, dict(ps.DEFAULTS, annotate="all"), "d", _ph(LONG12))
+    assert len([ln for ln in fa.axes[0].lines if len(ln.get_xdata()) == 4]) == 66
+    plt.close(fa)
