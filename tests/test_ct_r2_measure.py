@@ -387,3 +387,45 @@ def test_one_default_plaque_size_for_every_tab_and_table(qtbot, monkeypatch, neu
         assert not re.search(r'["\']scale["\']\s*:\s*["\']auto["\']', src), f
         assert not re.search(r'["\']other["\']\s*:\s*["\']auto["\']', src), f
 
+
+# =========================================================================== N2
+def _sized_median(df):
+    d = df[[plaque_qc.size_ok(f) for f in df["QC_FLAG"]]]
+    return float(pd.to_numeric(d["DIAMETER_MM"]).median())
+
+
+def test_n2_data_green_carries_qc_flags_and_gives_the_screen_median(window, qtbot, dialogs, tmp_path):
+    """sample.tif, Current + Auto: data-green-sample.csv (Save results and Batch) ends with
+    QC_FLAG, QC_REASON; the median over its size_ok rows is the median on screen and in
+    per_plate.csv, before and after hand edits."""
+    tab = window.measure_tab
+    img = _copy(SAMPLE_TIF, tmp_path / "m")
+    ed = _open(tab, qtbot, dialogs, img, mode="current", dish=100.0, scale="auto")
+    tab.save()
+    csv = os.path.join(ed.out_dir, "data-green-sample.csv")
+    d = pd.read_csv(csv)
+    assert list(d.columns) == ["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM",
+                               "MEAN_GRAY", "TURBIDITY_REL", "SOURCE", "QC_FLAG", "QC_REASON"]
+    screen = ed.table(with_reason=True)
+    assert list(d["QC_FLAG"]) == list(screen["QC_FLAG"])
+    assert list(d["QC_REASON"].fillna("")) == list(screen["QC_REASON"].fillna(""))
+    assert list(d["DIAMETER_MM"]) == list(screen["DIAMETER_MM"])
+    med = _sized_median(d)
+    assert tab._metrics["median"].text() == "%.2f" % med
+    assert not all(plaque_qc.size_ok(f) for f in d["QC_FLAG"])       # the rule matters here
+
+    b = batch_measure.batch_measure(os.path.dirname(img), plate_mm=100, scale="auto",
+                                    out_dir=str(tmp_path / "b"))
+    assert b["summary_df"]["median_diam_mm"][0] == pytest.approx(med)
+    bd = pd.read_csv(tmp_path / "b" / "sample" / "data-green-sample.csv")
+    assert list(bd.columns)[-2:] == ["QC_FLAG", "QC_REASON"] and list(bd["QC_FLAG"]) == list(d["QC_FLAG"])
+
+    # hand edits: erase two plaques, add a circle, save again
+    for p in list(ed.plaques[:2]):
+        ed._erase_at(QPointF(*p["center"]))
+    ed._add_circle(QPointF(600.0, 600.0), 20.0)
+    tab.save()
+    d2 = pd.read_csv(csv)
+    assert len(d2) == len(d) - 1
+    assert list(d2["QC_FLAG"]) == list(ed.table()["QC_FLAG"])
+    assert tab._metrics["median"].text() == "%.2f" % _sized_median(d2)

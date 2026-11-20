@@ -1170,7 +1170,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                  sensitive=None, small=None, watershed=None, precise=False, plate_mm=None,
                  edited=None, edits=None, source_image=None, orientation=None,
                  labels="numbers", key=False, write_key=False, detection=None):
-    """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
+    """Write data-green-<stem>.csv (the measurements, SOURCE, then QC_FLAG and QC_REASON as
+    the last two columns, CT-R2 N2) + out_<stem>.<ext>, and (by default) a run_metadata.json
     sibling saying which engine and edits produced them (PT-9 never covered the editor or
     the app's Save; AUDIT-2026-10.md, PT-31).
 
@@ -1194,6 +1195,10 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
         lawn_gray = pst.estimate_lawn_gray(gray)
     turb = pst.turbidity_indices(means, lawn_gray)
 
+    # CT-R2 N2: the same QC flags as the app's table (one shared call), appended as the last
+    # two columns exactly as plaque_size_tool.py --qc appends them, so the Analyze tab's
+    # CORE? / NO_SIZE rule (plaque_qc.size_ok) works on this file too
+    qc = qc_flags(plaques, orig_bgr, pxl_per_mm, plate=plate)
     rows = []
     for i, (p, mg, tb) in enumerate(zip(plaques, means, turb), start=1):
         dia_pxl, area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm, published)
@@ -1206,6 +1211,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
             "MEAN_GRAY": round(mg, 2),
             "TURBIDITY_REL": round(tb, 3),
             "SOURCE": p["source"],
+            "QC_FLAG": qc[i - 1][0],
+            "QC_REASON": qc[i - 1][1],
         })
     annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,    # outlines + numbers + scale bar
                                  scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
@@ -1219,7 +1226,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     csv_path = os.path.join(out_dir, f"data-green-{name}.csv")
     img_path = os.path.join(out_dir, f"out_{name}{ext}")
     pd.DataFrame(rows, columns=["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-                                "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
+                                "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE",
+                                "QC_FLAG", "QC_REASON"]).to_csv(csv_path, index=False)
     pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
     if write_key and plaques:
         try:                                          # in the overlay's own format (CT-R2 N8)
