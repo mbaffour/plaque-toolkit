@@ -669,10 +669,9 @@ PER_PHAGE_COLUMNS = ["PHAGE", "N_PLATES", "N_PLAQUES"]
 def sized_rows(df):
     """The rows whose size and turbidity enter a summary or a plot: all of them, unless the
     frame carries the app's QC_FLAG column (detect_plate_scaled), then plaque_qc.size_ok's."""
-    if df is None or "QC_FLAG" not in getattr(df, "columns", ()):
-        return df
     import plaque_qc
-    return df[[plaque_qc.size_ok(f) for f in df["QC_FLAG"].tolist()]]
+    ok = plaque_qc.sized_rows(df) if df is not None else None   # any spelling of QC_FLAG
+    return df if ok is None else df[ok]
 
 
 def summarise(df):
@@ -691,7 +690,7 @@ def summarise(df):
         rec = {"PHAGE": phage,
                "N_PLATES": g_all["PLATE"].nunique() if "PLATE" in g_all else 1,
                "N_PLAQUES": len(g_all)}
-        if "QC_FLAG" in g_all.columns:
+        if g is not g_all:                  # a QC flag column (any spelling) was found
             rec["N_SIZED"] = len(g)
         for col in metrics:
             vals = pd.to_numeric(g[col], errors="coerce").dropna()

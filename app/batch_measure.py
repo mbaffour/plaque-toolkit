@@ -132,8 +132,10 @@ def friendly_error(exc, path):
     return "%s: %s  [%s]" % (os.path.basename(path), error_reason(exc, path), path)
 
 
-# coordinator B: the per_plate.csv Problem text of a plate with no dish (and so no mm scale)
-NO_DISH_PROBLEM = "no dish found: sizes in px only (check that the whole dish is in the frame)"
+# coordinator B: the per_plate.csv Problem text of a plate with no dish (and so no mm scale):
+# plaque_qc's own sentence, so Batch, Measure and the command line say the same thing
+import plaque_qc as _qc                                     # noqa: E402 (light: math only)
+NO_DISH_PROBLEM = _qc.NO_DISH_WARNING
 
 
 def qc_flag_counts(df):
@@ -278,7 +280,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             # how the dish was found and what was dropped, for run_metadata.json (D2-D4)
             det_info[os.path.basename(path)] = {
                 k: det[k] for k in ("dish_source", "dish_reason", "n_outside_dish",
-                                    "dish_warnings", "sources") if det.get(k) is not None}
+                                    "dish_warnings", "plate_warnings", "sources")
+                if det.get(k) is not None}
 
             # ---- save annotated image + per-image CSV -------------------- #
             # save_results creates ``perimg`` itself; it writes the overlay and
@@ -351,6 +354,10 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             row["n_no_size"] = n_no_size
             if problem:
                 row["error"] = problem
+            # CT-R2: the plate's size warnings (engine_api.plate_warnings, at detection)
+            notes = list(det.get("plate_warnings") or [])
+            if notes:
+                row["notes"] = "  ".join(notes)
             plate_rows.append(row)
 
             # add the IMAGE column and stash for the combined all_plaques.csv
@@ -393,6 +400,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                   "n_no_size"]                                              # + CT-R2 (C)
     if any("error" in r for r in plate_rows):
         plate_cols = plate_cols + ["error"]
+    if any(r.get("notes") for r in plate_rows):
+        plate_cols = plate_cols + ["notes"]
     summary_df = pd.DataFrame(plate_rows, columns=plate_cols)
     # Counts are whole numbers. One failed plate (None) used to turn the whole column into
     # floats, so the CSV and the table read "44.0" and "nan" (CT-R1 F18). The nullable

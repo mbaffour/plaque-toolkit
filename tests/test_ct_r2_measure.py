@@ -750,15 +750,15 @@ def test_b_no_dish_no_millimetres_in_batch_and_measure(cropped_sample, tmp_path,
     row = pd.read_csv(tmp_path / "o" / "per_plate.csv").iloc[0]
     assert row["n_plaques"] > 0 and pd.isna(row["mm_per_px"])
     assert pd.isna(row["median_diam_mm"]) and pd.isna(row["mean_diam_mm"])
-    assert row["error"] == "no dish found: sizes in px only (check that the whole dish is in the frame)"
+    assert row["error"] == plaque_qc.NO_DISH_WARNING
     assert r["errors"] == []                                   # measured: not a failure
     b = _batch_tab(window)
     b._done(r)
     hdr, rows = _table(b.table)
     assert rows[0][hdr.index("Median (mm)")] == "" and rows[0][hdr.index("Problem")] == row["error"]
     _open(window.measure_tab, qtbot, dialogs, cropped_sample, dish=100.0, scale="auto")
-    assert ("No dish found: sizes in px only (check that the whole dish is in the frame)"
-            in window.measure_tab.flag_label.text())
+    flag = window.measure_tab.flag_label.text()
+    assert flag.count(plaque_qc.NO_DISH_WARNING) == 1       # said once
 
 
 def test_c_per_plate_counts_add_up(tmp_path):
@@ -783,3 +783,56 @@ def test_n7_a_hand_drawn_rim_stays_a_hand_calibration_after_the_dish_box(sample_
     assert ed.export_state()["edits"]["calibration"] == "set plate" and ed.edited
     tab.plate.setValue(85)
     assert ed.export_state()["edits"]["calibration"] == "set plate" and ed.edited
+
+
+# =========================================================================== merged detection work
+def test_plate_warnings_reach_measure_batch_metadata_and_compare(window, qtbot, dialogs, tmp_path, monkeypatch):
+    """One call (engine_api.plate_warnings -> plaque_qc.plate_warnings) for every tab. The
+    bundled sample.tif (largest outline 82 px here) gives no warning; at 1.6x its largest
+    outline passes 100 px and the large-plaque warning appears."""
+    assert engine_api.detect_single(SAMPLE_TIF, plate_mm=100, scale="auto")["plate_warnings"] == []
+    folder = tmp_path / "s"
+    folder.mkdir()
+    src = cv2.imread(SAMPLE_TIF)
+    img = str(folder / "sample.png")
+    cv2.imwrite(img, cv2.resize(src, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC))
+    det = engine_api.detect_single(img, plate_mm=100, scale="auto")
+    w = det["plate_warnings"]
+    assert w and any(x.startswith("Plaques wider than about 135 px") for x in w)
+    calls = []
+    real = plaque_qc.plate_warnings
+    monkeypatch.setattr(plaque_qc, "plate_warnings", lambda *a, **k: calls.append(1) or real(*a, **k))
+    # Measure flag line (wrapped label)
+    tab = window.measure_tab
+    _open(tab, qtbot, dialogs, img, dish=100.0, scale="auto")
+    assert all(("⚠ " + x) in tab.flag_label.text() for x in w) and tab.flag_label.wordWrap()
+    # Batch: Notes column + run_metadata.json
+    r = batch_measure.batch_measure(str(folder), plate_mm=100, scale="auto", out_dir=str(tmp_path / "b"))
+    per = pd.read_csv(tmp_path / "b" / "per_plate.csv")
+    assert per["notes"][0] == "  ".join(w)
+    meta = json.load(open(tmp_path / "b" / "run_metadata.json"))
+    assert meta["images"][0]["plate_warnings"] == w
+    b = _batch_tab(window); b._done(r)
+    hdr, rows = _table(b.table)
+    assert hdr[1] == "Notes" and rows[0][1] == "  ".join(w)
+    # Compare: QC note and run_metadata.json
+    res = engine_api.run_compare(str(folder), plate_mm=100, scale="auto", out_dir=str(tmp_path / "c"))
+    assert res["plate_warnings"] == {"sample": w}
+    assert json.load(open(tmp_path / "c" / "run_metadata.json"))["plate_warnings"] == {"sample": w}
+    ct = _compare_tab(window)
+    ct._last_df = res["df"]
+    ct._load_tables(str(tmp_path / "c"))
+    assert all(("⚠ sample: " + x) in ct.qc.text() for x in w)
+    assert calls                                       # every tab went through the one call
+
+
+def test_no_dish_warning_comes_after_the_embedded_scale_fallback(cropped_sample, tmp_path, monkeypatch):
+    import plate_crop
+    d = engine_api.detect_single(cropped_sample, plate_mm=100, scale="auto")
+    assert d["pxl_per_mm"] is None and plaque_qc.NO_DISH_WARNING in d["dish_warnings"]
+    monkeypatch.setattr(plate_crop, "read_mm_per_px", lambda path: 0.05)
+    d2 = engine_api.detect_single(cropped_sample, plate_mm=100, scale="auto")
+    assert d2["pxl_per_mm"] == 0.05
+    assert plaque_qc.NO_DISH_WARNING not in d2["dish_warnings"]
+    assert engine_api.EMBEDDED_SCALE_NOTE in d2["dish_warnings"]
+    assert engine_api.EMBEDDED_SCALE_NOTE == "No dish found: the scale embedded in the image file is used."

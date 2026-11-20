@@ -1077,7 +1077,10 @@ class MeasureTab(QWidget):
             flag = (f"⚠ Dish looks tilted (axis ratio {plate['axis_ratio']:.2f}). "
                     "mm calibration may be biased — re-shoot square-on for best accuracy.")
         # CT-R1 detection D2-D4: say what is wrong with the dish instead of silently scaling off it
-        extras = ["⚠ " + w for w in (det.get("dish_warnings") or [])]
+        import plaque_qc
+        # (the no-dish sentence is said once, below, from the CURRENT calibration: a plate set
+        # by hand or a Ruler scale must not keep "pixels only" from detection time)
+        extras = ["⚠ " + w for w in (det.get("dish_warnings") or []) if w != plaque_qc.NO_DISH_WARNING]
         if not plate and det.get("dish_reason"):
             extras.append("⚠ No dish found: " + det["dish_reason"] + ".")
         # CT-R1 detection D8: how Auto found each plaque's edge. CT-R2 N5/N9: counted from the
@@ -1136,6 +1139,12 @@ class MeasureTab(QWidget):
                             "size summary)." % (len(stats_df), n, plaque_qc.left_out_phrase(out),
                                                 "is" if n_out == 1 else "are"))
                 flag = (flag + "  " + size_msg) if flag else size_msg
+        # CT-R2: the plate's size warnings, from the plaques NOW on screen (engine_api's one call)
+        pw = engine_api.plate_warnings(self.editor.plaques, cal,
+                                       flags=(df["QC_FLAG"].tolist() if "QC_FLAG" in df.columns else None))
+        if pw:
+            pw_msg = "  ".join("⚠ " + w for w in pw)
+            flag = (flag + "  " + pw_msg) if flag else pw_msg
         if n_excl:
             ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."
             flag = (flag + "  " + ov_msg) if flag else ov_msg
@@ -1146,9 +1155,8 @@ class MeasureTab(QWidget):
                 why = ("⚠ Dish size is 0: sizes are in pixels. Type the dish diameter in the Dish "
                        "box, or use Set plate or the Ruler to calibrate.")
             else:
-                # coordinator B: the same words as the Batch Problem column
-                why = ("⚠ " + batch_measure.NO_DISH_PROBLEM[0].upper() + batch_measure.NO_DISH_PROBLEM[1:]
-                       + ". Or use Set plate or the Ruler to calibrate.")
+                # coordinator B: the same words as the Batch Problem column (plaque_qc's)
+                why = "⚠ " + plaque_qc.NO_DISH_WARNING
             if self._dish_msg:      # the user just tried the Dish box / 85 / 100 buttons
                 why += "  The Dish size has no dish outline to rescale on this image."
             flag = (why + "  " + flag) if flag else why
@@ -1549,6 +1557,9 @@ BATCH_COLUMNS = {
                              "Sized + Core only + No size.", "count"),
     "error": ("Problem", "Why this image could not be measured, or why its sizes are only in "
                          "pixels (no dish found).", None),
+    "notes": ("Notes", "Warnings about this plate's plaque sizes: large plaques that may be "
+                       "outlined at their dark centre, fewer than half of the plaques sized, many "
+                       "plaques too small to size well. Open the plate in Measure to check.", None),
 }
 
 
@@ -1907,22 +1918,30 @@ class CompareTab(QWidget):
         _fit_columns(self.plate_table)
 
         failed = []
+        plate_warn = {}
         try:                                   # errors.csv is only current when this run failed some
             import json
             with open(os.path.join(out_dir, "run_metadata.json"), encoding="utf-8") as fh:
-                n_failed = int(json.load(fh).get("n_failed") or 0)
+                meta = json.load(fh)
+            plate_warn = meta.get("plate_warnings") or {}
+            n_failed = int(meta.get("n_failed") or 0)
             if n_failed:
                 err = _read_csv_or_empty(os.path.join(out_dir, "errors.csv"))
                 failed = err["PLATE"].astype(str).tolist() if "PLATE" in err else ["%d" % n_failed]
         except (OSError, ValueError):
             pass
+        import plaque_qc
         flags = None
-        if self._last_df is not None and "QC_FLAG" in getattr(self._last_df, "columns", ()):
-            flags = self._last_df["QC_FLAG"].tolist()
+        fcol = plaque_qc.flag_column(self._last_df) if self._last_df is not None else None
+        if fcol is not None:
+            flags = self._last_df[fcol].tolist()
         scale = None
         if "PLAQUE_SIZE" in q.columns and len(q):
             scale = str(q["PLAQUE_SIZE"].iloc[0])
         note = compare_qc_note(q, failed=failed, titer=titer, scale=scale, flags=flags)
+        # CT-R2: the plates' size warnings (engine_api.plate_warnings, the one call)
+        for plate, ws in plate_warn.items():
+            note += "".join("  ⚠ %s: %s" % (plate, w) for w in ws)
         sub = batch_measure.subfolder_note(getattr(self, "_run_dir", None))   # CT-R2 N11
         self.qc.setText(note + ("  " + sub if sub else ""))
 
@@ -2607,12 +2626,12 @@ class BatchTab(QWidget):
             why = {e.get("image"): e.get("reason") for e in (res.get("errors") or [])}
             df = df.copy()
             df["error"] = [why.get(i) or e for i, e in zip(df["image"], df["error"])]
-        if "error" in df.columns:
-            # CT-R2 N14: the Problem column right after the image name, where it is seen at
-            # 1024 px (it was the 15th column, off-screen); per_plate.csv keeps its order
-            cols = list(df.columns)
-            cols.remove("error")
-            df = df[cols[:1] + ["error"] + cols[1:]]
+        # CT-R2 N14: the Problem (and Notes) column right after the image name, where it is seen
+        # at 1024 px (it was the 15th column, off-screen); per_plate.csv keeps its order
+        front = [c for c in ("error", "notes") if c in df.columns]
+        if front:
+            cols = [c for c in df.columns if c not in front]
+            df = df[cols[:1] + front + cols[1:]]
         self.model.set_dataframe(df)
         self.table.sortByColumn(0, Qt.AscendingOrder)     # by image name, natural order
         _fit_columns(self.table, max_width=300)
