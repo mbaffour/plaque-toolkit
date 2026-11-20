@@ -282,6 +282,16 @@ fixed, the rest partly) and reported 81 new ones; the entries below are the fixe
   and a sensitivity line comparing equal and unequal variances. Long sample names no longer
   squeeze the plot (labels wrap, or are shortened when the key names every sample); the engine
   no longer changes matplotlib settings for the rest of the program.
+* **Python web apps.** Agreement app: the two method columns are guessed as a pair of the same
+  quantity; an area picked against a diameter shows a warning and switches the downloads off
+  until it is changed or "Compare anyway" is ticked (before, such a file was reported as "did
+  NOT agree", ICC 0.16); a line under the pickers says what is compared; the on-screen table has
+  the rows of the ZIP report, including the prediction interval below 20 pairs; the default
+  sentence is word for word the command-line tool's; the key download and the key in the ZIP
+  share file names. Statistics app: no command-line option name appears on screen or in the ZIP
+  report; the Variances choices say what "auto" can detect; subgroup choices that cannot work
+  are refused; a line under the preview states the figure's real size; `$` and `\` in labels
+  print as typed; a new optional **Difference to detect** box gives the plates needed.
 * **A frozen detection benchmark** (`validation/detection_benchmark/`): the second-round
   tester's synthetic plates and perturbations, kept so that any future change to detection or
   sizing is scored on scenes it was not tuned on. Its absolute numbers are pessimistic compared
