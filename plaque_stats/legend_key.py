@@ -49,6 +49,8 @@ MARKER_WORDS = {
     "v": "triangles (down)", "D": "diamonds", "d": "diamonds", "+": "plus signs",
     "P": "plus signs", "x": "crosses", "X": "crosses", "*": "stars",
 }
+HATCH_WORDS = {"////": "hatched", "\\\\\\\\": "back-hatched", "xxxx": "cross-hatched",
+               "....": "dotted", "++++": "grid-hatched"}
 LINE_WORDS = {"-": "solid", "solid": "solid", "--": "dashed", "dashed": "dashed",
               ":": "dotted", "dotted": "dotted", "-.": "dot-dash", "dashdot": "dot-dash"}
 
@@ -149,7 +151,8 @@ def to_hex(colour):
 
 # --------------------------------------------------------------------------- entries
 def entry(label, colour, kind="marker", marker="o", filled=True, edge=None, linestyle=None,
-          linewidth=None, alpha=1.0, size=7.0, shape=None, section=None, extra_marker=None):
+          linewidth=None, alpha=1.0, size=7.0, shape=None, section=None, extra_marker=None,
+          hatch=None):
     """One row of a key.
 
     kind     -- "marker" (a scatter mark), "line" (a line), "patch" (a filled area such as a
@@ -167,7 +170,8 @@ def entry(label, colour, kind="marker", marker="o", filled=True, edge=None, line
          "edge": ("none" if (isinstance(edge, str) and edge.lower() == "none") else to_hex(edge)),
          "marker": marker if kind == "marker" else None, "filled": bool(filled),
          "linestyle": linestyle, "linewidth": linewidth, "alpha": float(alpha),
-         "size": float(size), "shape": shape, "section": section, "extra_marker": None}
+         "size": float(size), "shape": shape, "section": section, "extra_marker": None,
+         "hatch": hatch or None}
     if extra_marker:
         em = dict(extra_marker)
         em["colour"] = to_hex(em.get("colour"))
@@ -255,9 +259,15 @@ def _handle(e):
                       linewidth=e["linewidth"] or 1.5, alpha=e["alpha"])
     if e["kind"] == "patch":
         ec = None if e["edge"] == "none" else (e["edge"] or e["colour"])
-        p = Patch(facecolor=e["colour"], edgecolor=ec if ec else "none", alpha=e["alpha"],
-                  linewidth=e["linewidth"] if e["linewidth"] is not None else 0.9,
-                  linestyle=e["linestyle"] or "-")
+        if e.get("hatch"):                         # hatch lines stronger than the fill, as drawn
+            p = Patch(facecolor=mcolors.to_rgba(e["colour"], e["alpha"]),
+                      edgecolor=mcolors.to_rgba(ec, min(1.0, e["alpha"] * 3.5)) if ec else "none",
+                      linewidth=e["linewidth"] if e["linewidth"] is not None else 0.9,
+                      linestyle=e["linestyle"] or "-", hatch=e["hatch"])
+        else:
+            p = Patch(facecolor=e["colour"], edgecolor=ec if ec else "none", alpha=e["alpha"],
+                      linewidth=e["linewidth"] if e["linewidth"] is not None else 0.9,
+                      linestyle=e["linestyle"] or "-")
         em = e.get("extra_marker")
         if em:
             return (p, _marker_handle(em["marker"], em["colour"], em["edge"], em["alpha"],
@@ -427,7 +437,8 @@ def _describe(e, word):
     if e["kind"] == "line":
         return "%s, %s line" % (word, LINE_WORDS.get(e.get("linestyle") or "-", "solid"))
     if e["kind"] == "patch":
-        s = "%s, filled %s%s" % (word, e.get("shape") or "area", outline)
+        hz = HATCH_WORDS.get(e.get("hatch") or "", "hatched") if e.get("hatch") else ""
+        s = "%s%s, filled %s%s" % (word, (", " + hz) if hz else "", e.get("shape") or "area", outline)
         if e.get("linestyle") and LINE_WORDS.get(e["linestyle"], "solid") != "solid":
             s += " (%s outline)" % LINE_WORDS[e["linestyle"]]
         em = e.get("extra_marker")

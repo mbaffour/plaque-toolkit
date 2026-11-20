@@ -1524,29 +1524,32 @@ def _log_axis(ax, lo, hi):
 
 
 def _fit_xticklabels(fig, ax):
-    """Rotate the x tick labels 30° (right-aligned) when they would run into each other
-    (CT-R1 DA-F10, web F14)."""
+    """Rotate the x tick labels (right-aligned) when they would run into each other (CT-R1
+    DA-F10, web F14): 30° when that separates them, else 45°, else 90°. Long names get a smaller
+    font instead of being wrapped (two-line labels collide when rotated: follow-up S1)."""
     labs = [t for t in ax.get_xticklabels() if t.get_text()]
     if len(labs) < 2:
         return False
     try:
         r = _renderer(fig)
         w = max(t.get_window_extent(r).width for t in labs)
+        h = max(t.get_window_extent(r).height for t in labs)
         xs = sorted(ax.transData.transform((t.get_position()[0], 0))[0] for t in labs)
         gap = min(b - a for a, b in zip(xs, xs[1:]))
     except Exception:                                    # noqa: BLE001
         return False
-    if w > 0.92 * gap:
-        texts = [t.get_text() for t in labs]
-        if max(len(x) for x in texts) > 18:      # long names: two lines, then rotate (CT-R1 S1)
-            import textwrap
-            texts = ["\n".join(textwrap.wrap(x, 16, break_long_words=False)) or x for x in texts]
-            ax.set_xticklabels(texts, fontweight="bold")
-            labs = [t for t in ax.get_xticklabels() if t.get_text()]
+    if w <= 0.92 * gap:
+        return False
+    if max(len(t.get_text()) for t in labs) > 18:
+        fs = labs[0].get_fontsize()
         for t in labs:
-            t.set_rotation(30); t.set_ha("right"); t.set_rotation_mode("anchor")
-        return True
-    return False
+            t.set_fontsize(min(fs, 9.5))
+        h *= min(fs, 9.5) / fs
+    angle = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+    for t in labs:
+        t.set_rotation(angle); t.set_ha("right" if angle < 90 else "center")
+        t.set_rotation_mode("anchor" if angle < 90 else "default")
+    return True
 
 
 def _wrap_title(fig, ax, opts):
@@ -1709,12 +1712,20 @@ def annotation_plan(order, posthoc, opts):
         if len(order) > 5:
             ref = (opts or {}).get("control")
             ref = ref if ref in order else order[0]
-            plan["pairs"] = [pr for pr in sig if ref in pr]
-            plan["note"] += ("With %d samples the figure shows only the significant comparisons "
-                             "against %s (%d of the %d significant pairs, out of %d pairs tested). "
-                             "Every pair is in the pairwise table. `--annotate letters` gives a "
-                             "compact letter display, `--annotate all` every bracket."
-                             % (len(order), ref, len(plan["pairs"]), len(sig), len(allpairs)))
+            # CT-R1 follow-up S5: ten stacked brackets took half the axis. Each sample's comparison
+            # with the reference is written as stars directly above it, in one row, no lines.
+            plan["pairs"] = [pr for pr in allpairs if ref in pr]
+            plan["mode"] = "vsref"
+            plan["ref"] = ref
+            plan["letters"] = {(b if a == ref else a): stars(_p(pr) if _has(pr) else float("nan"))
+                               for pr in plan["pairs"] for a, b in [pr]}
+            nsig = sum(1 for pr in plan["pairs"] if _p(pr) < 0.05)
+            plan["note"] += ("With %d samples each sample is compared with %s only: the stars above "
+                             "each sample give that comparison (%d of %d with adjusted p < 0.05; %s "
+                             "itself is marked ref.). Every pair is in the pairwise table. `--annotate "
+                             "letters` gives a compact letter display, `--annotate all` every bracket."
+                             % (len(order), ref, nsig, len(plan["pairs"]), ref))
+            return plan
         else:
             plan["pairs"] = sig or [(order[i], order[i + 1]) for i in range(len(order) - 1)]
             plan["note"] += ("Brackets: the significant pairs." if sig else
@@ -1722,6 +1733,19 @@ def annotation_plan(order, posthoc, opts):
     if not plan["pairs"]:
         plan["mode"] = "none"
     return plan
+
+
+def annotation_sentence(plan, opts):
+    """What the annotation on the figure means, for the legend text starter (CT-R1 S3): the
+    annotation_plan note plus the star thresholds and the test they come from."""
+    if not plan or plan.get("mode") == "none":
+        return ""
+    s = " " + plan["note"].strip()
+    if plan["mode"] in ("brackets", "vsref"):
+        test = (opts or {}).get("_posthoc_name")
+        s += (" Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant%s."
+              % ((" (%s)" % test) if test else " (adjusted p)"))
+    return s
 
 
 def _pairs_to_annotate(order, posthoc, mode):
@@ -1754,6 +1778,40 @@ def violin_colours(df, order, opts, rm=None):
     return gcol, rcol, neutral, reps
 
 
+REPEAT_HATCHES = [None, "////", "\\\\\\\\", "xxxx", "....", "++++"]
+
+
+def _palette_name(pal):
+    low = [str(c).lower() for c in (pal or [])]
+    for name, colours in PALETTES.items():
+        if low == [c.lower() for c in colours]:
+            return name
+    return None
+
+
+def colour_repeats(items, opts):
+    """{item: cycle} -- 0 for the first pass through the palette, 1 for the first repeat, ...
+    A NAMED palette shorter than the items cycles; each repeat then gets a second distinguishing
+    property (a hatch on violins / key patches, another marker for points), so no two samples
+    look alike (CT-R1 follow-up S2). A custom list that is too short is refused instead."""
+    pal = clean_palette(opts.get("palette"))
+    return {g: i // len(pal) for i, g in enumerate(items)}
+
+
+def palette_repeat_note(items, opts, what="sample", how="a hatch"):
+    """'12 samples but the tab10 palette has 10 colours: samples 11-12 reuse colours with a hatch'
+    (None when every item has its own colour)."""
+    pal = clean_palette(opts.get("palette"))
+    if len(items) <= len(pal):
+        return None
+    name = _palette_name(opts.get("palette") if not isinstance(opts.get("palette"), str)
+                         else PALETTES.get(str(opts["palette"]).lower())) or "chosen"
+    first = len(pal) + 1
+    span = ("%s %d" % (what, first) if first == len(items) else "%ss %d-%d" % (what, first, len(items)))
+    return ("%d %ss but the %s palette has %d colours: %s reuse colours with %s."
+            % (len(items), what, name, len(pal), span, how))
+
+
 def _and_list(names):
     names = [str(n) for n in names]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -1766,17 +1824,20 @@ def violin_key(order, gcol, rcol, reps, neutral, have_rep, opts):
     afac = float(opts.get("violin_alpha", 0.55)) / 0.55
     entries = []
     pts_by_group = (not have_rep) and opts.get("show_points", True)
+    cyc = colour_repeats(order, opts)
     if not neutral or pts_by_group:
         for g in order:
             c = gcol[g]
-            em = (dict(marker="o", colour=c, edge="none", alpha=0.42, size=5.0)
+            mk = PLATE_MARKERS[cyc[g] % len(PLATE_MARKERS)]
+            em = (dict(marker=mk, colour=c, edge="none", alpha=0.42, size=5.0)
                   if pts_by_group else None)
             if not neutral:
                 entries.append(_lk.entry(g, c, kind="patch", edge=_darken(c),
                                          alpha=min(1.0, 0.22 * afac), linewidth=0.9,
-                                         shape="violin", section="sample", extra_marker=em))
+                                         shape="violin", section="sample", extra_marker=em,
+                                         hatch=REPEAT_HATCHES[cyc[g] % len(REPEAT_HATCHES)]))
             else:
-                entries.append(_lk.entry(g, c, kind="marker", marker="o", edge="none", alpha=0.42,
+                entries.append(_lk.entry(g, c, kind="marker", marker=mk, edge="none", alpha=0.42,
                                          size=5.0, section="sample"))
     if have_rep:
         _, rmark = _plate_style(reps, opts, neutral)
@@ -1808,6 +1869,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     # the colour mapping this figure is drawn from -- and its legend key is built from
     gcol, rcol, neutral, reps = violin_colours(df, order, opts, rm)
     _, rmark = _plate_style(reps, opts, neutral)
+    cyc = colour_repeats(order, opts)
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]                                     # what can be DRAWN (all of it, unless log)
@@ -1830,6 +1892,12 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             else:
                 c = gcol[order[i]]
                 b.set_facecolor(c); b.set_edgecolor(_darken(c)); b.set_alpha(min(1.0, 0.22 * afac))
+                hz = REPEAT_HATCHES[cyc[order[i]] % len(REPEAT_HATCHES)]
+                if hz:                                    # CT-R1 S2: a repeated palette colour
+                    from matplotlib.colors import to_rgba
+                    a_ = min(1.0, 0.22 * afac)
+                    b.set_alpha(None); b.set_facecolor(to_rgba(c, a_))
+                    b.set_edgecolor(to_rgba(_darken(c), min(1.0, a_ * 3.5))); b.set_hatch(hz)
             b.set_linewidth(0.9)
             verts = b.get_paths()[0].vertices                 # trim the violin to the data range
             if log_y:
@@ -1881,7 +1949,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         else:                                             # -------- no replicates: bar on the plaques --------
             if opts["show_points"] and len(v):
                 jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(v))
-                ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3)
+                ax.scatter(jx, v, s=opts["point_size"], color=c, alpha=0.42, edgecolor="none", zorder=3,
+                           marker=PLATE_MARKERS[cyc[g] % len(PLATE_MARKERS)])
             if ok_bar:
                 ax.plot([x0, x0], [lo, hi], color="#33413c", lw=1.4, zorder=5)
                 ax.plot([x0 - 0.10, x0 + 0.10], [cen, cen], color="#12211d", lw=2.2, zorder=6)
@@ -1955,7 +2024,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         nlev = 0
         if plan["mode"] == "brackets":
             placed, nlev = _bracket_levels(plan["pairs"], order)
-        elif plan["mode"] == "letters":
+        elif plan["mode"] in ("letters", "vsref"):
             nlev = 1
         hn = 0.0
         if n_plan:
@@ -1988,6 +2057,16 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
             for i, g in enumerate(order):
                 ax.text(pos[i], Ti(base), plan["letters"].get(g) or "n/a", ha="center", va="bottom",
                         fontsize=star_fs, fontweight="bold", color="#12211d")
+        elif plan["mode"] == "vsref":                   # CT-R1 S5: one row of stars, no brackets
+            for i, g in enumerate(order):
+                if g == plan["ref"]:
+                    ax.text(pos[i], Ti(base), "ref.", ha="center", va="bottom", fontsize=star_fs * 0.8,
+                            style="italic", color="#5b6a65")
+                else:
+                    ax.text(pos[i], Ti(base), plan["letters"].get(g) or "n/a", ha="center", va="bottom",
+                            fontsize=star_fs, color="#12211d")
+            caption_bits.append("Stars above each sample: its comparison with %s (ref.)"
+                                 % _lk.safe_text(str(plan["ref"])))
         if n_plan:                                      # n labels INSIDE the box, at the top
             import matplotlib.transforms as mtransforms
             texts, fs, stagger, h_in, used_short = n_plan
@@ -1998,6 +2077,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                         fontsize=fs, fontweight="bold", color="#33413c", linespacing=1.15)
             if used_short and rm is not None:
                 caption_bits.append("n = plaques, N = plates")
+    key["note"] = (key.get("note") or "") + annotation_sentence(plan, opts)   # CT-R1 S3
     if log_y:                                     # ticks for the FINAL range (CT-R1 DA-F15)
         _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
@@ -2671,6 +2751,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     fig, ax = plt.subplots(figsize=(opts["width"], opts["height"]))
     pal = clean_palette(opts.get("palette"), needed=len(sub_order), what="subgroup level")
     scol = {s: pal[i % len(pal)] for i, s in enumerate(sub_order)}          # colour per subgroup
+    smark = {s: PLATE_MARKERS[c % len(PLATE_MARKERS)]                        # CT-R1 S2: repeats
+             for s, c in colour_repeats(sub_order, opts).items()}
     pm = _plate_means_gs(df)
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
@@ -2706,18 +2788,19 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
                 if opts.get("show_points", True):        # faint raw plaques behind the plate means
                     jr = x + rng.uniform(-slot * 0.30, slot * 0.30, size=len(vals))
                     ax.scatter(jr, vals, s=opts["point_size"] * 0.7, color=c, alpha=0.20,
-                               edgecolor="none", zorder=2)
+                               edgecolor="none", zorder=2, marker=smark[s])
                 um = pm[(pm["group"] == g) & (pm["subgroup"] == s)]["value"].values
                 if log_y:
                     um = um[um > 0]
                 jx = (x + np.linspace(-0.03, 0.03, len(um))) if len(um) > 1 else np.array([float(x)])
                 if len(um):
                     ax.scatter(jx[:len(um)], um, s=opts["point_size"] * 4.0, color=c, edgecolor="#12211d",
-                               linewidth=0.8, zorder=6)
+                               linewidth=0.8, zorder=6, marker=smark[s])
                     top = max(top, float(np.max(um)))
             else:
                 jx = x + rng.uniform(-slot * 0.25, slot * 0.25, size=len(vals))
-                ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3)
+                ax.scatter(jx, vals, s=opts["point_size"], color=c, alpha=0.40, edgecolor="none", zorder=3,
+                           marker=smark[s])
             cen, lo, hi, _n = cen_tab.get((g, s), (float("nan"),) * 4)
             if log_y:
                 lo = lo if lo > 0 else (cen if cen > 0 else float("nan"))
@@ -2745,7 +2828,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     _style_axes(ax, opts)
     # legend key from the SAME subgroup -> colour dict the marks were drawn with
     n_units = [v[3] for v in cen_tab.values()]
-    key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup")
+    key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup",
+                      smark=smark)
     key["note"] = figure_sentence(opts, pm is not None, n_units)
     _lk.attach(fig, key)
     fig.key_placement = "off"
@@ -2783,6 +2867,13 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
             treat.sort(key=lambda s: abs(offs[s] - offs[control]))     # nearest bracket lowest
             if treat and (g, control) in fin:
                 brackets[g] = treat
+    if brackets:                                   # CT-R1 S3: the text starter explains the stars
+        tests = [t for t in dict.fromkeys(comp["test"]) if not str(t).startswith("n/a")] if len(comp) else []
+        adj = "Dunnett-adjusted p" if "Dunnett" in tests else "Holm-adjusted p within each group"
+        key["note"] = (key.get("note") or "") + (
+            " Brackets: each %s vs the control %s within its group. Stars: * p < 0.05, ** p < 0.01, "
+            "*** p < 0.001, ns = not significant (%s, %s)."
+            % (opts.get("_sublabel") or "subgroup", control, " / ".join(map(str, tests)) or "n/a", adj))
     star_fs, gap = 10.0, 0.08
     pitch = star_fs / 72.0 * 1.75
     nmax = max([len(v) for v in brackets.values()] or [0])
@@ -2834,16 +2925,18 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     return fig
 
 
-def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup"):
+def grouped_key(sub_order, control, scol, have_rep, sublabel="subgroup", smark=None):
     """Legend key of the grouped plot: one entry per subgroup, styled as its marks are drawn
-    (plate means: filled circles with a dark outline; no replicates: plain translucent points)."""
+    (plate means: filled circles with a dark outline; no replicates: plain translucent points;
+    `smark` = subgroup -> marker when palette colours repeat)."""
     entries = []
     for s in sub_order:
         lab = "%s (control)" % s if s == control else s
+        mk = (smark or {}).get(s, "o")
         if have_rep:
-            entries.append(_lk.entry(lab, scol[s], marker="o", edge="#12211d", size=8))
+            entries.append(_lk.entry(lab, scol[s], marker=mk, edge="#12211d", size=8))
         else:
-            entries.append(_lk.entry(lab, scol[s], marker="o", edge="none", alpha=0.40, size=6))
+            entries.append(_lk.entry(lab, scol[s], marker=mk, edge="none", alpha=0.40, size=6))
     return _lk.make_key(entries, title=sublabel, fontsize=9, frameon=True)
 
 
@@ -2967,6 +3060,9 @@ def run_grouped(args):
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     plt.close(fig)
 
+    rn = palette_repeat_note(sub_order, o, "subgroup level", "a different marker")
+    if rn:
+        notes.append(rn)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _have_rep=unit == "replicate")
     _write_grouped_report(os.path.join(out, "grouped_report_%s.md" % mt),
                           metric, summ, comp, unit, control, rargs)
@@ -3054,6 +3150,9 @@ def run(args):
         pw_df = pd.DataFrame(rows)
         pw_df.to_csv(os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
 
+    post = omni.get("posthoc")
+    args["_posthoc_name"] = ("%s, adjusted p" % post if post in ("Tukey HSD", "Games-Howell", "Dunnett",
+                                                                  "Dunn (Holm)") else omni.get("test"))
     fig = plot_violin(df, order, args, metric, posthoc)
     base = os.path.join(out, f"violin_{mt}")
     _save_fig(fig, base, args)
@@ -3064,6 +3163,11 @@ def run(args):
 
     if log_note:
         notes.append(log_note[0].upper() + log_note[1:] + ".")
+    _gc, _rc, _neutral, _r = violin_colours(df, order, o)
+    if (not _neutral) or rep is None:                      # colour encodes the samples
+        rn = palette_repeat_note(order, o, "sample", "a hatch" if not _neutral else "a different marker")
+        if rn:
+            notes.append(rn)
     centers = center_table(df, order, o)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _centers=centers,
                  _annotation_note=ann)
