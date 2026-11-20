@@ -182,6 +182,33 @@ def _second_core(gray, reg, core):
     return bool(np.any((m > 0) & far & local_min & (win <= level)))
 
 
+# CT-R1 detection D10c: when is a split piece's area-equivalent diameter good enough for a
+# size summary? From the synthetic sweep validation/split_sweep (haloed discs, D = 80 / 120
+# px where Auto splits; the bias is systematic, SD <= 0.5 %): the piece is undersized by
+#   cut by 1 neighbour:  -7.8 % at centres 0.6 D apart (cut_ratio 0.65), -5.2 % at 0.7 D
+#                        (0.74), -2.9 % at 0.8 D (0.82), -1.2 % at 0.9 D, -0.1 % at 1.0 D;
+#   cut by 2:            -16.8 % at 0.6 D, -11.4 % at 0.7 D, -6.6 % at 0.8 D (0.86),
+#                        -2.9 % at 0.9 D (0.93), -1.2 % at 1.0 D;
+#   cut by 3:            -17.2 % at 0.7 D, -10.0 % at 0.8 D (0.88), -4.9 % at 0.9 D (0.94),
+#                        -1.7 % at 1.0 D.
+# cut_ratio (nearest cutting core distance / the piece's own diameter) is what can be measured
+# on a real plate. A piece stays in size summaries when its expected bias is within +/-5 %:
+SPLIT_MIN_CUT_RATIO = {1: 0.75, 2: 0.90, 3: 0.95}     # 3 or more neighbours: 0.95
+
+
+def split_size_reliable(cut_by, cut_ratio):
+    """(ok, reason) for a split piece: ok when the sweep's expected size bias at this many cuts
+    and this overlap is within +/-5 % (SPLIT_MIN_CUT_RATIO); otherwise the reason says why."""
+    if not cut_by:
+        return True, None
+    need = SPLIT_MIN_CUT_RATIO[min(int(cut_by), 3)]
+    if cut_ratio is not None and cut_ratio >= need:
+        return True, None
+    return False, ("cut by %d neighbour%s%s" % (
+        cut_by, "" if cut_by == 1 else "s",
+        (", centres %.2f of its diameter apart" % cut_ratio) if cut_ratio is not None else ""))
+
+
 def _ring_median(gray, c, r0, r1):
     x, y = float(c[0]), float(c[1])
     R = int(r1) + 2
@@ -217,7 +244,8 @@ def source_counts(plaques):
     """{'standard', 'split', 'standard-relaxed', 'small', 'core', 'other'} counts for a result;
     they add up to the plaque count ('small' = genuine small plaques, 'core' = SOURCE small
     plaques measured at the core only, QC flag CORE?)."""
-    out = {"standard": 0, SPLIT_SOURCE: 0, RELAXED_SOURCE: 0, "small": 0, "other": 0, "core": 0}
+    out = {"standard": 0, SPLIT_SOURCE: 0, RELAXED_SOURCE: 0, "small": 0, "other": 0, "core": 0,
+           "no_size": sum(1 for p in plaques if p.get("size_unreliable"))}
     for p in plaques:
         if p.get("core_only"):
             out["core"] += 1
@@ -395,6 +423,9 @@ def resolve_halos(standard, small, std_mask, plate, image_shape, gray=None):
             dpiece = 2.0 * math.sqrt(max(reg["area_pxl"], 1.0) / math.pi)
             reg["cut_ratio"] = (min(math.hypot(seeds[k][0] - seeds[j][0], seeds[k][1] - seeds[j][1])
                                     for j in res[2]) / dpiece) if res[2] else None
+            ok, why = split_size_reliable(reg["cut_by"], reg["cut_ratio"])
+            if not ok:                         # D10c: counts, but its size is biased > 5 %
+                reg["size_unreliable"], reg["size_reason"] = True, why
             out.append(reg if plausible(reg, core) else core_only(core))
         pts = [np.asarray(q["contour"]).reshape(-1, 2) for q in out if q.get("source") == SPLIT_SOURCE]
         if len(pts) >= 2:
