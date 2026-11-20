@@ -401,3 +401,140 @@ def test_qc_flag_cells_edited_by_hand_are_still_recognised(st, dialogs, tmp_path
     dialogs["openN"].append(([str(f)], ""))
     st.add_csv_btn.click()
     assert [(p["diam"], p["left_out"]) for p in st._plates] == [([1.0, 1.1], 2)]
+
+
+# --------------------------------------------------------------------------- F6 / F13 / F14
+THREE = [("WT", "", [1.0, 1.1, 1.05]), ("mutA", "", [1.5, 1.6, 1.55]), ("mutB", "", [1.2, 1.25, 1.3])]
+_FLAG = re.compile(r"(?<![-|\w])--[a-z]")                  # '--equal-var', not '|---|' or 'n--x'
+_DOUBLED = re.compile(r"(\([^()]{1,60}\))\s*\1")
+
+
+def _md_section(md, title):
+    m = re.search(r"\n## %s\n\n?(.*?)\n(?=## )" % re.escape(title), md + "\n## END", re.S)
+    return m.group(1).strip() if m else None
+
+
+def _sentences(text):
+    return [s.strip() for s in re.split(r"(?<=\.)\s+", text) if len(s.strip()) > 12]
+
+
+def test_report_follows_center_and_error_bars_without_reanalyze(st, dialogs, tmp_path):
+    """CT-R2 F6: after Error bars = SD or Center = Median (no re-Analyze) the Report says what
+    the figure shows; the Report's Figure line, the caption and the ZIP report's Figure section
+    are one text, and the ZIP's paste-ready sentence is the Report's."""
+    _fill(st, THREE)
+    st.analyse_btn.click()
+    assert "mean ± SEM" in st.report.toPlainText()
+    st.error_sel.setCurrentIndex(st.error_sel.findData("sd"))
+    rep = st.report.toPlainText()
+    assert "mean ± SD" in rep and "mean ± SEM" not in rep, rep
+    assert "Figure: " + st.fig_caption.text() in rep
+    z = _zip(st, dialogs, tmp_path)
+    md = z.read("report_diameter_mm.md").decode()
+    assert _md_section(md, "Figure") == st.fig_caption.text()
+    paste = _md_section(md, "Paste-ready sentence").lstrip("> ").strip()
+    # the same sentence; the ZIP names the metric by its column (diameter_mm), the screen by its label
+    assert paste.split(" ", 1)[1] == rep.split("\n")[0].split("Diameter (mm) ", 1)[1]
+    st.center_sel.setCurrentIndex(st.center_sel.findData("median"))
+    rep = st.report.toPlainText()
+    assert "median" in rep.split("\n")[0] and "mean ±" not in rep.split("\n")[0]
+    assert "Figure: " + st.fig_caption.text() in rep
+
+
+@pytest.mark.parametrize("annot", ["auto", "letters", "all", "adjacent", "none"])
+def test_annotation_sentence_is_said_once(st, dialogs, annot):
+    """CT-R2 F14: the caption and the Report 'Figure:' line used to say the annotation
+    sentence twice ('Brackets: the significant pairs.' after '… Brackets: the significant
+    pairs.'). No sentence of the caption appears twice."""
+    _fill(st, THREE)
+    st.annot_sel.setCurrentIndex(st.annot_sel.findData(annot))
+    st.analyse_btn.click()
+    cap = st.fig_caption.text()
+    sents = _sentences(cap)
+    assert len(sents) == len(set(sents)), cap
+    fig_line = next(l for l in st.report.toPlainText().split("\n") if l.startswith("Figure: "))
+    assert fig_line == "Figure: " + cap
+
+
+def _scan(texts, where):
+    for t in texts:
+        assert not _FLAG.search(t), (where, _FLAG.search(t).group(0), t[max(0, _FLAG.search(t).start() - 80):][:200])
+        assert not _DOUBLED.search(t), (where, _DOUBLED.search(t).group(0))
+
+
+def test_no_command_line_flags_or_doubled_brackets_on_screen_in_any_combination(st, dialogs):
+    """CT-R2 F13: every screen text (Report, warnings, caption, errors) uses the tab's control
+    names and never repeats a bracket phrase ('(Welch) (Welch)'), across every combination of
+    Test x Variances x Compare x Brackets the tab can reach."""
+    _fill(st, THREE)
+    st.analyse_btn.click()
+    seen = 0
+    for annot in ("auto", "letters", "all"):
+        st.annot_sel.setCurrentIndex(st.annot_sel.findData(annot))
+        for cmp_ in (None, "mutA"):
+            st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData(cmp_) if cmp_ else 0)
+            for par in ("auto", "parametric", "nonparametric"):
+                i = st.param_sel.findData(par)
+                if not st.param_sel.model().item(i).isEnabled():
+                    continue
+                st.param_sel.setCurrentIndex(i)
+                for var in ("auto", "yes", "no"):
+                    j = st.var_sel.findData(var)
+                    if not st.var_sel.model().item(j).isEnabled():
+                        continue
+                    st.var_sel.setCurrentIndex(j)
+                    st.analyse_btn.click()
+                    _scan([st.report.toPlainText(), st.warn_lbl.text(), st.fig_caption.text(),
+                           st.err.text(), st.cmp_cap.text()], (annot, cmp_, par, var))
+                    seen += 1
+            st.param_sel.setCurrentIndex(0); st.var_sel.setCurrentIndex(0)
+    assert seen >= 15
+
+
+@pytest.mark.parametrize("par,var,cmp_,annot", [
+    ("auto", "auto", None, "auto"),           # Levene note: 'choose Variances: Unequal (Welch)'
+    ("auto", "no", None, "letters"),          # Welch ANOVA + Games-Howell, letters
+    ("parametric", "auto", "mutA", "auto"),   # Dunnett chosen by the user
+    ("nonparametric", "auto", None, "all"),   # Kruskal-Wallis chosen by the user
+])
+def test_zip_report_uses_the_tabs_words(st, dialogs, tmp_path, par, var, cmp_, annot):
+    """CT-R2 F13: the ZIP's report_*.md says 'Variances: Unequal (Welch)', 'Compare: vs mutA
+    (Dunnett)', 'Test: Non-parametric' -- the tab's control names, never '--equal-var no',
+    '`--posthoc dunnett`' or a doubled '(Welch) (Welch)'."""
+    _fill(st, THREE)
+    st.annot_sel.setCurrentIndex(st.annot_sel.findData(annot))
+    st.param_sel.setCurrentIndex(st.param_sel.findData(par))
+    st.var_sel.setCurrentIndex(st.var_sel.findData(var))
+    if cmp_:
+        st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData(cmp_))
+    st.analyse_btn.click()
+    assert st._last is not None, st.err.text()
+    z = _zip(st, dialogs, tmp_path)
+    md = z.read("report_diameter_mm.md").decode()
+    _scan([md, st.report.toPlainText()], (par, var, cmp_, annot))
+    assert "`" not in md.split("## Group summary")[-1].split("|")[0]
+    if cmp_:
+        assert "Dunnett (each sample vs the control mutA" in md
+    if par == "nonparametric":
+        assert "Test: Non-parametric" in md
+    if var == "no":
+        assert "Variances: Unequal (Welch)" in md
+
+
+@pytest.mark.parametrize("engine,screen", [
+    ("If you expect the groups to differ in spread, choose --equal-var no (Welch).",
+     "If you expect the groups to differ in spread, choose Variances: Unequal (Welch)."),
+    ("choose --equal-var no.", "choose Variances: Unequal (Welch)."),      # after the engine fix
+    ("`--posthoc dunnett` was chosen by the user.", "Compare: vs mutA (Dunnett) was chosen by the user."),
+    ("`--parametric nonparametric` was chosen by the user.", "Test: Non-parametric was chosen by the user."),
+    ("`--equal-var auto`: Levene p = 0.4", "Variances: Auto: Levene p = 0.4"),
+    ("Override with `--parametric`.", "Override with the Test control."),
+    ("Every pair is in the pairwise table. `--annotate letters` gives a compact letter display, "
+     "`--annotate all` every bracket.",
+     "Every pair is in the pairwise table. choose Brackets: Letters for a compact letter display, "
+     "or Brackets: All pairs for every bracket."),
+    ("Welch ANOVA (Welch) (Welch)", "Welch ANOVA (Welch)"),
+])
+def test_engine_phrases_become_the_tabs_control_names(engine, screen):
+    """CT-R2 F13: whole engine phrases are replaced, longest first; no doubled bracket."""
+    assert ST._ui_words(engine, "mutA") == screen

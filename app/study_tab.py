@@ -325,18 +325,33 @@ def _stats_message(e):
     return _ui_words(msg)
 
 
-def _ui_words(text):
-    """The engine speaks command-line ('--equal-var no'); on screen the tab names its own
-    controls instead (CT-R1 F9, brief rule 6). Not applied to the legend text starter, which must
-    stay identical to the ZIP's legend text file."""
-    text = str(text or "")
-    for flag, words in _FLAG_WORDS:
-        text = text.replace("`%s`" % flag, words).replace(flag, words)
-    return text.replace("`", "")
+def _ui_words(text, ref=None):
+    """The engine speaks command-line ('--equal-var no'); the tab names its own controls instead
+    (CT-R1 F9, brief rule 6), on screen AND in the ZIP's report (CT-R2 F13). Whole engine phrases
+    are replaced first (longest first), so '--equal-var no (Welch)' becomes 'Variances: Unequal
+    (Welch)', never '... (Welch) (Welch)'; `ref` is the Compare reference ('Compare: vs mutA
+    (Dunnett)'). A bracket phrase repeated by any route is said once. Not applied to the legend
+    text starter, which must stay identical to the ZIP's legend text file."""
+    text = str(text or "").replace("`", "")
+    pairs = list(_FLAG_WORDS)
+    if ref:
+        pairs = [("--posthoc dunnett", "Compare: vs %s (Dunnett)" % ref),
+                 ("--control %s" % ref, "Compare: vs %s" % ref)] + pairs
+    for flag, words in sorted(pairs, key=lambda fw: -len(fw[0])):
+        text = text.replace(flag, words)
+    return _DOUBLE_BRACKET.sub(r"\1", text)
 
+
+# '(Welch) (Welch)', '(Dunnett)(Dunnett)': a bracket phrase said twice in a row
+_DOUBLE_BRACKET = re.compile(r"(\([^()]{1,60}\))(?:\s*\1)+")
 
 _FLAG_WORDS = [
     ("pass --log-y-drop-nonpositive", "tick 'hide ≤ 0'"),
+    ("--equal-var no (Welch)", "Variances: Unequal (Welch)"),
+    ("choose --equal-var no", "choose Variances: Unequal (Welch)"),
+    ("--annotate letters gives a compact letter display, --annotate all every bracket",
+     "choose Brackets: Letters for a compact letter display, or Brackets: All pairs for every bracket"),
+    ("not in --order", "not in the sample order"),
     ("--log-y-drop-nonpositive", "'hide ≤ 0'"),
     ("--parametric nonparametric", "Test: Non-parametric"),
     ("--posthoc dunnett", "Compare: vs a sample (Dunnett)"),
@@ -1729,10 +1744,18 @@ class StudyTab(QWidget):
         summ = ps.group_summary(df, order, unit=unit)
         rep = ps.replicate_means(df)
         pairwise = pd.DataFrame(omni.get("pairwise") or [])
+        empty = [s["group"] for s in self._samples if s["group"] not in present]
+        if empty:          # a sample without plaques (of this metric) cannot be drawn or tested
+            omni.setdefault("warnings", []).append(
+                "%s %s no %s values, so %s left out of the figure and the test."
+                % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
+                   "it is" if len(empty) == 1 else "they are"))
         self._last = ("single", {"df": df, "order": order, "posthoc": posthoc, "omni": omni,
                                   "unit": unit, "have_rep": have_rep,
                                   "metric_name": metric_name, "metric_key": metric_key,
-                                  "summary": summ, "replicates": rep, "pairwise": pairwise})
+                                  "summary": summ, "replicates": rep, "pairwise": pairwise,
+                                  "stat_choices": dict(sc), "data_note": self._data_note,
+                                  "plate_warns": list(self._plate_warns)})
         self._redraw()
 
         n_plates = int(df.dropna(subset=["replicate"]).drop_duplicates(["group", "replicate"]).shape[0])
@@ -1751,26 +1774,30 @@ class StudyTab(QWidget):
         self.cmp_cap.setText("Pairwise comparisons (%s; on the %s)" % (post, ps._unit_word(unit)))
         self._set_table(self.tbl_cmp, self._pairwise_display(pairwise))
 
-        empty = [s["group"] for s in self._samples if s["group"] not in present]
-        if empty:          # a sample without plaques (of this metric) cannot be drawn or tested
-            omni.setdefault("warnings", []).append(
-                "%s %s no %s values, so %s left out of the figure and the test."
-                % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
-                   "it is" if len(empty) == 1 else "they are"))
-        warns = list(omni.get("warnings") or []) + list(getattr(self, "_plate_warns", []))
-        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
-        self._write_report_single(ps, metric_name, summ, omni, posthoc, unit, have_rep)
+        warns = list(omni.get("warnings") or []) + list(self._plate_warns)
+        self.warn_lbl.setText(self._words("\n".join("⚠ " + w for w in warns)))
+        self._refresh_report()
         self._status("Analyzed %d samples (%s)." % (len(order), omni.get("test")), 5000)
         return True
 
-    def _figure_text(self):
-        """The figure sentence (+ which comparisons are annotated) of the figure on screen."""
+    def _figure_text(self, fig=None):
+        """The figure sentence (+ what the annotation means) of `fig` (default: the figure on
+        screen) -- the ONE builder of the caption under the figure, the Report's 'Figure:' line
+        and the ZIP report's Figure section (CT-R2 F6/F14). The key's note already ends with the
+        annotation sentence; fig.annotation_note is added only when the note does not say it."""
         legend_key = _legend_key()
-        if self._last_fig is None:
+        fig = fig if fig is not None else self._last_fig
+        if fig is None:
             return ""
-        key = legend_key.from_figure(self._last_fig) or {}
-        bits = [key.get("note") or "", getattr(self._last_fig, "annotation_note", "") or ""]
-        return " ".join(b for b in bits if b)
+        key = legend_key.from_figure(fig) or {}
+        note = str(key.get("note") or "").strip()
+        ann = str(getattr(fig, "annotation_note", "") or "").strip()
+
+        def flat(t):
+            return re.sub(r"\s+", " ", t.replace("`", "")).strip()
+        if ann and flat(ann) not in flat(note):
+            note = (note + " " + ann).strip()
+        return note
 
     def _unsized_warnings(self, metric_key):
         """CT-R2 F8: every plate without a value of this metric, named (it is listed under its
@@ -1809,12 +1836,33 @@ class StudyTab(QWidget):
         acc = self._account_lines()
         if acc:
             lines += [""] + acc
-        self.report.setPlainText(_ui_words("\n".join(lines)))
+        self.report.setPlainText(self._words("\n".join(lines)))
 
-    def _write_report_single(self, ps, metric_name, summ, omni, posthoc, unit, have_rep):
-        o = self._opts(self._last[1]["metric_key"])
+    def _words(self, text):
+        """_ui_words with the Compare reference of the result on screen."""
+        ref = None
+        if self._last is not None and self._last[0] == "single":
+            ref = (self._last[1].get("stat_choices") or {}).get("control")
+        return _ui_words(text, ref)
+
+    def _refresh_report(self):
+        """CT-R2 F6: the Report is rebuilt from the result AND the current options on every
+        redraw, so after a Center / Error bars / Brackets change it says what the figure shows."""
+        if self._last is None:
+            return
+        kind, pl = self._last
+        self._data_note = pl.get("data_note", "")
+        self._plate_warns = list(pl.get("plate_warns") or [])
+        lines = (self._report_lines_single(pl) if kind == "single" else self._report_lines_grouped(pl))
+        self._set_report(lines)
+
+    def _report_lines_single(self, pl):
+        ps = _engine()
+        metric_name, summ, omni = pl["metric_name"], pl["summary"], pl["omni"]
+        unit, have_rep = pl["unit"], pl["have_rep"]
+        o = self._opts(pl["metric_key"])
         try:
-            centers = ps.center_table(self._last[1]["df"], self._last[1]["order"], o)
+            centers = ps.center_table(pl["df"], pl["order"], o)
         except (Exception, SystemExit):                            # noqa: BLE001
             centers = None
         L = [ps.paste_sentence(metric_name, summ, omni, unit, have_rep, o, centers=centers), ""]
@@ -1835,7 +1883,25 @@ class StudyTab(QWidget):
             L.append("")
             L += ["⚠ " + w for w in ws]
             L += ["Note: " + n for n in ns]
-        self._set_report(L)
+        return L
+
+    def _report_lines_grouped(self, pl):
+        ps = _engine()
+        comp, unit, control = pl["comparisons"], pl["unit"], pl["control"]
+        L = [ps.paste_sentence(pl["metric_name"], comp=comp, unit=unit, control=control,
+                               opts=self._opts(pl["metric_key"])), ""]
+        L.append("p-values are Holm-adjusted within each sample (raw p in the p_raw column); each "
+                 "2nd-factor value is compared with the control '%s' by a %s on the %s."
+                 % (control, str(comp["test"].iloc[0]) if len(comp) else "test", ps._unit_word(unit)))
+        ft = self._figure_text()
+        if ft:
+            L += ["", "Figure: " + ft]
+        warns, notes = pl.get("warns") or [], (pl.get("info") or {}).get("notes") or []
+        if warns or notes:
+            L.append("")
+            L += ["⚠ " + w for w in warns]
+            L += ["Note: " + n for n in notes]
+        return L
 
     # ---- display copies of the result tables (the raw numbers stay in self._last for the CSVs)
     @staticmethod
@@ -1908,10 +1974,17 @@ class StudyTab(QWidget):
         summ, comp, unit, info = ps.grouped_stats(df, group_order, sub_order, control, parametric,
                                                   return_info=True)
         pm = ps._plate_means_gs(df)
+        warns = list(info.get("warnings") or []) + list(self._plate_warns)
+        if excluded:
+            warns.append("%d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
+                         "2nd-factor tags to compare every plate as single-factor samples."
+                         % (excluded, analyzed))
         self._last = ("grouped", {"df": df, "group_order": group_order, "sub_order": sub_order,
                                   "control": control, "comparisons": comp, "unit": unit,
                                   "metric_name": metric_name, "metric_key": metric_key,
-                                  "summary": summ, "replicates": pm, "info": info})
+                                  "summary": summ, "replicates": pm, "info": info, "warns": warns,
+                                  "stat_choices": {"parametric": parametric},
+                                  "data_note": self._data_note, "plate_warns": list(self._plate_warns)})
         self._redraw()
 
         self._chips["groups"].setText("%d×%d" % (len(group_order), len(sub_order)))
@@ -1931,25 +2004,8 @@ class StudyTab(QWidget):
                 disp["p_raw"] = [ps.fmt_p(p) for p in disp["p_raw"]]
         self._set_table(self.tbl_cmp, _round_df(disp))
 
-        L = [ps.paste_sentence(metric_name, comp=comp, unit=unit, control=control,
-                               opts=self._opts(metric_key)), ""]
-        L.append("p-values are Holm-adjusted within each sample (raw p in the p_raw column); each "
-                 "2nd-factor value is compared with the control '%s' by a %s on the %s."
-                 % (control, str(comp["test"].iloc[0]) if len(comp) else "test", ps._unit_word(unit)))
-        ft = self._figure_text()
-        if ft:
-            L += ["", "Figure: " + ft]
-        warns = list(info.get("warnings") or []) + list(getattr(self, "_plate_warns", []))
-        if excluded:
-            warns.append("%d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
-                         "2nd-factor tags to compare every plate as single-factor samples."
-                         % (excluded, analyzed))
-        if warns or info.get("notes"):
-            L.append("")
-            L += ["⚠ " + w for w in warns]
-            L += ["Note: " + n for n in info.get("notes") or []]
-        self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
-        self._set_report(L)
+        self.warn_lbl.setText(self._words("\n".join("⚠ " + w for w in warns)))
+        self._refresh_report()
         self._status("Grouped comparison vs '%s' across %d sample(s)." % (control, len(group_order)), 5000)
         return True
 
@@ -1991,8 +2047,10 @@ class StudyTab(QWidget):
             for b in self._figure_buttons:
                 b.setEnabled(False)
             self._warn("Could not draw: %s" % _stats_message(e))
+            self._refresh_report()
             return
         self._show_fig(fig)
+        self._refresh_report()                     # CT-R2 F6: the Report follows the figure
         if self._last is not None and self.savesum_btn.isEnabled():
             for b in self._figure_buttons:
                 b.setEnabled(True)
@@ -2048,7 +2106,7 @@ class StudyTab(QWidget):
                                          + m.top() + m.bottom())
         canvas.draw()
         self._refresh_key_text(fig)
-        self.fig_caption.setText(_ui_words(self._figure_text()))
+        self.fig_caption.setText(self._words(self._figure_text()))
 
     def _refresh_key_text(self, fig=None):
         """The text starter always comes from the figure on screen (never a stored copy)."""
@@ -2287,7 +2345,10 @@ class StudyTab(QWidget):
             args = dict(opts)
             args.update({"data": tidy[cols].copy(), "group": "group", "value": vcol,
                          "replicate": "replicate", "metric": None, "unit": "auto",
-                         "parametric": self.param_sel.currentData(),
+                         # CT-R2 F12: the statistics choices of the result ON SCREEN (a refused
+                         # change keeps the last good result, so the live controls may differ)
+                         "parametric": (pl.get("stat_choices") or {}).get(
+                             "parametric", self.param_sel.currentData()),
                          "formats": formats, "dpi": int(opts["dpi"]),
                          "stats_table": True, "out": out, "legend_key": True,
                          "order": pl["group_order"] if kind == "grouped" else pl["order"],
@@ -2297,7 +2358,7 @@ class StudyTab(QWidget):
                              "sub_order": list(pl["sub_order"]), "_sublabel": "2nd factor",
                              "posthoc": "auto"})
             else:
-                sc = self._stat_choices()
+                sc = pl.get("stat_choices") or self._stat_choices()
                 args.update({"subgroup": None, "equal_var": sc["equal_var"], "posthoc": sc["posthoc"],
                              "control": sc["control"]})
             res = ps.run(args)
@@ -2307,6 +2368,7 @@ class StudyTab(QWidget):
             try:
                 for fmt in formats:
                     self._save_figure_file(fig, "%s.%s" % (base, fmt), opts["dpi"])
+                fig_text = self._figure_text(fig)
             finally:
                 plt.close(fig)
             # provenance: no temp paths; the Toolkit's version (CT-R1 F25)
@@ -2323,13 +2385,22 @@ class StudyTab(QWidget):
                     with open(fp, "w", encoding="utf-8") as fh:
                         json.dump(cfg, fh, indent=2, default=str)
             # CT-R2 F7/F8: the plates' left-out account and the plates without sizes
-            extra = (["- ⚠️ %s" % w for w in getattr(self, "_plate_warns", [])]
+            extra = (["- ⚠️ %s" % w for w in pl.get("plate_warns") or []]
                      + ["- %s" % x.strip() for x in self._account_lines()])
-            if extra:
-                for f in os.listdir(out):
-                    if f.startswith("report_") and f.endswith(".md"):
-                        with open(os.path.join(out, f), "a", encoding="utf-8") as fh:
-                            fh.write("\n## Plates and plaques left out\n\n" + "\n".join(extra) + "\n")
+            for f in os.listdir(out):
+                if f.startswith("report_") and f.endswith(".md"):
+                    fp = os.path.join(out, f)
+                    with open(fp, encoding="utf-8") as fh:
+                        md = fh.read()
+                    # CT-R2 F6/F14: the Figure section is the tab's own figure text (the caption)
+                    md = re.sub(r"(\n## Figure\n\n?)(.*?)(\n(?=## )|\Z)",
+                                lambda m: m.group(1) + fig_text + "\n" + m.group(3), md, count=1,
+                                flags=re.S)
+                    if extra:
+                        md = md.rstrip("\n") + "\n\n## Plates and plaques left out\n\n" + "\n".join(extra) + "\n"
+                    # CT-R2 F13: the tab's control names, not command-line flags
+                    with open(fp, "w", encoding="utf-8") as fh:
+                        fh.write(self._words(md))
             # also drop the standalone-ready long + wide CSVs and the study file in the bundle
             _write_csv(self._long_frame(), os.path.join(out, "compiled_long.csv"))
             _write_csv(tidy, os.path.join(out, "compiled_wide.csv"))
