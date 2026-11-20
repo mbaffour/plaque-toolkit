@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import os
@@ -123,6 +124,20 @@ def _finite(v):
         return v is not None and math.isfinite(float(v))
     except (TypeError, ValueError):
         return False
+
+
+def _plain(v, nd=3):
+    """'%.{nd}f' that never prints '-0.000' (CT-R3 F7): a tiny negative number reads 0.000."""
+    t = "%.*f" % (nd, v)
+    return t[1:] if t.startswith("-") and not t.strip("-0.") else t
+
+
+def _signed(v, nd=3):
+    """'%+.{nd}f' that never prints '-0.000' (a zero reads +0.000); 'n/a' when not a number."""
+    if not _finite(v):
+        return "n/a"
+    t = "%+.*f" % (nd, v)
+    return "+" + t[1:] if not t.strip("+-0.") else t
 
 
 def pearson(x, y):
@@ -265,6 +280,24 @@ def _constant_difference(diff, tool, fiji):
     return (max(diff) - min(diff)) <= 1e-9 * scale
 
 
+def pct_bias_defined(bias, tool, fiji):
+    """CT-R3 F2: the percentage bias divides the bias by the mean of the two methods; when that
+    mean is near zero (|mean| < 10 % of the spread of all the values) the percentage is
+    meaningless, so it is left out EVERYWHERE (sentence, tables, CSV, screen): compute() returns
+    NaN for it. The rule lives here so the command line, the desktop tab and the web app agree."""
+    g = (_mean(tool) + _mean(fiji)) / 2.0
+    spread = _sd(list(tool) + list(fiji))
+    return g != 0 and abs(g) >= 0.1 * spread
+
+
+PCT_NA = "n/a: mean near zero"
+
+
+def pct_bias_text(s):
+    """The percentage bias as a table shows it: '-1.8%' or 'n/a: mean near zero'."""
+    return "%s%%" % _plain(s["pct_bias"], 1) if _finite(s.get("pct_bias")) else PCT_NA
+
+
 def compute(tool, fiji):
     """`tool` = the method under test, `fiji` = the reference. Bias is tool - fiji.
     Returns a dict of agreement statistics; raises ValueError (plain message) on input that
@@ -287,7 +320,7 @@ def compute(tool, fiji):
         "bias": bias, "sd": sd, "loa_lo": bias - 1.96 * sd, "loa_hi": bias + 1.96 * sd,
         "pred_lo": pred_lo, "pred_hi": pred_hi,
         "rmse": math.sqrt(_mean([d * d for d in diff])),
-        "pct_bias": (bias / grand * 100.0) if grand else float("nan"),
+        "pct_bias": (bias / grand * 100.0) if pct_bias_defined(bias, tool, fiji) else float("nan"),
         "mae": _mean([abs(d) for d in diff]),
         "r": pearson(tool, fiji), "icc": icc_a1(fiji, tool),
         "slope": slope, "intercept": intercept, "diff": diff, "avg": avg,
@@ -370,17 +403,28 @@ def icc_grade_interval(lo, hi):
 # --- Honest wording bands (PT-4) ------------------------------------------- #
 # The adjectives in the "paste-ready" sentence are derived from the statistics they describe
 # (a committed artefact once read "closely agreed ... ICC(A,1) = -0.012 (poor agreement)").
+# CT-R3 F6: the verb comes from the band of the LOWER LIMIT of the ICC interval, the same grade
+# the sentence prints for the interval, so "agreed well ... poor to excellent" cannot occur.
+_VERBS = {"excellent": "agreed closely with", "good": "agreed well with",
+          "moderate": "agreed moderately with", "poor": "did not agree reliably with"}
+
+
 def agreement_phrase(icc):
-    """Verb phrase for the ICC(A,1) band (Koo & Li 2016). Matches icc_grade()."""
+    """Verb phrase for an ICC(A,1) point estimate (Koo & Li 2016 band). Matches icc_grade()."""
     if icc != icc:
         return "could not be compared with"
-    if icc < 0.5:
-        return "did NOT agree at the individual level with"
-    if icc < 0.75:
-        return "agreed only moderately with"
-    if icc < 0.90:
-        return "agreed well with"
-    return "agreed closely with"
+    return _VERBS[icc_grade(icc)]
+
+
+def verdict_phrase(s):
+    """The verb of the sentence: the band of the LOWER limit of the 95% CI of the ICC (the
+    interval is what the sentence grades); only when there is no interval (a perfect or
+    constant-offset ICC, or a statistics dict without one) the point estimate's band."""
+    icc = s.get("icc", float("nan"))
+    if not _finite(icc):
+        return "could not be compared with"
+    lo, hi = s.get("icc_lo"), s.get("icc_hi")
+    return _VERBS[icc_grade(lo) if _finite(lo) and _finite(hi) else icc_grade(icc)]
 
 
 def correlation_phrase(r, p=float("nan")):
@@ -412,69 +456,125 @@ def icc_interval_note(s, unit="mm"):
     if not (_finite(icc) and _finite(lo) and _finite(tp)) or tp >= 0.05 or icc - lo <= 0.10:
         return ""
     return ("The ICC interval is wide because the two methods differ by a systematic offset "
-            "(bias %+.3f %s): with two methods that offset is estimated from a single contrast. "
-            "Judge agreement from the bias and the limits of agreement." % (s["bias"], unit))
+            "(bias %s %s): with two methods that offset is estimated from a single contrast. "
+            "Judge agreement from the bias and the limits of agreement." % (_signed(s["bias"]), unit))
 
 
 SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
 VERDICT_MIN_N = 5          # below this no verdict at all: numbers only (CT-R2 N8)
+LOW_POWER_N = 20           # below this "no evidence of a proportional bias" carries a power caveat
+NARROW_RANGE = 1.5         # max/min of the pair means below this: the sizes span too little to see one
+DEFAULT_WHAT = "diameters"  # what the sentence calls the values, in every front-end
+NEGLIGIBLE_SPREAD = 0.0005  # limits of agreement narrower than this (3 decimals) are one number
 
 
-def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
+def spread_negligible(s):
+    """True when the differences have (almost) no spread: every difference the same, or the
+    95% limits of agreement identical at the three decimals the report prints (CT-R3 F7)."""
+    if s.get("constant_difference"):
+        return True
+    sd = s.get("sd")
+    return _finite(sd) and 1.96 * sd < NEGLIGIBLE_SPREAD
+
+
+def prediction_clause(bias, sd, n, unit):
+    """' With only 12 pairs, a new difference is expected within -0.1 to +0.1 mm (95% prediction
+    interval).' ('' from 20 pairs on). The ONE caveat for few pairs: the sentence and the Fiji
+    comparison dialog both use it (CT-R3 F9)."""
+    lo, hi = prediction_interval(bias, sd, n)
+    if not (_finite(lo) and _finite(hi)):
+        return ""
+    return (" With only %d pairs, a new difference is expected within %s to %s %s "
+            "(95%% prediction interval)." % (n, _signed(lo), _signed(hi), unit))
+
+
+def _bias_qualifier(s, unit):
+    """CT-R3 F7: a bias the reader must not miss: the 95% limits of agreement exclude zero (the
+    typical difference is larger than the scatter around it) and it is significant, or the
+    methods differ by a constant. '' when the bias is small or not significant."""
+    bias = s.get("bias", float("nan"))
+    if not _finite(bias) or abs(bias) < NEGLIGIBLE_SPREAD:
+        return ""
+    lo, hi = s.get("loa_lo"), s.get("loa_hi")
+    if not (_finite(lo) and _finite(hi)) or not (lo > 0 or hi < 0):
+        return ""
+    tp = s.get("t_p", float("nan"))
+    if not (s.get("constant_difference") or (_finite(tp) and tp < 0.05)):
+        return ""
+    if spread_negligible(s):
+        return "a constant offset of %s %s" % (_signed(bias), unit)
+    return "a systematic bias of %s %s (the limits of agreement exclude zero)" % (_signed(bias), unit)
+
+
+def report_sentence(s, unit="mm", what=DEFAULT_WHAT, label_tool="Plaque Toolkit",
                     label_manual="Fiji / ImageJ"):
     """THE paste-ready sentence (desktop tab, CLI report and web app all call this one).
 
     Adjectives follow the statistics; a statistic missing from ``s`` leaves its clause out,
     and a p-value that is NaN reads "not testable" (never "significantly different ... p = nan").
-    r and ICC are given to three decimals; below 10 pairs the wording is softened."""
+    r and ICC are given to three decimals; below 10 pairs the wording is softened; below 5 pairs
+    only descriptive numbers are given (bias, SD of the differences, their range)."""
     nan = float("nan")
     n = int(s["n"])
     icc, r = s.get("icc", nan), s.get("r", nan)
-    phrase = agreement_phrase(icc)
     what = str(what).strip() or "measurements"
     lead = what[:1].upper() + what[1:]
-    verdict = n >= VERDICT_MIN_N
-    if not verdict:
-        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs
+    if n < VERDICT_MIN_N:
+        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs. CT-R3 F7: and no
+        # Pearson p, ICC or slope either: with 3-4 pairs those are not estimates, only numbers.
         out = ("With only %d pairs (too few pairs for a verdict), %s measured with %s were compared "
-               "with %s (n = %d)" % (n, what, label_tool, label_manual, n))
-    else:
-        if n < SMALL_N:
-            phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
-                           .replace("agreed", "appeared to agree")
-            lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
-        out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+               "with %s (n = %d): mean bias %s %s" % (n, what, label_tool, label_manual, n,
+                                                       _signed(s["bias"]), unit))
+        if _finite(s.get("sd")):
+            out += ", SD of the differences %s %s" % (_plain(s["sd"]), unit)
+        diff = s.get("diff")
+        if diff:
+            out += ", differences from %s to %s %s" % (_signed(min(diff)), _signed(max(diff)), unit)
+        return out + (". Pearson r, the ICC and the proportional-bias test need at least %d pairs."
+                      % VERDICT_MIN_N)
+    phrase = verdict_phrase(s)
+    if n < SMALL_N:
+        phrase = phrase.replace("did not agree", "did not appear to agree") \
+                       .replace("agreed", "appeared to agree")
+        lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
+    out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+    # CT-R3 F7: a significant proportional bias or a large systematic bias is part of the
+    # opening, next to the verb, not a later clause the reader may skip
+    bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
+    quals = []
+    if _finite(bs) and _finite(bp) and bp < 0.05:
+        quals.append("a proportional bias (Bland-Altman slope %s, %s)" % (_signed(bs), _pstr(bp)))
+    bq = _bias_qualifier(s, unit)
+    if bq:
+        quals.append(bq)
+    if quals:
+        out += "%s%s" % (", with " if phrase.startswith(("did not", "could not")) else ", but with ",
+                         " and ".join(quals))
     # correlation
     if _finite(r):
         p = s.get("pearson_p")
-        corr = "Pearson r = %.3f, R² = %.3f" % (r, s.get("r2", r * r))
+        corr = "Pearson r = %s, R² = %s" % (_plain(r), _plain(s.get("r2", r * r)))
         if "pearson_p" in s:
             corr += ", " + _pstr(p)
-        if verdict:
-            out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
-        else:
-            out += ": %s" % corr
+        out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
     else:
         out += ": Pearson r could not be computed"
     # ICC (+ CI, graded on the CI) and CCC
     if _finite(icc):
         grade = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
         if grade:
-            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (95%% CI %.3f-%.3f): "
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %s (95%% CI %s to %s): "
                     "%s agreement, graded on the interval (Koo & Li 2016)"
-                    % (icc, s["icc_lo"], s["icc_hi"], grade))
-        elif "icc_lo" in s and n < ICC_CI_MIN_N:
-            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (n too small for an "
-                    "interval, so no agreement grade)" % icc)
+                    % (_plain(icc), _plain(s["icc_lo"]), _plain(s["icc_hi"]), grade))
         else:
-            out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f" % icc
+            out += ", with an intraclass correlation coefficient ICC(A,1) = %s" % _plain(icc)
         if _finite(s.get("ccc")):
-            out += ", and Lin's concordance correlation CCC = %.3f" % s["ccc"]
+            out += ", and Lin's concordance correlation CCC = %s" % _plain(s["ccc"])
     out += "."
     # Bland-Altman bias
     bits = []
     if _finite(s.get("pct_bias")):
-        bits.append("%.1f%%" % s["pct_bias"])
+        bits.append("%s%%" % _plain(s["pct_bias"], 1))
     if "t_p" in s:
         tp = s["t_p"]
         if _finite(tp):
@@ -483,37 +583,43 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                                                   _pstr(tp)))
         else:
             bits.append("difference from zero not testable")
-    if s.get("constant_difference"):
-        bits.append("every difference was the same, so their spread is zero")
-    out += " Bland-Altman analysis showed a mean bias of %+.3f %s%s" \
-           % (s["bias"], unit, (" (%s)" % "; ".join(bits)) if bits else "")
-    loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
-    extra = []
-    if _finite(s.get("loa_ci_halfwidth")):
-        # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
-        extra.append("each limit ±%.3f %s, %s95%% CI" % (s["loa_ci_halfwidth"], unit,
-                                                         "approximate " if n < SMALL_N else ""))
-    if extra:
-        loa += " (%s)" % "; ".join(extra)
-    out += " " + loa
+    negligible = spread_negligible(s)
+    if negligible:
+        # CT-R3 F7: no "limits +0.200 to +0.200 (each limit ±0.000)": one number, said once
+        bits.append("every difference was the same" if s.get("constant_difference") else
+                    "the differences varied by less than %.3f %s" % (NEGLIGIBLE_SPREAD * 2, unit))
+        out += " Bland-Altman analysis showed that the two methods differ by a constant %s %s%s" \
+               % (_signed(s["bias"]), unit, (" (%s)" % "; ".join(bits)) if bits else "")
+    else:
+        out += " Bland-Altman analysis showed a mean bias of %s %s%s" \
+               % (_signed(s["bias"]), unit, (" (%s)" % "; ".join(bits)) if bits else "")
+        loa = "with 95%% limits of agreement of %s to %s %s" % (_signed(s["loa_lo"]), _signed(s["loa_hi"]), unit)
+        if _finite(s.get("loa_ci_halfwidth")):
+            # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
+            loa += " (each limit ±%s %s, %s95%% CI)" % (_plain(s["loa_ci_halfwidth"]), unit,
+                                                        "approximate " if n < SMALL_N else "")
+        out += " " + loa
     if _finite(s.get("slope")):
-        out += ", and a regression slope of %.2f (1.0 = no proportional bias)" % s["slope"]
+        out += ", and a regression slope of %s (1.0 = no proportional bias)" % _plain(s["slope"], 2)
     out += "."
-    if _finite(s.get("pred_lo")) and _finite(s.get("pred_hi")):
-        out += (" With only %d pairs, a new difference is expected within %+.3f to %+.3f %s "
-                "(95%% prediction interval)." % (n, s["pred_lo"], s["pred_hi"], unit))
-    bs, bp = s.get("ba_slope", nan), s.get("ba_slope_p", nan)
+    if not negligible:
+        out += prediction_clause(s.get("bias", nan), s.get("sd", nan), n, unit)
     if _finite(bs) and _finite(bp):
         if bp < 0.05:
-            out += (" The difference depended on plaque size (Bland-Altman slope %+.3f %s per %s, %s): "
+            out += (" The difference depended on plaque size (Bland-Altman slope %s %s per %s, %s): "
                     "a proportional bias, so a single bias value does not describe the whole range."
-                    % (bs, unit, unit, _pstr(bp)))
+                    % (_signed(bs), unit, unit, _pstr(bp)))
         else:
-            # CT-R2 N8: a non-significant slope is no evidence of no bias, least of all at small n
-            out += (" No proportional bias was detected (Bland-Altman slope %+.3f, %s%s)."
-                    % (bs, _pstr(bp), "; with %d pairs there is little power to detect one" % n
-                       if n < SMALL_N else ""))
-    if verdict and _finite(icc) and icc < 0.5:
+            # CT-R2 N8 / CT-R3 F7: a non-significant slope is no evidence of no bias: least of all
+            # with few pairs (< 20) or when the sizes span a narrow range
+            power = "; with %d pairs there is little power to detect one" % n if n < LOW_POWER_N else ""
+            out += (" There is no evidence of a proportional bias (Bland-Altman slope %s, %s%s)."
+                    % (_signed(bs), _pstr(bp), power))
+            avg = s.get("avg")
+            if avg and min(avg) > 0 and max(avg) / min(avg) < NARROW_RANGE:
+                out += (" The sizes span a narrow range (%s to %s %s), so a proportional bias could "
+                        "not be seen." % (_plain(min(avg)), _plain(max(avg)), unit))
+    if _finite(icc) and icc < 0.5:
         out += (" These two methods therefore cannot be used interchangeably for "
                 "individual %s; a similar group MEAN does not imply agreement, and any "
                 "per-plaque claim needs a method that does agree." % what)
@@ -621,7 +727,7 @@ def _line_kw(name):
 
 
 def _fmt3(v):
-    return "%.3f" % v if _finite(v) else "n/a"
+    return _plain(v) if _finite(v) else "n/a"
 
 
 def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=True):
@@ -648,9 +754,9 @@ def _draw_scatter(ax1, s, unit, label_tool, label_manual, show_stats=True):
     ax1.set_title("A  Method comparison", loc="left", fontsize=10, fontweight="bold")
     if show_stats:
         ax1.text(.035, .965,
-                 "n = %d\nr = %s    R² = %s\nICC = %s    CCC = %s\ny = %s x %+.3f"
+                 "n = %d\nr = %s    R² = %s\nICC = %s    CCC = %s\ny = %s x %s"
                  % (s["n"], _fmt3(s["r"]), _fmt3(s.get("r2", s["r"] ** 2)), _fmt3(s["icc"]),
-                    _fmt3(s.get("ccc", float("nan"))), _fmt3(s["slope"]), s["intercept"]),
+                    _fmt3(s.get("ccc", float("nan"))), _fmt3(s["slope"]), _signed(s["intercept"])),
                  transform=ax1.transAxes, va="top", ha="left", fontsize=8.5, family="monospace",
                  color="#103027", fontweight="bold",
                  bbox=dict(boxstyle="round,pad=0.45", fc="#ffffff", ec="#5f9484", lw=1.0, alpha=0.96))
@@ -674,9 +780,9 @@ def _draw_bland(ax2, s, unit, label_tool, label_manual):
     ax2.set_ylim(-yspan, yspan)
     up, dn = "+1.96 SD", "-1.96 SD"
     tr = ax2.get_yaxis_transform()
-    for y, txt, va in ((s["loa_hi"], "%s  %+.3f" % (up, s["loa_hi"]), "bottom"),
-                       (s["bias"], "bias  %+.3f" % s["bias"], "bottom"),
-                       (s["loa_lo"], "%s  %+.3f" % (dn, s["loa_lo"]), "top")):
+    for y, txt, va in ((s["loa_hi"], "%s  %s" % (up, _signed(s["loa_hi"])), "bottom"),
+                       (s["bias"], "bias  %s" % _signed(s["bias"]), "bottom"),
+                       (s["loa_lo"], "%s  %s" % (dn, _signed(s["loa_lo"])), "top")):
         ax2.text(0.985, y, txt, transform=tr, ha="right", va=va, fontsize=7.5, family="monospace",
                  color="#1f2430", zorder=5,
                  bbox=dict(boxstyle="square,pad=0.15", fc="#ffffff", ec="none", alpha=0.75))
@@ -760,7 +866,7 @@ def save_key_files(fig, base, formats=("png",), dpi=300):
 
 def _icc_ci_text(s):
     if _finite(s.get("icc_lo")) and _finite(s.get("icc_hi")):
-        return "95%% CI %.3f-%.3f, McGraw & Wong F interval" % (s["icc_lo"], s["icc_hi"])
+        return "95%% CI %s to %s, McGraw & Wong F interval" % (_plain(s["icc_lo"]), _plain(s["icc_hi"]))
     return "n too small for an interval" if s["n"] < ICC_CI_MIN_N else "CI undefined"
 
 
@@ -811,14 +917,216 @@ def _numeric_cols(df):
     return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
 
+numeric_cols = _numeric_cols
+
+
 def _safe(s):
     return "".join(ch if ch.isalnum() else "_" for ch in str(s))
 
 
+# --------------------------------------------------------------------------- the ONE reader
+# CT-R3 F8: the command line and the web app read a paired file with the SAME code (the web app's
+# reader moved here): comma / semicolon / tab / pipe files, European decimal commas, # comment
+# lines, spreadsheets; and say how many rows had no usable pair, and why.
+_DELIMS = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}
+DROP_REASON = "a value missing or not a number"
+
+
+def _to_number(col):
+    """(float series, decimal comma used?) or (None, False) when the column is not numeric."""
+    txt = col.astype(str).str.strip()
+    blank = col.isna() | (txt == "")
+    num = pd.to_numeric(txt.where(~blank), errors="coerce")
+    if (num.isna() & ~blank).any():
+        alt = pd.to_numeric(txt.str.replace(",", ".", regex=False).where(~blank), errors="coerce")
+        if (alt.isna() & ~blank).any() or not txt[~blank].str.match(r"^[+-]?\d+,\d+$|^[+-]?\d+$").all():
+            return None, False
+        return alt.astype(float), True
+    if num.notna().sum() == 0:
+        return None, False
+    return num.astype(float), False
+
+
+def read_paired(path_or_text, name=None):
+    """(DataFrame, note) for a CSV / TSV / TXT / XLSX of paired measurements, or for the TEXT of
+    one (a string with line breaks that is not a file): the delimiter is detected from the
+    header (comma, semicolon, tab, pipe), European decimal commas are read as numbers, lines
+    starting with # are skipped, and a file that parses to one column is refused with a plain
+    ValueError. Rows with a missing / non-numeric value are kept here and counted by
+    :func:`pair_values`."""
+    is_text = (isinstance(path_or_text, str) and ("\n" in path_or_text or "\r" in path_or_text)
+               and not os.path.exists(path_or_text))
+    name = name or ("the pasted text" if is_text else os.path.basename(str(path_or_text)))
+    if not is_text and str(name).lower().endswith((".xlsx", ".xls")):
+        try:
+            df = pd.read_excel(path_or_text)
+        except Exception as e:                                # noqa: BLE001
+            raise ValueError("could not read %s as a spreadsheet: %s" % (name, e))
+        note = "read %d rows x %d columns (spreadsheet)" % df.shape
+    else:
+        if is_text:
+            body = path_or_text
+        else:
+            with open(path_or_text, "r", encoding="utf-8-sig", errors="replace") as fh:
+                body = fh.read()
+        lines = [ln for ln in body.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        if not lines:
+            raise ValueError("%s is empty." % name)
+        counts = {d: lines[0].count(d) for d in _DELIMS}
+        sep = max(counts, key=lambda d: (counts[d], d == ","))
+        if not counts[sep]:
+            raise ValueError("%s was read as ONE column (%r). Expected two or more columns separated "
+                             "by commas, semicolons or tabs, with a header row." % (name, lines[0][:60]))
+        try:
+            df = pd.read_csv(io.StringIO("\n".join(lines)), sep=sep, dtype=str, keep_default_na=False,
+                             na_values=[""])
+        except Exception as e:                                # noqa: BLE001
+            raise ValueError("could not read %s as a %s-separated table: %s" % (name, _DELIMS[sep], e))
+        note = "read %d rows x %d columns" % df.shape
+        if sep != ",":
+            note += "; %s-separated" % _DELIMS[sep]
+    df.columns = [str(c).strip() for c in df.columns]
+    comma = False
+    for c in df.columns:
+        if pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        num, dc = _to_number(df[c])
+        if num is not None:
+            df[c] = num
+            comma = comma or dc
+    if comma:
+        note += "; decimal commas read as decimal points"
+    return df, note + "."
+
+
+def drop_text(n_drop, n_rows):
+    """'3 of 20 rows dropped: a value missing or not a number' ('' when nothing was dropped):
+    the one message of the command line, the web app and the reports."""
+    return "%d of %d rows dropped: %s" % (n_drop, n_rows, DROP_REASON) if n_drop else ""
+
+
+def pair_values(df, tool, manual, convert=False):
+    """(tool values, manual values, rows in file, rows dropped) for two numeric columns: rows
+    with a missing / non-numeric value in either are dropped and COUNTED. A plain ValueError
+    for the same column twice or fewer than 3 complete pairs (CT-R1 F16, F17)."""
+    num = numeric_cols(df)
+    for c in (tool, manual):
+        if c not in num:
+            raise ColumnError("%r is not a numeric column. Numeric columns: %s."
+                              % (c, ", ".join(map(str, num)) or "none"))
+    if tool == manual:
+        raise ValueError("The tool and the reference column are the same column (%s). Pick the two "
+                         "different methods." % tool)
+    d = df[[tool, manual]].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(d) < 3:
+        raise ValueError("Need at least 3 complete pairs (rows with a number in both columns); "
+                         "found %d of %d rows." % (len(d), len(df)))
+    t, m = d[tool].tolist(), d[manual].tolist()
+    if convert:
+        t, m = area_to_diameter(t), area_to_diameter(m)
+    return t, m, len(df), len(df) - len(d)
+
+
+# --------------------------------------------------------------------------- the ONE role guess
+def id_like(name, series=None):
+    """An identifier column (plaque_id, id, row, index, or the integers 1..n): never guessed as a
+    measurement (CT-R1 F17: an id column guessed as 'tool' gave a bias of +59 mm)."""
+    toks = _tokens(name)
+    if any(t in ("id", "idx", "index", "row", "no", "number", "n") for t in toks):
+        return True
+    if series is not None:
+        v = pd.to_numeric(series, errors="coerce").dropna()
+        if len(v) > 2 and (v == v.round()).all() and (v.diff().dropna() == 1).all():
+            return True
+    return False
+
+
+def is_area(name):
+    toks = _tokens(name)
+    return any(t.startswith("area") or t in ("mm2", "um2", "px2") for t in toks) or "mm²" in str(name)
+
+
+def is_diam(name):
+    """A column name that says diameter (diameter_mm, fiji_diam, dia)."""
+    return any(t.startswith("diam") or t == "dia" for t in _tokens(name))
+
+
+def column_kind(name):
+    """'area' | 'diam' | None (the name does not say; a name that says both is not decided)."""
+    a, d = is_area(name), is_diam(name)
+    return "area" if (a and not d) else "diam" if (d and not a) else None
+
+
+def is_length(name):
+    """A column name whose unit is a LENGTH (toolkit_mm, size_px, width_um) and that does not say
+    area: a diameter-like column, however it is called (CT-R3 F1)."""
+    return not is_area(name) and any(t in ("mm", "um", "px", "pixel", "pixels", "micron", "microns")
+                                     for t in _tokens(name))
+
+
+def mixed_quantities(tool, manual):
+    """True when one column looks like an area and the other like a diameter."""
+    return {column_kind(tool or ""), column_kind(manual or "")} == {"area", "diam"}
+
+
+def _roles(cols):
+    """(tool, manual) inside one group of columns: a hinted column keeps its role and the other
+    column takes the other role; with no hint at all FILE ORDER decides (first = tool, second =
+    reference), in every front-end (CT-R3 F10: the web app took the second as the tool)."""
+    manual = _find_col(cols, MANUAL_HINTS)
+    tool = _find_col(cols, TOOL_HINTS, exclude=(manual,))
+    if tool is None and manual is None:
+        tool, manual = (list(cols) + [None, None])[:2]
+        return tool, manual
+    if manual is None:
+        manual = next((c for c in cols if c != tool), None)
+    if tool is None:
+        tool = next((c for c in cols if c != manual), None)
+    return tool, manual
+
+
+def roles_hinted(tool, manual):
+    """True when a column NAME says which method it is (so the roles are not a file-order guess)."""
+    return any(set(_tokens(c)) & set(hints) for c, hints in ((tool, TOOL_HINTS), (manual, MANUAL_HINTS))
+               if c is not None)
+
+
+def guess_columns(df, tool=None, manual=None):
+    """(tool, manual) picks, the same in the command line and the web app (CT-R3 F10). The two
+    columns are a PAIR OF THE SAME QUANTITY (both diameters if a diameter pair exists, else both
+    areas); columns whose names say neither are paired by their hints and otherwise by FILE
+    ORDER; id-like columns are never guessed (CT-R1 F17). ``tool`` / ``manual`` already given
+    (--tool / --manual) are kept and the other role is picked from the remaining columns."""
+    num = [c for c in numeric_cols(df) if not id_like(c, df[c])]
+    if tool is not None or manual is not None:
+        rest = [c for c in num if c not in (tool, manual)]
+        if tool is None:
+            tool = (_find_col(rest, TOOL_HINTS) or (rest[0] if rest else None))
+            rest = [c for c in rest if c != tool]
+        if manual is None:
+            manual = (_find_col(rest, MANUAL_HINTS) or (rest[0] if rest else None))
+        return tool, manual
+    for kind in ("diam", "area"):
+        same = [c for c in num if column_kind(c) == kind]
+        if len(same) >= 2:
+            return _roles(same)
+    unnamed = [c for c in num if column_kind(c) is None]
+    if len(unnamed) >= 2:
+        return _roles(unnamed)
+    return _roles(num)
+
+
+def _report_few(s):
+    """True below 5 pairs: the report tables show 'n/a (needs 5 pairs)' for r, the ICC and the
+    proportional-bias test, exactly as the sentence leaves them out (CT-R3 F7)."""
+    return s["n"] < VERDICT_MIN_N
+
+
+NA_FEW = "n/a (needs %d pairs)" % VERDICT_MIN_N
+
+
 def run(args):
-    df = pd.read_csv(args["data"], comment="#", skip_blank_lines=True) \
-        if str(args["data"]).lower().endswith((".csv", ".tsv", ".txt")) \
-        else pd.read_excel(args["data"])
+    df, rnote = read_paired(args["data"])
     num = _numeric_cols(df)
     for flag, key in (("--tool", "tool"), ("--manual", "manual")):
         name = args.get(key)
@@ -826,31 +1134,21 @@ def run(args):
             raise ColumnError("%s %r is not a numeric column of %s. Numeric columns: %s."
                               % (flag, name, os.path.basename(str(args["data"])),
                                  ", ".join(map(str, num)) or "none"))
-    what_pref = None
-    w = str(args.get("what") or "").lower()
-    if w.startswith("diam"):
-        what_pref = "diam"
-    elif w.startswith("area"):
-        what_pref = "area"
-    tcol = args.get("tool") or _find_col(num, TOOL_HINTS, prefer=what_pref)
-    mcol = args.get("manual") or _find_col(num, MANUAL_HINTS, exclude=(tcol,), prefer=what_pref)
-    if tcol is not None and mcol is not None and tcol == mcol:
-        mcol = _find_col(num, MANUAL_HINTS, exclude=(tcol,), prefer=what_pref)
-    if (tcol is None or mcol is None) and len(num) == 2:
-        tcol, mcol = tcol or num[0], mcol or num[1]
-        print("note: columns not named — using '%s' (tool) vs '%s' (manual). "
-              "Override with --tool/--manual." % (tcol, mcol))
+    tcol, mcol = guess_columns(df, args.get("tool"), args.get("manual"))
     if tcol is None or mcol is None or tcol == mcol:
         raise SystemExit("Could not identify the two columns. Pass --tool COL --manual COL. "
                          "Numeric columns found: %s" % num)
+    if not (args.get("tool") or args.get("manual")) and not roles_hinted(tcol, mcol):
+        print("note: neither column name says which method it is — using '%s' (tool) vs '%s' "
+              "(manual), the file order. Override with --tool/--manual." % (tcol, mcol))
     # Always say which columns were compared: a wrong silent pick is the worst outcome.
     print("columns: tool = %r, manual/reference = %r  (override with --tool/--manual)" % (tcol, mcol))
 
-    d = df[[tcol, mcol]].apply(pd.to_numeric, errors="coerce").dropna()
-    tool_vals, manual_vals = d[tcol].tolist(), d[mcol].tolist()
     convert = args.get("convert_area", False)
-    if convert:                                            # columns are AREA → compare diameters
-        tool_vals, manual_vals = area_to_diameter(tool_vals), area_to_diameter(manual_vals)
+    tool_vals, manual_vals, n_rows, n_drop = pair_values(df, tcol, mcol, convert)  # columns are AREA → diameters
+    dropped = drop_text(n_drop, n_rows)
+    if dropped:
+        print(dropped + ".")
     try:
         s = full_stats(tool_vals, manual_vals)              # + R², CCC, ICC CI, p-values
     except ValueError as e:                                  # CT-R1 SM-F17: plain refusal
@@ -890,32 +1188,37 @@ def run(args):
 
     # report + paste-ready sentence
     sent = report_sentence(s, unit, what, lt, lm)
+    few = _report_few(s)
     with open(os.path.join(out, "agreement_report_%s.md" % suf), "w", encoding="utf-8") as f:
         f.write("# Method-comparison report - %s\n\n_Generated %s | %s_\n\n"
                 % (what, stamp, version_label()))
         f.write("**%s vs %s**  (bias = %s - %s)\n\n" % (lt, lm, lt, lm))
+        if dropped:
+            f.write("_%s._\n\n" % dropped)
         f.write("| statistic | value |\n|---|---|\n")
         f.write("| n pairs | %d |\n" % s["n"])
-        f.write("| Pearson r (p) | %.3f (%s) |\n" % (s["r"], _pfmt(s["pearson_p"])))
-        f.write("| R^2 | %.3f |\n" % s["r2"])
+        f.write("| Pearson r (p) | %s |\n" % (NA_FEW if few else "%s (%s)" % (_plain(s["r"]), _pfmt(s["pearson_p"]))))
+        f.write("| R^2 | %s |\n" % (NA_FEW if few else _plain(s["r2"])))
         gci = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
-        f.write("| ICC(A,1) | %.3f (%s%s) |\n"
-                % (s["icc"], _icc_ci_text(s), ("; %s, graded on the interval" % gci) if gci else ""))
-        f.write("| Lin's CCC | %.3f |\n" % s["ccc"])
-        f.write("| mean bias (%s) | %+.3f (%.1f%%) |\n" % (unit, s["bias"], s["pct_bias"]))
-        f.write("| bias vs 0 (paired t) | t = %.2f, %s |\n" % (s["t_stat"], _pstr(s["t_p"])))
-        f.write("| 95%% limits of agreement | %+.3f to %+.3f %s (bias ± 1.96 SD) |\n"
-                % (s["loa_lo"], s["loa_hi"], unit))
+        f.write("| ICC(A,1) | %s |\n"
+                % (NA_FEW if few else "%s (%s%s)" % (_plain(s["icc"]), _icc_ci_text(s),
+                                                     ("; %s, graded on the interval" % gci) if gci else "")))
+        f.write("| Lin's CCC | %s |\n" % (NA_FEW if few else _plain(s["ccc"])))
+        f.write("| mean bias (%s) | %s (%s) |\n" % (unit, _signed(s["bias"]), pct_bias_text(s)))
+        f.write("| bias vs 0 (paired t) | t = %s, %s |\n" % (_plain(s["t_stat"], 2), _pstr(s["t_p"])))
+        f.write("| 95%% limits of agreement | %s to %s %s (bias ± 1.96 SD) |\n"
+                % (_signed(s["loa_lo"]), _signed(s["loa_hi"]), unit))
         if _finite(s.get("pred_lo")):
-            f.write("| 95%% prediction interval, one new difference (n < %d) | %+.3f to %+.3f %s "
-                    "(bias ± t·SD·√(1+1/n)) |\n" % (PRED_N, s["pred_lo"], s["pred_hi"], unit))
-        f.write("| %s95%% CI of each limit | ±%.3f %s (Bland & Altman 1999) |\n"
-                % ("approximate " if s["n"] < SMALL_N else "", s["loa_ci_halfwidth"], unit))
-        f.write("| proportional bias (difference ~ mean) | slope %+.4f, %s |\n"
-                % (s["ba_slope"], _pstr(s["ba_slope_p"])))
-        f.write("| RMSE / MAE (%s) | %.3f / %.3f |\n" % (unit, s["rmse"], s["mae"]))
-        f.write("| regression (tool on ref) | y = %.3f x %+.3f  (slope 1.0 = no proportional bias) |\n\n"
-                % (s["slope"], s["intercept"]))
+            f.write("| 95%% prediction interval, one new difference (n < %d) | %s to %s %s "
+                    "(bias ± t·SD·√(1+1/n)) |\n" % (PRED_N, _signed(s["pred_lo"]), _signed(s["pred_hi"]), unit))
+        f.write("| %s95%% CI of each limit | ±%s %s (Bland & Altman 1999) |\n"
+                % ("approximate " if s["n"] < SMALL_N else "", _plain(s["loa_ci_halfwidth"]), unit))
+        f.write("| proportional bias (difference ~ mean) | %s |\n"
+                % (NA_FEW if few else "slope %s, %s" % (_signed(s["ba_slope"], 4), _pstr(s["ba_slope_p"]))))
+        f.write("| RMSE / MAE (%s) | %s / %s |\n" % (unit, _plain(s["rmse"]), _plain(s["mae"])))
+        f.write("| regression (tool on ref) | %s |\n\n"
+                % (NA_FEW if few else "y = %s x %s  (slope 1.0 = no proportional bias)"
+                   % (_plain(s["slope"]), _signed(s["intercept"]))))
         f.write("## Paste-ready sentence\n\n> %s\n\n" % sent)
         note = icc_interval_note(s, unit)
         if note:
@@ -933,13 +1236,15 @@ def run(args):
                 "the practical measure of how interchangeable the methods are.\n"
                 "- **Regression slope** near 1.0 (a flat Bland-Altman cloud) means the disagreement does "
                 "not grow with size.\n")
-    print("[done] %s: n=%d  r=%.3f  R2=%.3f  ICC=%.3f (%s)  CCC=%.3f  bias=%+.3f %s (%.1f%%)  "
-          "LoA %+.3f..%+.3f  -> %s"
-          % (what, s["n"], s["r"], s["r2"], s["icc"], _icc_ci_text(s), s["ccc"],
-             s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
+    print("[done] %s: n=%d  r=%s  R2=%s  ICC=%s (%s)  CCC=%s  bias=%s %s (%s)  "
+          "LoA %s..%s  -> %s"
+          % (what, s["n"], _plain(s["r"]), _plain(s["r2"]), _plain(s["icc"]), _icc_ci_text(s),
+             _plain(s["ccc"]), _signed(s["bias"]), unit, pct_bias_text(s),
+             _signed(s["loa_lo"]), _signed(s["loa_hi"]), out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
                "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": version_label(),
+               "rows_in_file": n_rows, "rows_dropped": n_drop,
                "numpy": np.__version__, "pandas": pd.__version__, "stats": row},
               open(os.path.join(out, "run_config_%s.json" % suf), "w"), indent=2, default=float)
     return s
@@ -963,7 +1268,7 @@ def build_args():
     p.add_argument("--tool", help="the automated/tool measurement column")
     p.add_argument("--manual", help="the manual/reference measurement column")
     p.add_argument("--unit", default="mm")
-    p.add_argument("--what", default="diameters", help="what was measured (for labels/filenames)")
+    p.add_argument("--what", default=DEFAULT_WHAT, help="what was measured (for labels/filenames)")
     p.add_argument("--label-tool", dest="label_tool", default="Plaque Toolkit")
     p.add_argument("--label-manual", dest="label_manual", default="Fiji / ImageJ")
     p.add_argument("--title", default=None)

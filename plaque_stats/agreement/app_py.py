@@ -155,11 +155,12 @@ bias/spread sliders and watch ICC fall while r barely moves.</p>
 
 # --------------------------------------------------------------------------- server logic as plain
 # functions (CT-R1 web), tested without a browser in tests/test_ct_r1_web.py.
-_DELIMS = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}
-# CT-R2 N4: the default wording is the command-line tool's (`--what diameters`), read from the
-# engine's own parser, so the paste-ready sentence opens exactly as the CLI's does.
+# CT-R3 F8/F10: the reader and the column-role guess are the ENGINE's (the command line calls the
+# same functions), so the three front-ends cannot drift.
+_DELIMS = ag._DELIMS
+# CT-R2 N4: the default wording is the command-line tool's (`--what diameters`), the engine's own.
 AREA_UNIT, AREA_WHAT = "mm²", "areas"
-DIAM_UNIT, DIAM_WHAT = "mm", ag.build_args().get_default("what")
+DIAM_UNIT, DIAM_WHAT = "mm", ag.DEFAULT_WHAT
 BLANK_WHAT = "measurements"       # what the engine's sentence falls back to for an empty box
 
 
@@ -172,133 +173,21 @@ class Stale(Exception):
     """The column pickers still hold the previous file's names: wait for them."""
 
 
-def _to_number(col):
-    """(float series, decimal comma used?) or (None, False) when the column is not numeric."""
-    txt = col.astype(str).str.strip()
-    blank = col.isna() | (txt == "")
-    num = pd.to_numeric(txt.where(~blank), errors="coerce")
-    if (num.isna() & ~blank).any():
-        alt = pd.to_numeric(txt.str.replace(",", ".", regex=False).where(~blank), errors="coerce")
-        if (alt.isna() & ~blank).any() or not txt[~blank].str.match(r"^[+-]?\d+,\d+$|^[+-]?\d+$").all():
-            return None, False
-        return alt.astype(float), True
-    if num.notna().sum() == 0:
-        return None, False
-    return num.astype(float), False
-
-
-def read_paired(path, name=None):
-    """(DataFrame, note) for a CSV / TSV / TXT / XLSX of paired measurements (CT-R1 F4): the
-    delimiter is detected from the header (comma, semicolon, tab, pipe), European decimal commas
-    are read as numbers, lines starting with # are skipped, and a file that parses to one column
-    is refused with a plain ValueError. (A small local reader: the frozen Agreement app does not
-    ship the statistics engine's read_table.)"""
-    name = name or os.path.basename(str(path))
-    if str(name).lower().endswith((".xlsx", ".xls")):
-        try:
-            df = pd.read_excel(path)
-        except Exception as e:                                # noqa: BLE001
-            raise ValueError("could not read %s as a spreadsheet: %s" % (name, e))
-        note = "read %d rows x %d columns (spreadsheet)" % df.shape
-        sep = None
-    else:
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
-            lines = [ln for ln in fh.read().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-        if not lines:
-            raise ValueError("%s is empty." % name)
-        counts = {d: lines[0].count(d) for d in _DELIMS}
-        sep = max(counts, key=lambda d: (counts[d], d == ","))
-        if not counts[sep]:
-            raise ValueError("%s was read as ONE column (%r). Expected two or more columns separated "
-                             "by commas, semicolons or tabs, with a header row." % (name, lines[0][:60]))
-        try:
-            df = pd.read_csv(io.StringIO("\n".join(lines)), sep=sep, dtype=str, keep_default_na=False,
-                             na_values=[""])
-        except Exception as e:                                # noqa: BLE001
-            raise ValueError("could not read %s as a %s-separated table: %s" % (name, _DELIMS[sep], e))
-        note = "read %d rows x %d columns" % df.shape
-        if sep != ",":
-            note += "; %s-separated" % _DELIMS[sep]
-    df.columns = [str(c).strip() for c in df.columns]
-    comma = False
-    for c in df.columns:
-        if pd.api.types.is_numeric_dtype(df[c]):
-            continue
-        num, dc = _to_number(df[c])
-        if num is not None:
-            df[c] = num
-            comma = comma or dc
-    if comma:
-        note += "; decimal commas read as decimal points"
-    return df, note + "."
+read_paired = ag.read_paired
+_to_number = ag._to_number
 
 
 def numeric_cols(df):
-    return [str(c) for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    return [str(c) for c in ag.numeric_cols(df)]
 
 
-def id_like(name, series=None):
-    """An identifier column (plaque_id, id, row, index, or the integers 1..n): never guessed as a
-    measurement (CT-R1 F17: an id column guessed as 'tool' gave a bias of +59 mm)."""
-    toks = ag._tokens(name)
-    if any(t in ("id", "idx", "index", "row", "no", "number", "n") for t in toks):
-        return True
-    if series is not None:
-        v = pd.to_numeric(series, errors="coerce").dropna()
-        if len(v) > 2 and (v == v.round()).all() and (v.diff().dropna() == 1).all():
-            return True
-    return False
-
-
-def is_area(name):
-    toks = ag._tokens(name)
-    return any(t.startswith("area") or t in ("mm2", "um2", "px2") for t in toks) or "mm²" in str(name)
-
-
-def is_diam(name):
-    """A column name that says diameter (diameter_mm, fiji_diam, dia)."""
-    return any(t.startswith("diam") or t == "dia" for t in ag._tokens(name))
-
-
-def column_kind(name):
-    """'area' | 'diam' | None (the name does not say; a name that says both is not decided)."""
-    a, d = is_area(name), is_diam(name)
-    return "area" if (a and not d) else "diam" if (d and not a) else None
-
-
-def _roles(cols):
-    """(tool, manual) inside one group of columns: the hinted one keeps its role, the other
-    column takes the other role; unhinted columns keep their file order."""
-    manual = ag._find_col(cols, ag.MANUAL_HINTS)
-    tool = ag._find_col(cols, ag.TOOL_HINTS, exclude=(manual,))
-    if manual is None:
-        manual = next((c for c in cols if c != tool), None)
-    if tool is None:
-        tool = next((c for c in cols if c != manual), None)
-    return tool, manual
-
-
-def guess_columns(df):
-    """(tool, manual) default picks. CT-R2 N1: the two columns are a PAIR OF THE SAME QUANTITY
-    (both diameters if a diameter pair exists, else both areas): an area never meets a diameter
-    here (the CLI's per-column 'prefer diam' paired AREA_MM2 with fiji_diam). Columns whose
-    names say neither are paired by their hints; only when no same-kind pair exists at all
-    (e.g. one diameter + one area) the first two numeric columns are offered, and the mixed
-    warning then stops the downloads. Id-like columns are skipped (CT-R1 F17)."""
-    num = [c for c in numeric_cols(df) if not id_like(c, df[c])]
-    for kind in ("diam", "area"):
-        same = [c for c in num if column_kind(c) == kind]
-        if len(same) >= 2:
-            return _roles(same)
-    unnamed = [c for c in num if column_kind(c) is None]
-    if len(unnamed) >= 2:
-        return _roles(unnamed)
-    return _roles(num)
-
-
-def mixed_quantities(tool, manual):
-    """CT-R2 N1: True when one column looks like an area and the other like a diameter."""
-    return {column_kind(tool or ""), column_kind(manual or "")} == {"area", "diam"}
+id_like = ag.id_like
+is_area = ag.is_area
+is_diam = ag.is_diam
+column_kind = ag.column_kind
+_roles = ag._roles
+guess_columns = ag.guess_columns
+mixed_quantities = ag.mixed_quantities
 
 
 MIXED_WARNING = ("Warning: one column looks like an area and the other like a diameter: agreement "
@@ -306,15 +195,49 @@ MIXED_WARNING = ("Warning: one column looks like an area and the other like a di
                  "“Compare anyway” under the column pickers; the downloads stay off until then.")
 
 
-def downloads_blocked(tool, manual, anyway):
-    """CT-R2 N1: the downloads are off while the picked pair mixes an area with a diameter."""
-    return mixed_quantities(tool, manual) and not anyway
+CONVERT_WARNING = ("Warning: “Convert area” is ticked but %s. Converting a diameter as if it were "
+                   "an area gives wrong values. Untick “Convert area”, or tick “Compare anyway” "
+                   "under the column pickers; the downloads stay off until then.")
+
+
+def convert_problem(df, tool, manual, convert):
+    """CT-R3 F1/F5: '' or the reason why “Convert area” does not fit the picked columns. The rule:
+    a column is NOT an area when its NAME says diameter (diameter_mm, fiji_diam, dia) or gives a
+    length unit without saying area (toolkit_mm, size_px), or when it
+    holds a negative number (an area cannot be negative, and the conversion would silently turn
+    it into a zero diameter). The values alone cannot tell a diameter from an area."""
+    if not convert:
+        return ""
+    bad = []
+    for c in (tool, manual):
+        if not c:
+            continue
+        if column_kind(c) == "diam" or ag.is_length(c):
+            bad.append("the column “%s” looks like a diameter (a length, not an area)" % c)
+        elif df is not None and c in df.columns and (pd.to_numeric(df[c], errors="coerce") < 0).any():
+            bad.append("the column “%s” holds negative values, so it cannot be an area" % c)
+    return CONVERT_WARNING % " and ".join(bad) if bad else ""
+
+
+def downloads_blocked(tool, manual, anyway, df=None, convert=False):
+    """CT-R2 N1 / CT-R3 F1: the downloads are off while the picked pair mixes an area with a
+    diameter, or “Convert area” is ticked on columns that are not both areas, until “Compare
+    anyway”."""
+    off = mixed_quantities(tool, manual) or bool(convert_problem(df, tool, manual, convert))
+    return off and not anyway
+
+
+BLOCKED_MESSAGE = ("The downloads are off: the picked columns do not fit together (see the red "
+                   "message above the tabs). Fix the columns, or tick “Compare anyway” under the "
+                   "column pickers.")
 
 
 def quantity_text(name, convert, unit):
     """One side of the 'Compared:' line."""
     kind = column_kind(name)
     if convert:
+        if kind == "diam" or ag.is_length(name):      # CT-R3 F5: never claim a diameter was 'converted from area'
+            return "diameter (%s), converted as if it were an area" % DIAM_UNIT
         return "diameter (%s, converted from area)" % DIAM_UNIT
     u = (unit or "").strip() or "no unit"
     if kind == "diam" and u == AREA_UNIT:          # the one Unit box follows an area column
@@ -330,18 +253,13 @@ def compared_text(tool, manual, convert, unit):
 
 
 def column_warnings(df, tool, manual, convert):
-    """CT-R2 N9: plain warnings about the picked columns (the comparison still runs)."""
+    """CT-R2 N9: plain warnings about the picked columns (the comparison still runs). (The
+    “Convert area” mismatch is a blocking message of its own, convert_problem.)"""
     out = []
     for role, c in (("Tool", tool), ("Reference", manual)):
         if c in df.columns and id_like(c, df[c]):
             out.append("Warning: the %s column “%s” looks like an identifier (a plaque number or "
                        "row index), not a measurement. Pick the measurement columns." % (role.lower(), c))
-    if convert:
-        for c in (tool, manual):
-            if column_kind(c) == "diam":
-                out.append("Warning: “Convert area” is ticked but the column “%s” looks like a "
-                           "diameter: converting a diameter as if it were an area gives wrong "
-                           "values. Untick it if the columns are already diameters." % c)
     return out
 
 
@@ -358,22 +276,12 @@ def effective_unit(convert, unit):
 
 
 def pair_values(df, tool, manual, convert=False):
-    """(tool values, manual values, rows in file, rows dropped). Plain ValueError for the
-    same column twice or fewer than 3 complete pairs (CT-R1 F16, F17)."""
+    """(tool values, manual values, rows in file, rows dropped): the engine's pairing; a
+    picker that still holds the previous file's column names waits (Stale)."""
     num = numeric_cols(df)
     if tool not in num or manual not in num:
         raise Stale()
-    if tool == manual:
-        raise ValueError("The tool and the reference column are the same column (%s). Pick the two "
-                         "different methods." % tool)
-    d = df[[tool, manual]].apply(pd.to_numeric, errors="coerce").dropna()
-    if len(d) < 3:
-        raise ValueError("Need at least 3 complete pairs (rows with a number in both columns); "
-                         "found %d of %d rows." % (len(d), len(df)))
-    t, m = d[tool].tolist(), d[manual].tolist()
-    if convert:
-        t, m = ag.area_to_diameter(t), ag.area_to_diameter(m)
-    return t, m, len(df), len(df) - len(d)
+    return ag.pair_values(df, tool, manual, convert)
 
 
 def compute(df, tool, manual, convert=False):
@@ -406,7 +314,7 @@ def icc_cell(s):
     and whenever the engine cannot compute one."""
     lo, hi = s.get("icc_lo"), s.get("icc_hi")
     if ag._finite(lo) and ag._finite(hi):
-        ci = "[%.3f–%.3f]" % (lo, hi)
+        ci = "[%s to %s]" % (ag._plain(lo), ag._plain(hi))
     else:
         ci = "[n/a (%s)]" % icc_na_reason(s)
     # the engine's rule (CT-R2 N8): the grade is the grade of the INTERVAL, none without one
@@ -420,23 +328,17 @@ def _num(v, fmt):
 
 
 def _signed(v, nd):
-    """'%+.3f' that never prints '-0.000' (CT-R2 N2)."""
-    if not ag._finite(v):
-        return "n/a"
-    t = "%+.*f" % (nd, v)
-    return "+" + t[1:] if not t.strip("+-0.") else t
+    """'%+.3f' that never prints '-0.000' (CT-R2 N2): the engine's."""
+    return ag._signed(v, nd)
 
 
 def pct_bias_defined(s):
-    """CT-R2 N9: the engine divides the bias by the mean of the two methods; when that mean is
-    near zero (|mean| < 10 % of the spread of the values) the percentage is meaningless."""
-    g = (s["mean_tool"] + s["mean_fiji"]) / 2.0
-    spread = ag._sd(list(s["tool"]) + list(s["fiji"]))
-    return ag._finite(s.get("pct_bias")) and abs(g) >= 0.1 * spread and g != 0
+    """CT-R3 F2: the rule lives in the engine (compute() leaves the percentage NaN over a
+    near-zero mean, so the sentence, the tables and the CSV all leave it out)."""
+    return ag._finite(s.get("pct_bias"))
 
 
-def pct_bias_text(s):
-    return "%s%%" % _num(s["pct_bias"], "%.1f") if pct_bias_defined(s) else "n/a: mean near zero"
+pct_bias_text = ag.pct_bias_text
 
 
 def report_rows(s, u):
@@ -445,13 +347,14 @@ def report_rows(s, u):
     never differ. One number format: 3 decimals, the slope 4, a sign only where it matters, and
     never '-0.000'."""
     drop = s.get("_dropped", 0)
+    few, na = ag._report_few(s), ag.NA_FEW        # CT-R3 F7: below 5 pairs r, ICC, slope are not given
     rows = [
-        ("n pairs", "%d (of %d rows; %d dropped: a value missing or not a number)"
-         % (s["n"], s.get("_rows", s["n"]), drop) if drop else "%d" % s["n"]),
-        ("Pearson r (p)", "%s (%s)" % (_num(s["r"], "%.3f"), ag._pfmt(s["pearson_p"]))),
-        ("R²", _num(s["r2"], "%.3f")),
-        ("ICC(A,1) [95% CI]", icc_cell(s)),
-        ("Lin's CCC", _num(s["ccc"], "%.3f")),
+        ("n pairs", "%d (of %d rows; %d dropped: %s)" % (s["n"], s.get("_rows", s["n"]), drop, ag.DROP_REASON)
+         if drop else "%d" % s["n"]),
+        ("Pearson r (p)", na if few else "%s (%s)" % (_num(s["r"], "%.3f"), ag._pfmt(s["pearson_p"]))),
+        ("R²", na if few else _num(s["r2"], "%.3f")),
+        ("ICC(A,1) [95% CI]", na if few else icc_cell(s)),
+        ("Lin's CCC", na if few else _num(s["ccc"], "%.3f")),
         ("mean bias (%s)" % u, "%s (%s)" % (_signed(s["bias"], 3), pct_bias_text(s))),
         ("bias vs 0 (paired t)", "t = %s, %s" % (_num(s["t_stat"], "%.2f"), ag._pstr(s["t_p"]))),
         ("95% limits of agreement", "%s to %s %s (bias ± 1.96 SD)"
@@ -464,10 +367,10 @@ def report_rows(s, u):
     rows += [
         ("%s95%% CI of each limit" % ("approximate " if s["n"] < ag.SMALL_N else ""),
          "±%s %s (Bland & Altman 1999)" % (_num(s.get("loa_ci_halfwidth"), "%.3f"), u)),
-        ("proportional bias (difference ~ mean)", "slope %s, %s" % (
+        ("proportional bias (difference ~ mean)", na if few else "slope %s, %s" % (
             _signed(s.get("ba_slope"), 4), ag._pstr(s.get("ba_slope_p", float("nan"))))),
         ("RMSE / MAE (%s)" % u, "%s / %s" % (_num(s["rmse"], "%.3f"), _num(s["mae"], "%.3f"))),
-        ("regression (tool on ref)", "y = %s x %s  (slope 1.0 = no proportional bias)"
+        ("regression (tool on ref)", na if few else "y = %s x %s  (slope 1.0 = no proportional bias)"
          % (_num(s["slope"], "%.3f"), _signed(s["intercept"], 3))),
     ]
     return rows
@@ -497,11 +400,8 @@ def labels(opts):
 
 
 def sentence_of(s, unit, what, label_tool, label_manual):
-    """The paste-ready sentence: the engine's (word for word, the CLI's), except that a
-    percentage bias over a near-zero mean is left out (CT-R2 N9; the engine's own rule that a
-    statistic missing from `s` leaves its clause out)."""
-    if not pct_bias_defined(s):
-        s = dict(s, pct_bias=float("nan"))
+    """The paste-ready sentence: the engine's, word for word (the CLI's). CT-R3 F2: the
+    near-zero-mean rule for the percentage bias is the engine's own now."""
     return ag.report_sentence(s, unit, resolved_what(what), label_tool, label_manual)
 
 
@@ -541,15 +441,10 @@ def zip_bytes(df, tool, manual, opts, src_name=None, src_bytes=None):
                         if opts.get(k) and safe[k] != opts[k]:
                             txt = txt.replace(safe[k], opts[k])
                     z.writestr(fn, txt)
-                elif fn.startswith("agreement_stats") and fn.endswith(".csv") and not pct_bias_defined(s_screen):
-                    st = pd.read_csv(p)
-                    st["pct_bias"] = float("nan")                 # CT-R2 N9: blank, not -15304.7
-                    z.writestr(fn, st.to_csv(index=False))
                 elif fn.startswith("run_config") and fn.endswith(".json"):
                     cfg = json.load(open(p, encoding="utf-8"))
                     cfg["data"] = src_name or "example data"
-                    if not pct_bias_defined(s_screen) and isinstance(cfg.get("stats"), dict):
-                        cfg["stats"]["pct_bias"] = None
+                    cfg["rows_in_file"], cfg["rows_dropped"] = s_screen["_rows"], s_screen["_dropped"]
                     z.writestr(fn, json.dumps(cfg, indent=2, default=float))
                 else:
                     z.write(p, fn)
@@ -569,6 +464,9 @@ def _report_like_screen(txt, s, s_run, unit, what, safe):
     mine = sentence_of(s, unit, what, safe["label_tool"], safe["label_manual"])
     if eng != mine:
         txt = txt.replace(eng, mine)
+    dropped = ag.drop_text(s.get("_dropped", 0), s.get("_rows", 0))
+    if dropped and "_%s._" % dropped not in txt:                 # CT-R3 F8: the report says it too
+        txt = txt.replace("| statistic | value |", "_%s._\n\n| statistic | value |" % dropped, 1)
     return _NEG_ZERO.sub(r"+\1", txt)
 
 
@@ -583,7 +481,11 @@ CSS = """
 pre.shiny-text-output, .shiny-text-output { white-space: pre-wrap; word-break: break-word; }
 .ct-fig img { width: 100%; height: auto; display: block; }
 .ct-msg { white-space: pre-wrap; }
-a.shiny-download-link.ct-off { pointer-events: none; opacity: .45; }
+a.shiny-download-link.ct-off { opacity: .45; cursor: not-allowed; }
+#ct_dl_msg { position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 2000;
+             max-width: min(34rem, 92vw); padding: .6rem .9rem; border-radius: 8px; display: none;
+             background: #7f1d1d; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+a.ct-full { font-size: .85rem; }
 @media (max-width: 575.98px) {
   h1.bslib-page-title { white-space: normal; font-size: 1.15rem; }
   html body div.bslib-sidebar-layout.bslib-sidebar-layout { display: flex !important; flex-direction: column;
@@ -593,11 +495,33 @@ a.shiny-download-link.ct-off { pointer-events: none; opacity: .45; }
 }
 """
 JS = """
-Shiny.addCustomMessageHandler('ct_downloads', function(ok) {
+/* CT-R3 F5: a blocked download says why instead of starting and cancelling */
+var ctDlMsg = '';
+Shiny.addCustomMessageHandler('ct_downloads', function(m) {
+  ctDlMsg = m.ok ? '' : m.msg;
   document.querySelectorAll('a.shiny-download-link').forEach(function(a) {
-    a.classList.toggle('ct-off', !ok); a.setAttribute('aria-disabled', ok ? 'false' : 'true');
+    a.classList.toggle('ct-off', !m.ok); a.setAttribute('aria-disabled', m.ok ? 'false' : 'true');
   });
 });
+document.addEventListener('click', function(e) {
+  var a = e.target.closest && e.target.closest('a.shiny-download-link.ct-off');
+  if (!a) return;
+  e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+  var box = document.getElementById('ct_dl_msg');
+  if (!box) { box = document.createElement('div'); box.id = 'ct_dl_msg'; box.setAttribute('role', 'alert');
+              document.body.appendChild(box); }
+  box.textContent = ctDlMsg || 'The downloads are off.'; box.style.display = 'block';
+  clearTimeout(box._t); box._t = setTimeout(function() { box.style.display = 'none'; }, 7000);
+}, true);
+/* CT-R3 F11: "open full size" shows the preview at its own size in a new tab (at phone width the
+   figure text is too small to read in the page) */
+function ctOpenFull(a) {
+  var img = a.closest('.tab-pane').querySelector('.ct-fig img'); if (!img) return false;
+  fetch(img.src).then(function(r) { return r.blob(); }).then(function(b) {
+    window.open(URL.createObjectURL(b), '_blank');
+  });
+  return false;
+}
 /* CT-R2 N14: "Load example data" empties the file box (it kept the old file's name) */
 Shiny.addCustomMessageHandler('ct_clear_file', function(m) {
   var f = document.getElementById(m.id); if (!f) return;
@@ -620,6 +544,8 @@ def _fig_tab(k):
         FIGURES[k][0],
         # CT-R1 F7: the preview IS the PNG download, shown at the figure's own aspect
         ui.div(ui.output_ui("fig" if k == "both" else "fig_" + k), class_="ct-fig"),
+        ui.tags.a("open full size", href="#", class_="ct-full", onclick="return ctOpenFull(this)",
+                  title="Open the figure at its own size in a new tab"),
         ui.div(ui.download_button("dl_%spng" % pre, "PNG"),
                ui.download_button("dl_%ssvg" % pre, "SVG (editable)"),
                ui.download_button("dl_%spdf" % pre, "PDF (editable)"),
@@ -678,10 +604,21 @@ def server(input, output, session):
     source = reactive.value((None, None))
     anyway = reactive.value(False)           # CT-R2 N1: "Compare anyway" (never kept across files)
 
-    def _set(df, nt, name, data):
-        raw.set(df); note.set(nt); source.set((name, data)); load_error.set("")
+    def _reset_gates():
+        """CT-R3 F1/F4: “Compare anyway” and “Convert area” are decisions about ONE pair of
+        columns: a new file, “Load example data” and a change of the chosen pair all reset them."""
         anyway.set(False)
         ui.update_checkbox("compare_anyway", value=False)
+        ui.update_checkbox("convert_area", value=False)
+
+    def _set(df, nt, name, data):
+        raw.set(df); note.set(nt); source.set((name, data)); load_error.set("")
+        _reset_gates()
+
+    @reactive.effect
+    @reactive.event(input.tool, input.manual, ignore_init=True)
+    def _pair_changed():
+        _reset_gates()
 
     @reactive.effect
     @reactive.event(input.compare_anyway)
@@ -759,8 +696,9 @@ def server(input, output, session):
         return effective_unit(input.convert_area(), input.unit())
 
     def _blocked():
-        """CT-R2 N1: an area compared with a diameter: no downloads unless 'Compare anyway'."""
-        return downloads_blocked(_in("tool"), _in("manual"), anyway.get())
+        """CT-R2 N1 / CT-R3 F1: an area compared with a diameter, or “Convert area” on columns that
+        are not both areas: no downloads unless 'Compare anyway'."""
+        return downloads_blocked(_in("tool"), _in("manual"), anyway.get(), raw.get(), input.convert_area())
 
     def _open():
         """Raised inside a download handler while the downloads are off."""
@@ -776,6 +714,8 @@ def server(input, output, session):
         out = [ui.p(compared_text(t, m, input.convert_area(), _unit()), class_="small text-muted mb-1")]
         if mixed_quantities(t, m):
             out.append(ui.input_checkbox("compare_anyway", "Compare anyway (area vs diameter)", on))
+        elif convert_problem(raw.get(), t, m, input.convert_area()):
+            out.append(ui.input_checkbox("compare_anyway", "Compare anyway (Convert area on non-area columns)", on))
         return ui.TagList(*out)
 
     @reactive.calc
@@ -802,7 +742,9 @@ def server(input, output, session):
 
     @reactive.effect
     async def _downloads_enabled():
-        await session.send_custom_message("ct_downloads", "ok" in result() and not _blocked())
+        await session.send_custom_message("ct_downloads", {"ok": "ok" in result() and not _blocked(),
+                                                             "msg": BLOCKED_MESSAGE if "ok" in result()
+                                                             else "There is no result to download yet."})
 
     def _opts():
         return {"label_tool": input.label_tool(), "label_manual": input.label_manual(),
@@ -825,16 +767,20 @@ def server(input, output, session):
             out.append(ui.div("Cannot compare these columns: " + r["error"], class_="alert alert-warning ct-msg"))
         elif "ok" in r:
             s = r["ok"]
+            cp = convert_problem(raw.get(), _in("tool"), _in("manual"), input.convert_area())
             if _blocked():
-                out.append(ui.div(MIXED_WARNING, class_="alert alert-danger ct-msg"))
-            elif mixed_quantities(_in("tool"), _in("manual")):
-                out.append(ui.div("Warning: an area is being compared with a diameter (you ticked "
-                                  "“Compare anyway”).", class_="alert alert-warning ct-msg small"))
+                out.append(ui.div(MIXED_WARNING if mixed_quantities(_in("tool"), _in("manual")) else cp,
+                                  class_="alert alert-danger ct-msg"))
+            elif mixed_quantities(_in("tool"), _in("manual")) or cp:
+                out.append(ui.div("Warning: %s (you ticked “Compare anyway”)." % (
+                    "an area is being compared with a diameter" if mixed_quantities(_in("tool"), _in("manual"))
+                    else "“Convert area” is applied to columns that are not both areas"),
+                    class_="alert alert-warning ct-msg small"))
             for w in column_warnings(raw.get(), _in("tool"), _in("manual"), input.convert_area()):
                 out.append(ui.div(w, class_="alert alert-warning ct-msg small"))
             line = "File: %s %d pairs used" % (note.get(), s["n"])
             if s.get("_dropped"):
-                line += "; %d of %d rows dropped (a value missing or not a number)" % (s["_dropped"], s["_rows"])
+                line += "; " + ag.drop_text(s["_dropped"], s["_rows"])
             out.append(ui.div(line + ".", class_="alert alert-light ct-msg small"))
             if not input.convert_area() and (is_area(_in("tool", "")) or is_area(_in("manual", ""))):
                 out.append(ui.div("These are AREA columns, compared as areas (%s). Tick “Columns are AREA "

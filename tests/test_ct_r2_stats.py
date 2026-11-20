@@ -257,7 +257,7 @@ def test_N8_icc_graded_on_the_interval_in_both_copies():
     for mod in (cli_ag, app_ag):
         s = mod.full_stats(tool, ref)
         sent = mod.report_sentence(s, "mm", "plaque diameters")
-        want = ("ICC(A,1) = %.3f (95%% CI %.3f-%.3f): %s agreement, graded on the interval (Koo & Li 2016)"
+        want = ("ICC(A,1) = %.3f (95%% CI %.3f to %.3f): %s agreement, graded on the interval (Koo & Li 2016)"
                 % (s["icc"], s["icc_lo"], s["icc_hi"], cli_ag.icc_grade_interval(s["icc_lo"], s["icc_hi"])))
         assert want in sent
         assert "(%s agreement)" % cli_ag.icc_grade(s["icc"]) not in sent
@@ -268,11 +268,11 @@ def test_N8_no_grade_without_an_interval_and_no_verdict_below_5_pairs():
     s = cli_ag.full_stats(tool, ref)
     sent = cli_ag.report_sentence(s, "mm", "plaque diameters")
     assert sent.startswith("With only 4 pairs (too few pairs for a verdict), plaque diameters measured with "
-                           "Plaque Toolkit were compared with Fiji / ImageJ (n = 4): Pearson r = ")
-    for verdict in ("agreed", "appeared to agree", "did NOT", "interchangeably", "correlated",
-                    "excellent", "good agreement", "poor agreement"):
-        assert verdict not in sent
-    assert "n too small for an interval, so no agreement grade" in sent
+                           "Plaque Toolkit were compared with Fiji / ImageJ (n = 4): mean bias ")
+    for verdict in ("agreed", "appeared to agree", "did NOT", "did not", "interchangeably", "correlated",
+                    "excellent", "good agreement", "poor agreement", "ICC(A,1) =", "Pearson r =", "p ="):
+        assert verdict not in sent                       # CT-R3 F7: descriptive numbers only below 5 pairs
+    assert "SD of the differences" in sent and "differences from" in sent
     # a poor ICC from 3 pairs: still numbers only
     s3 = cli_ag.full_stats([1.0, 2.0, 1.5], [1.6, 1.2, 1.9])
     assert "cannot be used interchangeably" not in cli_ag.report_sentence(s3)
@@ -283,14 +283,14 @@ def test_N8_proportional_bias_clause_and_small_n_power():
     s = cli_ag.full_stats(tool, ref)
     assert s["ba_slope_p"] >= 0.05
     sent = cli_ag.report_sentence(s, "mm", "plaque diameters")
-    assert ("No proportional bias was detected (Bland-Altman slope %+.3f, %s; with 8 pairs there is "
-            "little power to detect one)." % (s["ba_slope"], cli_ag._pstr(s["ba_slope_p"]))) in sent
+    assert ("There is no evidence of a proportional bias (Bland-Altman slope %+.3f, %s; with 8 pairs "
+            "there is little power to detect one)." % (s["ba_slope"], cli_ag._pstr(s["ba_slope_p"]))) in sent
     assert "did not depend on plaque size" not in sent
     assert "approximate 95% CI" in sent                          # N11: LoA limits below 10 pairs
     tool, ref = _pairs(30)
     s = cli_ag.full_stats(tool, ref)
     sent = cli_ag.report_sentence(s)
-    assert "No proportional bias was detected (Bland-Altman slope %+.3f, %s)." % (
+    assert "There is no evidence of a proportional bias (Bland-Altman slope %+.3f, %s)." % (
         s["ba_slope"], cli_ag._pstr(s["ba_slope_p"])) in sent
     assert "approximate 95% CI" not in sent and ", 95% CI)" in sent
 
