@@ -149,17 +149,28 @@ def _numbers(series):
 
 def _read_text_table(path):
     """Read a CSV / TSV the way it was typed: every cell as text (labels such as None, NA, 007,
-    1.0 stay labels), delimiter , ; or tab sniffed from the header, lines starting with # skipped.
-    Raises ValueError with a plain message for files that are not text tables (binary, JSON,
-    empty). Pandas only, so the Light build (no SciPy, no stats engine) can compile and load
-    studies too (CT-R1 F5/F6)."""
+    1.0 stay labels), delimiter , ; or tab sniffed from the header. A line starting with # is a
+    comment ONLY before the header row; after it, a row whose first cell starts with # is data
+    (CT-R2 F2: a sample named "#3 phage" used to vanish on Load study -- the same rule as the
+    statistics engine and the R app). Raises ValueError with a plain message for files that are
+    not text tables (binary, JSON, empty). Pandas only, so the Light build (no SciPy, no stats
+    engine) can compile and load studies too (CT-R1 F5/F6).
+
+    df.attrs["line_numbers"] holds the file line (1-based) of every data row, so a refusal can
+    name the line (CT-R2 F5)."""
     name = os.path.basename(str(path))
     with open(path, "rb") as fh:
         raw = fh.read()
     if b"\x00" in raw[:4096]:
         raise ValueError("%s is not a text table (it is a binary file)." % name)
     text = raw.decode("utf-8-sig", errors="replace")
-    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    lines, line_no = [], []
+    for i, ln in enumerate(text.splitlines(), start=1):
+        if not ln.strip():
+            continue
+        if not lines and ln.lstrip().startswith("#"):         # a comment above the header
+            continue
+        lines.append(ln); line_no.append(i)
     if not lines:
         raise ValueError("%s is empty (no header line)." % name)
     if lines[0].lstrip()[:1] in ("{", "["):
@@ -182,7 +193,36 @@ def _read_text_table(path):
     df.columns = [str(c).strip() for c in df.columns]
     for c in df.columns:
         df[c] = df[c].astype(str).str.strip()
+    # one physical line per row unless a quoted cell spans lines; then fall back to row numbers
+    df.attrs["line_numbers"] = line_no[1:] if len(line_no) - 1 == len(df) else None
     return df
+
+
+def _row_line(df, i):
+    """'line 7' (the file line of data row i) or 'row 6' when the line is not known."""
+    ln = (df.attrs or {}).get("line_numbers")
+    return ("line %d" % ln[i]) if ln and i < len(ln) else ("row %d" % (i + 1))
+
+
+def _write_csv(df, path):
+    """Write a table the tab will read back, quoting a FIRST cell that starts with '#'
+    (CT-R2 F2): '"#3 phage",…' starts with a quote, so no reader -- this tab, the statistics
+    engine or the R app, before or after their own comment rule changed -- takes the row for a
+    comment line."""
+    text = df.to_csv(index=False)
+    out, inq = [], False
+    for ln in text.splitlines(keepends=True):
+        if not inq and ln.startswith("#"):
+            first, sep, rest = ln.partition(",")              # an unquoted first cell has no comma
+            if sep:
+                ln = '"%s",%s' % (first, rest)
+            else:
+                ln = '"%s"%s' % (first.rstrip("\r\n"), ln[len(first.rstrip("\r\n")):])
+        if ln.count('"') % 2:
+            inq = not inq                                      # a quoted cell spans lines
+        out.append(ln)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write("".join(out))
 
 
 def _round_df(df, n=4):
@@ -1214,7 +1254,7 @@ class StudyTab(QWidget):
             return
         if not os.path.splitext(path)[1]:
             path += ".csv"
-        self._study_frame().to_csv(path, index=False)
+        _write_csv(self._study_frame(), path)
         self._dirty = False
         self._status("Study saved: %s" % path, 5000)
 
@@ -1969,7 +2009,7 @@ class StudyTab(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save compiled data (wide)", "plaque_compiled_wide.csv", "CSV (*.csv)")
         if path:
-            self._tidy_frame().to_csv(path, index=False)
+            _write_csv(self._tidy_frame(), path)
             self._status("Wide per-plaque data saved: %s" % path, 5000)
 
     def _save_data_long(self):
@@ -1978,7 +2018,7 @@ class StudyTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save compiled data (long, standalone-ready)",
                                               "plaque_compiled_long.csv", "CSV (*.csv)")
         if path:
-            self._long_frame().to_csv(path, index=False)
+            _write_csv(self._long_frame(), path)
             self._status("Long-format data saved (drops into the standalone app): %s" % path, 6000)
 
     def _export_zip(self):
@@ -2054,9 +2094,9 @@ class StudyTab(QWidget):
                     with open(fp, "w", encoding="utf-8") as fh:
                         json.dump(cfg, fh, indent=2, default=str)
             # also drop the standalone-ready long + wide CSVs and the study file in the bundle
-            self._long_frame().to_csv(os.path.join(out, "compiled_long.csv"), index=False)
-            tidy.to_csv(os.path.join(out, "compiled_wide.csv"), index=False)
-            self._study_frame().to_csv(os.path.join(out, "study.csv"), index=False)
+            _write_csv(self._long_frame(), os.path.join(out, "compiled_long.csv"))
+            _write_csv(tidy, os.path.join(out, "compiled_wide.csv"))
+            _write_csv(self._study_frame(), os.path.join(out, "study.csv"))
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
                 for root, _dirs, files in os.walk(out):
                     for f in files:
