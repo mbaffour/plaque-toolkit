@@ -93,6 +93,26 @@ _MM_RE = re.compile(r"(^|[^a-z])mm(2|²|\^2)?([^a-z0-9]|$)")
 _NOT_MM_RE = re.compile(r"px|pxl|pix|µm|um\b|micro|nm\b|cm\b")
 
 
+def _drop_unsized(df):
+    """(rows whose size may enter a summary, how many were left out and why) -- CT-R1 detection
+    D10a: plaques flagged CORE? (outlined at the dark centre only) or NO_SIZE (a split piece
+    whose size is not reliable) count on their plate, but their diameter is another edge
+    definition, so the size statistics leave them out. A table without a QC_FLAG column is
+    returned as it is (files from before the flag, or from other tools)."""
+    if df is None or "QC_FLAG" not in df.columns:
+        return df, {"core": 0, "no_size": 0}
+    import plaque_qc
+    flags = df["QC_FLAG"].tolist()
+    keep = [plaque_qc.size_ok(f) for f in flags]
+    return df[keep], plaque_qc.size_left_out_counts(flags)
+
+
+def _left_out_text(counts):
+    import plaque_qc
+    phrase = plaque_qc.left_out_phrase(counts)
+    return ("; %s were left out" % phrase) if phrase else ""
+
+
 def _diam_col(df):
     """The diameter-in-millimetres column of a per-plaque table (case-insensitive), or None."""
     for c in df.columns:
@@ -853,6 +873,7 @@ class StudyTab(QWidget):
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
             self._warn("Couldn't find a diameter-in-mm column on the current measurement."); return
+        df, left_out = _drop_unsized(df)            # CT-R1 detection D10a
         diam = pd.to_numeric(df[dc], errors="coerce").dropna().tolist()
         area = pd.to_numeric(df[ac], errors="coerce").dropna().tolist() if ac else []
         # CT-R1 F25: clicking twice used to add the same plate twice (pseudo-replicates)
@@ -871,7 +892,8 @@ class StudyTab(QWidget):
         self._add_plate(idx, diam, area, source=src)
         self._refresh_tree(); self._select_sample(idx)
         s = self._samples[idx]
-        self._status("Added a plate to '%s' (%d plaques)." % (s["group"], len(diam)), 5000)
+        self._status("Added a plate to '%s' (%d plaques%s)." % (s["group"], len(diam),
+                                                                _left_out_text(left_out)), 5000)
 
     def _add_csvs(self):
         idx = self._target_sample_index()
@@ -882,16 +904,19 @@ class StudyTab(QWidget):
         if not paths:
             return
         added, problems = 0, []
+        left = {"core": 0, "no_size": 0}
         for p in paths:
             r = self._parse_csv(p, problems)
             if r is None:
                 continue
             # CT-R1 F17: plate ids are plate1..n within the sample; the file name is the source
             self._add_plate(idx, r[0], r[1], source=os.path.basename(p))
+            for k in left:
+                left[k] += r[2][k]
             added += 1
         if added:
             self._refresh_tree(); self._select_sample(idx)
-            self._status("Added %d replicate plate(s)." % added, 5000)
+            self._status("Added %d replicate plate(s)%s." % (added, _left_out_text(left)), 5000)
         if problems:
             self._warn(" ".join(problems))
 
@@ -914,6 +939,7 @@ class StudyTab(QWidget):
             df = _read_text_table(path)
         except (ValueError, OSError) as e:
             return fail("%s — skipped." % e)
+        df, left_out = _drop_unsized(df)            # CT-R1 detection D10a
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
             numeric = [c for c in df.columns if _numbers(df[c])[1] == 0 and _numbers(df[c])[0].notna().any()
@@ -946,7 +972,7 @@ class StudyTab(QWidget):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if q != QMessageBox.Yes:
                 return fail("%s skipped: it has no plaques." % name)
-        return diam, area
+        return diam, area, left_out
 
     def _import_assign(self):
         """Pick many plate CSVs and map each (one plate) to a sample in one dialog → real replicates."""
@@ -960,7 +986,7 @@ class StudyTab(QWidget):
             if r is None:
                 continue
             parsed.append({"path": p, "stem": os.path.splitext(os.path.basename(p))[0],
-                           "n": len(r[0]), "diam": r[0], "area": r[1]})
+                           "n": len(r[0]), "diam": r[0], "area": r[1], "left_out": r[2]})
         if problems:
             self._warn(" ".join(problems))
         if not parsed:
@@ -968,6 +994,7 @@ class StudyTab(QWidget):
         dlg = _AssignDialog(self, parsed, self._samples)
         if dlg.exec() != QDialog.Accepted:
             return
+        self._import_left_out = {k: sum(p["left_out"][k] for p in parsed) for k in ("core", "no_size")}
         self._apply_assignments(dlg.rows())
 
     def _apply_assignments(self, rows):
@@ -988,7 +1015,10 @@ class StudyTab(QWidget):
             added += 1
         if added:
             self._refresh_tree()
-            self._status("Imported %d plate(s) across %d sample(s)." % (added, len(self._samples)), 6000)
+            left = getattr(self, "_import_left_out", None) or {}
+            self._import_left_out = None
+            self._status("Imported %d plate(s) across %d sample(s)%s." % (
+                added, len(self._samples), _left_out_text(left)), 6000)
         return added
 
     def _next_auto_rep(self, group, subgroup=""):

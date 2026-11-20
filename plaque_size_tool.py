@@ -111,10 +111,11 @@ def parse_args():
                          "--published. Use this to reproduce a number produced by the upstream "
                          "tool itself; see docs/UPSTREAM_EXACT.md. Cannot read HEIC.")
     ap.add_argument("--multiscale", dest="multiscale", required=False, action="store_true",
-                    help="opt-in: run the detector at BOTH plaque-size scales (standard and -small) "
-                         "and merge them: every standard plaque keeps its standard outline and size, "
-                         "and -small plaques are added only outside them (SOURCE = small). Adds a "
-                         "SOURCE column; ignored in --published mode (the desktop app's 'Auto')")
+                    help="opt-in: the desktop app's 'Auto' plaque size, by the same code: both "
+                         "scales (standard and -small), every haloed plaque measured at the standard "
+                         "halo edge, touching clusters split (SOURCE auto / small / split / "
+                         "standard-relaxed; with --qc the app's flags incl. SPLIT and CORE?), "
+                         "detections outside the dish dropped. Ignored in --published mode")
     ap.add_argument("--qc", dest="qc", required=False, action="store_true",
                     help="add QC_FLAG / QC_REASON columns (EDGE, LARGE?, MERGED?, NESTED, TINY, BRIGHT, "
                          "OVERLAP) to every CSV; purely additive -- no measurement changes "
@@ -802,7 +803,8 @@ def main():
     if args.get('multiscale') and use_published:
         print("(--multiscale is ignored in --published mode: the published algorithm runs one pass)")
     elif multiscale:
-        print("(multiscale ON: standard and -small passes merged; standard plaques keep their size)")
+        print("(multiscale ON: the app's Auto plaque size -- standard and -small passes, halo edges, "
+              "clusters split; standard plaques keep their size)")
         if small_plaques:
             print("(-small is not needed with --multiscale: the -small pass is part of it)")
             small_plaques = False
@@ -925,11 +927,29 @@ def _process_one(image_path, plate_size, run_images, args):
         else:
             green_df_copy['MEAN_COLOUR'] = 0
 
+        ms_plaques = None
         if multiscale and not use_published:
-            green_df_copy = _merge_small_pass(image, plate_size, plate_df, green_df_copy)
+            green_df_copy, ms_plaques, ms_plate = _merge_small_pass(
+                image, orig_image, high_contrast, plate_size, plate_df, green_df_copy)
         green_df_copy = renumerate_df(green_df_copy)
         green_df_copy = add_turbidity(orig_image, plate_df, green_df_copy)
-        if args.get('qc') and len(green_df_copy):
+        if args.get('qc') and len(green_df_copy) and ms_plaques is not None:
+            # --multiscale --qc: flag the rows with the app's own function on the same plaque
+            # dicts, so the CSV's QC_FLAG equals the app's table (CT-R1 detection D10b)
+            try:
+                import plaque_qc
+                import plaque_scales
+                circs = [plaque_scales.circularity(d) for d in ms_plaques]
+                res = plaque_qc.flags_for_plaque_dicts(
+                    ms_plaques, image_size, plate=ms_plate, circularities=circs,
+                    gray=cv2.cvtColor(orig_image, cv2.COLOR_BGR2GRAY),
+                    mm_per_px=last_calibration.get('mm_per_px'))
+                green_df_copy = green_df_copy.copy()
+                green_df_copy['QC_FLAG'] = [f for f, _ in res]
+                green_df_copy['QC_REASON'] = [w for _, w in res]
+            except Exception as exc:             # QC must never break a measurement run
+                print("  (QC flags skipped: %s)" % exc)
+        elif args.get('qc') and len(green_df_copy):
             try:
                 import plaque_qc
                 dish = None
@@ -978,21 +998,24 @@ def _process_one(image_path, plate_size, run_images, args):
         print(str(len(green_df_copy)) + ' plaques were found\n')
 
 
-multiscale = False    # --multiscale (CT-R1 detection D1); never on under --published
+multiscale = False    # --multiscale = the app's Auto (CT-R1 detection D1/D10b); never under --published
 
 
-def _merge_small_pass(image, plate_size, plate_df, green_df):
-    """--multiscale: run the -small pass on the same (dimmed) image and ADD its plaques that lie
-    outside every standard plaque, with the app's rule (plaque_gui.merge_scales). The standard
-    rows are returned unchanged (their sizes are exactly the default run's), the added rows are
-    sized with the same standard-pass dish and marked SOURCE = small."""
+def _merge_small_pass(image, orig_image, high_contrast, plate_size, plate_df, green_df):
+    """--multiscale = the desktop app's Auto plaque size, run by the SAME code
+    (plaque_scales.auto_plaques + drop_outside_dish; CT-R1 detection D10b): the -small pass on
+    the same dimmed image, the dual-scale merge, every haloed plaque measured at the standard
+    threshold's halo edge (clusters split: SOURCE split / standard-relaxed; a halo that cannot be
+    separated keeps its core outline, SOURCE small, CORE?), detections outside the dish dropped.
+    Standard rows are returned unchanged. Returns (rows, plaque dicts in row order, plate dict)
+    so --qc can flag the rows exactly as the app does. Only imported with --multiscale."""
     global small_plaques
-    import plaque_gui
+    import plaque_scales as ps
     prev = small_plaques
     small_plaques = True
     try:
         b2, _h2, clr2 = process_image(image, 2.5)
-        g2, _r2, _o2, _p2 = filter_contours(get_contours(b2), b2.shape)
+        g2, _r2, _o2, p2 = filter_contours(get_contours(b2), b2.shape)
     finally:
         small_plaques = prev
     g2 = check_duplicate_plaques(g2.copy())
@@ -1003,17 +1026,38 @@ def _merge_small_pass(image, plate_size, plate_df, green_df):
     green_df = green_df.copy()
     if 'SOURCE' not in green_df.columns:
         green_df['SOURCE'] = 'auto'
-    if not len(g2):
-        return green_df
-    std = plaque_gui._plaque_dicts(green_df)
-    sml = plaque_gui._plaque_dicts(g2)
-    for i, p in enumerate(sml):
-        p['_row'] = i
-    _merged, _n = plaque_gui.merge_scales(std, sml)
-    rows = [p['_row'] for p in _merged[len(std):]]
-    add = g2.iloc[rows].copy()
-    add['SOURCE'] = 'small'
-    return pd.concat([green_df, add], ignore_index=True)
+    # the app's dish rule: roundest large contour of the standard pass, else of the small pass
+    plate = None
+    for pdf in (plate_df, p2):
+        idx = ps.roundest_dish_idx(pdf)
+        if idx is not None:
+            plate = ps.plate_from_row(pdf, idx)
+            break
+    std = ps._plaque_dicts(green_df)
+    sml = ps._plaque_dicts(g2)
+    for i, d in enumerate(std):
+        d['_pass'], d['_row'] = 'standard', i
+    for i, d in enumerate(sml):
+        d['_pass'], d['_row'] = 'small', i
+    plaques, _counts = ps.auto_plaques(std, sml, high_contrast, plate, orig_image)
+    plaques, _n_out = ps.drop_outside_dish(plaques, plate, orig_image.shape)
+    rows = []
+    for d in plaques:
+        if d.get('_pass') == 'standard':
+            row = green_df.iloc[[d['_row']]].copy()
+        elif d.get('_pass') == 'small':
+            row = g2.iloc[[d['_row']]].copy()
+            row['SOURCE'] = d['source']
+        else:                                   # a halo region: measured like a standard plaque
+            row = prepare_df([np.asarray(d['contour'], dtype=np.int32).reshape(-1, 1, 2)])
+            row = calculate_size_mm(plate_size, reindex(row), plate_df)
+            row['MEAN_COLOUR'] = 0.0
+            row['SOURCE'] = d['source']
+        rows.append(row)
+    cols = list(green_df.columns)
+    out = (pd.concat(rows, ignore_index=True) if rows else green_df.iloc[0:0].copy())
+    out = out[[c for c in cols if c in out.columns] + [c for c in out.columns if c not in cols]]
+    return out, plaques, plate
 
 
 def renumerate_df(df):

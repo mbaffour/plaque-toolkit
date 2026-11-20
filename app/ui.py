@@ -1036,6 +1036,16 @@ class MeasureTab(QWidget):
         if self.exclude_overlaps.isChecked() and "OVERLAP" in df.columns:
             stats_df = df[df["OVERLAP"] != "yes"]
         n_excl = n - len(stats_df)
+        # CT-R1 detection D10a: CORE? / NO_SIZE plaques count but stay out of the size summary
+        if "QC_FLAG" in stats_df.columns:
+            import plaque_qc
+            flags = stats_df["QC_FLAG"].tolist()
+            out = plaque_qc.size_left_out_counts(flags)
+            if out["core"] or out["no_size"]:
+                stats_df = stats_df[[plaque_qc.size_ok(f) for f in flags]]
+                size_msg = ("Sizes from %d of %d plaques (%s are counted but left out of the "
+                            "size summary)." % (len(stats_df), n, plaque_qc.left_out_phrase(out)))
+                flag = (flag + "  " + size_msg) if flag else size_msg
         if n_excl:
             ov_msg = f"↔ {n_excl} overlapping plaque(s) excluded from the stats."
             flag = (flag + "  " + ov_msg) if flag else ov_msg
@@ -1413,6 +1423,10 @@ PLATE_COLUMNS = {
 BATCH_COLUMNS = {
     "image": ("Image", "Image file name.", None),
     "n_plaques": ("Plaques", "Number of plaques measured on the plate.", "count"),
+    # CT-R1 detection D10a
+    "n_sized": ("Sized", "Plaques whose diameter enters the median / mean: all except those "
+                         "outlined at the dark centre only (CORE?) or split pieces whose size is "
+                         "not reliable (NO_SIZE). Those still count as plaques.", "count"),
     "mm_per_px": ("mm/pixel", "Calibration: millimetres per image pixel (from the dish "
                               "diameter). Empty when no dish was found.", None),
     "median_diam_mm": ("Median (mm)", "Median plaque diameter on the plate, in mm.", None),

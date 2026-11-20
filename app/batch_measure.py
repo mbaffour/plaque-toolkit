@@ -247,8 +247,14 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                                           published=(mode == "published"), plate=plate)
 
             # diameter summary stats over this plate's plaques
-            if len(df):
-                diam = df["DIAMETER_MM"].astype(float)
+            # sizes from size_ok rows only: CORE? / NO_SIZE plaques count but their diameter is
+            # another edge definition / not reliable (CT-R1 detection D10a)
+            import plaque_qc
+            sized = (df[[plaque_qc.size_ok(f) for f in df["QC_FLAG"]]]
+                     if len(df) and "QC_FLAG" in df.columns else df)
+            n_sized = int(len(sized))
+            if len(sized):
+                diam = sized["DIAMETER_MM"].astype(float)
                 median_diam = _safe_float(diam.median())
                 mean_diam = _safe_float(diam.mean())
             else:
@@ -265,6 +271,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             row = {
                 "image": os.path.basename(path),
                 "n_plaques": n_plaques,
+                "n_sized": n_sized,
                 "mm_per_px": _safe_float(ppm),
                 "median_diam_mm": median_diam,
                 "mean_diam_mm": mean_diam,
@@ -290,6 +297,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             plate_rows.append({
                 "image": os.path.basename(path),
                 "n_plaques": None,
+                "n_sized": None,
                 "mm_per_px": None,
                 "median_diam_mm": None,
                 "mean_diam_mm": None,
@@ -306,7 +314,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 progress("%d/%d %s" % (i, N, message))
 
     # ---- assemble + write the combined CSVs ------------------------------ #
-    plate_cols = ["image", "n_plaques", "mm_per_px", "median_diam_mm",
+    plate_cols = ["image", "n_plaques", "n_sized", "mm_per_px", "median_diam_mm",
                   "mean_diam_mm", "axis_ratio", "tilt_flag",
                   "n_edge", "n_overlap", "n_merged", "n_split", "n_core"]   # + CT-R1 D8
     if any("error" in r for r in plate_rows):
@@ -315,7 +323,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # Counts are whole numbers. One failed plate (None) used to turn the whole column into
     # floats, so the CSV and the table read "44.0" and "nan" (CT-R1 F18). The nullable
     # integer type writes 44 and an empty cell.
-    for col in ("n_plaques", "n_edge", "n_overlap", "n_merged", "n_split", "n_core"):
+    for col in ("n_plaques", "n_sized", "n_edge", "n_overlap", "n_merged", "n_split", "n_core"):
         summary_df[col] = pd.array(summary_df[col].tolist(), dtype="Int64")
 
     if all_frames:
