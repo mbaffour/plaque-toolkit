@@ -503,8 +503,8 @@ chk("R2_N7_comments_only_before_header_counted", any(grepl("^3 comment lines bef
 dN2 <- tidy_plaque_data(rN$df, "group", "replicate", "diameter_mm", NULL, "")
 chk("R2_N7_NA_007_hash1_are_sample_names", identical(levels(dN2$group), c("NA", "007", "#1")) && nrow(dN2) == 72, paste(c(levels(dN2$group), nrow(dN2)), collapse = "|"))
 stN2 <- plaque_run_stats(dN2)
-# R value; plaque_stats.py gives the same once its comment rule is changed (parity test: names2)
-chk("R2_N7_names2_three_samples_anova", stN2$test == "one-way ANOVA" && near(stN2$p, 0.000119343700620795, 1e-9), sprintf("%s %.12g", stN2$test, stN2$p))
+# plaque_stats.py gives 0.00011934370062079558 (parity test: names2)
+chk("R2_N7_names2_three_samples_anova", stN2$test == "one-way ANOVA" && near(stN2$p, 0.00011934370062079558, 1e-9), sprintf("%s %.12g", stN2$test, stN2$p))
 nm <- tmp("names_words.csv", c("group,replicate,diameter_mm", paste0(rep(c("None", "nan", "null", "NA"), each = 4), ",p", rep(1:2, 8), ",", c(2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.4, 2.7, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.4, 3.7)),
                                    ",p1,2.2"))
 dW <- tidy_plaque_data(read_plaque_table(nm)$df, "group", "replicate", "diameter_mm", NULL, "")
@@ -653,3 +653,27 @@ testServer(app, {
   chk("R2_N2_no_such_note_for_the_shipped_example", !any(grepl("sample names are long", figure_notes())))
 })
 chk("R2_N2c_capitals_are_wider_than_lowercase", name_width_in("WWWWWWWW", 14) > 1.3 * name_width_in("wwwwwwww", 14))
+
+# ---- final pass: the merged Python wording ---------------------------------------------------------
+stG <- plaque_run_stats(tidy(fx("ct_r2_gate_between.csv")))
+chk("R2_final_gate_sentence_does_not_reject", stG$parametric_used && stG$test == "Welch ANOVA" &&
+      any(grepl("^Every sample has at least 8 plates and Shapiro–Wilk \\(Bonferroni over 3 samples\\) does not reject normality \\(smallest p = 0\\.048, threshold 0\\.05/3 = 0\\.0167\\), so a parametric test is used\\.", stG$notes)),
+    paste(stG$notes, collapse = " | "))
+dRej <- mk8(seed_low); stRej <- plaque_run_stats(dRej)
+chk("R2_final_gate_sentence_rejects", any(grepl("^With at least 8 plates per sample, Shapiro–Wilk \\(Bonferroni over 3 samples\\) rejects normality for A \\(p < 0.001\\) and C \\(p = 0\\.013\\) \\(threshold 0\\.05/3 = 0\\.0167\\), so a rank-based test is used\\.", stRej$notes)),
+    paste(stRej$notes, collapse = " | "))
+stM1 <- plaque_run_stats(tidy(fx("ct_r2_mwu_5v6_noties.csv")), parametric = "nonparametric")
+stM2 <- plaque_run_stats(tidy(fx("ct_r2_mwu_ties.csv")), parametric = "nonparametric")
+chk("R2_final_mannwhitney_exact_without_ties_p", near(stM1$p, 0.017316017316017316, 1e-12) && stM1$p_method == "exact" &&
+      identical(stM1$method_note, "Mann–Whitney U p is exact (no ties, at most 8 per side)."), sprintf("%.12g %s", stM1$p, stM1$method_note))
+chk("R2_final_mannwhitney_asymptotic_with_ties_p", near(stM2$p, 0.025154152614191672, 1e-12) && stM2$p_method == "asymptotic" &&
+      identical(stM2$method_note, "Mann–Whitney U p is asymptotic (normal approximation with tie and continuity correction)."), sprintf("%.12g %s", stM2$p, stM2$method_note))
+chk("R2_final_kruskal_note_asymptotic", any(grepl("^Kruskal–Wallis and Dunn's p are asymptotic \\(chi-squared / normal approximation; with few values per sample they can be far from exact\\)\\.$", stT$notes)))
+spz <- spread_check(list(A = c(2, 2, 2), B = c(2.1, 2.5, 2.9), C = c(3, 3.3, 3.1)), "plates")
+chk("R2_final_zero_spread_advice", grepl("Welch's ANOVA is not an alternative here: A has no spread \\(identical plate-mean values\\)\\.$", spz$note), spz$note %||% "")
+dSt <- tidy(fx("ct_r1_B_unequal.csv"), replicate = "(none)")
+stars_sel <- pairs_to_draw(data.frame(group1 = c("a", "a", "a", "a", "a"), group2 = c("b", "c", "d", "e", "f"), p_adj = c(0.001, NA, 0.2, 0.03, 0.0001),
+                                      signif = p_stars(c(0.001, NA, 0.2, 0.03, 0.0001)), stringsAsFactors = FALSE),
+                           letters[1:6], "auto", "Tukey HSD")
+chk("R2_final_stars_row_na_for_untestable_pair", identical(stars_sel$vsref$labels, c("ref.", "**", "n/a", "ns", "*", "***")) &&
+      grepl("itself is marked ref\\.; n/a = could not be tested, fewer than 2 plates\\)", stars_sel$sentence), stars_sel$sentence %||% "")

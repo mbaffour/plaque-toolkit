@@ -377,8 +377,9 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
   no_group <- is.na(d$group) | !nzchar(d$group)
   d <- d[!no_group, , drop = FALSE]; raw_val <- raw_val[!no_group]
   # CT-R2 N8: a value cell that is text but not a number ("NA", "2.5mm", "-") is "not a number"; only a
-  # cell that is empty (or "nan") is "empty" -- the split plaque_stats.py reports
-  not_num <- !is.finite(d$value) & nzchar(raw_val) & tolower(raw_val) != "nan"
+  # cell that is empty is "empty" -- the split plaque_stats.py reports
+  # (CT-R2, merged Python rule: "NA", "nan", "n/a", "-" are all "not a number")
+  not_num <- !is.finite(d$value) & nzchar(raw_val)
   blank <- !is.finite(d$value) & !not_num
   bad_examples <- utils::head(unique(raw_val[not_num]), 3)
   ok <- is.finite(d$value)
@@ -399,7 +400,7 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
   if (sum(no_group))
     notes <- c(notes, sprintf("%d row%s dropped: no %s label.", sum(no_group), if (sum(no_group) == 1) "" else "s", group))
   if (sum(not_num) + sum(blank)) {
-    why <- sprintf("no numeric %s value", vcol)
+    why <- if (tolower(trimws(vcol)) == "value") "no numeric value" else sprintf("no numeric %s value", vcol)
     if (sum(not_num))
       why <- sprintf("%s (%d not a number, %d empty)", why, sum(not_num), sum(blank))
     notes <- c(notes, sprintf("%d row%s dropped: %s.", sum(not_num) + sum(blank),
@@ -574,12 +575,18 @@ spread_check <- function(groups, unit_word = "plates") {
   ratio <- if (sds[ib] > 0) sds[ia] / sds[ib] else if (sds[ia] > 0) Inf else NA_real_
   rtxt <- if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "Inf"
   note <- NULL
+  # (merged Python rule) Welch's ANOVA is no alternative when a sample has no spread at all
+  flat <- names(g)[sds == 0]
+  advice <- if (length(flat))
+    sprintf("Welch's ANOVA is not an alternative here: %s %s no spread (identical %s values).",
+            if (length(flat) > 1) paste0(paste(flat[-length(flat)], collapse = ", "), " and ", flat[length(flat)]) else flat,
+            if (length(flat) == 1) "has" else "have", if (unit_word == "plates") "plate-mean" else "plaque")
+  else "If you expect the groups to differ in spread, choose Variances: unequal (Welch)."
   # CT-R2 N9: only the samples that can be tested count (a 1-plate sample used to give "With 1 plates")
   if (min(n) < SPREAD_MIN_N)
     note <- sprintf(paste0("ANOVA and Tukey assume the groups have similar spread. With %d %s per group this cannot ",
-                           "be checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to ",
-                           "differ in spread, choose Variances: unequal (Welch)."), min(n),
-                    if (min(n) == 1) sub("s$", "", unit_word) else unit_word, rtxt)
+                           "be checked reliably (largest/smallest SD ratio here: %s). %s"), min(n),
+                    if (min(n) == 1) sub("s$", "", unit_word) else unit_word, rtxt, advice)
   warning <- NULL; p_adj <- NA_real_
   if (!is.na(ratio) && ia != ib) {
     Fv <- if (is.finite(ratio)) ratio^2 else Inf
@@ -636,10 +643,25 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   # as plaque_stats.py.
   use_param <- if (parametric == "auto") { if (min_n < 8) TRUE else all_normal } else parametric == "parametric"
 
-  if (parametric == "auto" && min_n >= 8 && m_norm >= 1)
-    notes <- c(notes, sprintf("Shapiro-Wilk (Bonferroni over %d sample%s) %s normality, so the %s test was used.",
-                              m_norm, if (m_norm == 1) "" else "s", if (all_normal) "does not reject" else "rejects",
-                              if (all_normal) "parametric" else "rank-based"))
+  # the choice, in the words of plaque_stats.py (its CLI option replaced by this app's "Test type" menu)
+  if (parametric == "auto" && min_n >= 8) {
+    uw <- if (unit == "replicate") "plate" else "plaque"
+    sw_how <- sprintf("Shapiro\u2013Wilk (Bonferroni over %d sample%s)", m_norm, if (m_norm == 1) "" else "s")
+    thr <- 0.05 / max(m_norm, 1); thr_txt <- sprintf("threshold 0.05/%d = %.3g", m_norm, thr)
+    ptxt <- function(p) p_eq(p)
+    notes <- c(notes, if (m_norm == 0)
+      sprintf("Every sample has at least 8 %ss; Shapiro\u2013Wilk could not be run (no sample has spread), so a parametric test is used. Override with 'Test type'.", uw)
+    else if (all_normal)
+      sprintf("Every sample has at least 8 %ss and %s does not reject normality (smallest %s, %s), so a parametric test is used. Override with 'Test type'.",
+              uw, sw_how, ptxt(min(normal, na.rm = TRUE)), thr_txt)
+    else {
+      bad <- names(normal)[!is.na(normal) & normal < thr]
+      items <- sprintf("%s (%s)", bad, vapply(normal[bad], ptxt, ""))
+      who <- if (length(bad) > 1) paste0(paste(items[-length(items)], collapse = ", "), " and ", items[length(items)]) else bad
+      sprintf("With at least 8 %ss per sample, %s rejects normality for %s (%s), so a rank-based test is used. Override with 'Test type'.",
+              uw, sw_how, who, if (length(bad) > 1) thr_txt else paste0(ptxt(normal[[bad]]), ", ", thr_txt))
+    })
+  }
   if (unit == "plaque") {
     one <- lev[plates < 2]
     why <- if (requested == "plaque") "The statistical unit was set to 'per plaque'."
@@ -678,10 +700,13 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       # differ in the last bits, which broke mathematical ties (and so KW / Dunn / MWU p-values).
       mw <- mann_whitney(signif(a, 12), signif(b, 12))
       out$test <- "Mann–Whitney U"; out$p <- mw$p
-      if (!is.na(mw$method))
-        out$method_note <- paste0("Mann-Whitney p: ", mw$method, " (exact when the smaller group has 8 or ",
-                                  "fewer values and there are no ties, otherwise the normal approximation ",
-                                  "with continuity correction; the rule SciPy uses).")
+      if (!is.na(mw$method)) {
+        out$p_method <- if (mw$method == "exact") "exact" else "asymptotic"
+        # wording of plaque_stats.py
+        out$method_note <- paste0("Mann\u2013Whitney U p is ",
+          if (mw$method == "exact") "exact (no ties, at most 8 per side)"
+          else "asymptotic (normal approximation with tie and continuity correction)", ".")
+      }
     }
     if (is.nan(out$p)) out$p <- NA_real_
     out$cohens_d <- cohens_d(a, b)
@@ -733,6 +758,9 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       gv <- lapply(gt, signif, digits = 12)           # CT-R2 N3: see Mann-Whitney above
       out$p <- tryCatch(stats::kruskal.test(gv)$p.value, error = function(e) NA_real_)
       padj <- dunn_holm_p(gv)
+      out$p_method <- "asymptotic"
+      notes <- c(notes, paste("Kruskal\u2013Wallis and Dunn's p are asymptotic (chi-squared / normal approximation;",
+                              "with few values per sample they can be far from exact)."))
     }
     if (is.nan(out$p)) out$p <- NA_real_
   } else {
@@ -838,8 +866,9 @@ pairs_to_draw <- function(pw, lev, mode = "auto", posthoc = NA_character_) {
     pv <- pr$p_adj[match(lev[-1], other[pw0$group1 == ref | pw0$group2 == ref])]
     nsig <- sum(!is.na(pv) & pv < 0.05)
     core <- sprintf(paste0("With %d samples each sample is compared with %s only: the stars above each sample give that ",
-                           "comparison (%d of %d with adjusted p < 0.05; %s itself is marked ref.). Every pair is in the ",
-                           "pairwise table."), k, ref, nsig, length(pv), ref)
+                           "comparison (%d of %d with adjusted p < 0.05; %s itself is marked ref.%s). Every pair is in the ",
+                           "pairwise table."), k, ref, nsig, length(pv), ref,
+                    if (any(is.na(pv))) "; n/a = could not be tested, fewer than 2 plates" else "")
     test <- if (is.na(posthoc)) "adjusted p" else paste0(sub("-adjusted", "", posthoc), ", adjusted p")
     empty$vsref <- list(ref = ref, labels = c("ref.", p_stars(pv)))
     empty$note <- paste(core, "Choose 'all pairs' under Comparisons shown to draw every bracket.")
