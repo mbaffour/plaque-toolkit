@@ -468,7 +468,7 @@ def test_median_offers_only_iqr_ci_or_none(st, dialogs):
     assert enabled == {"auto": True, "sem": False, "ci95": True, "sd": False, "iqr": True, "none": True}
     assert st.error_sel.currentData() == "iqr" and st.err.text() == "" and st._last_fig is not None
     st.error_sel.setCurrentIndex(st.error_sel.findData("ci95"))
-    assert "95 % CI of the median" in st.fig_caption.text()
+    assert "bootstrap interval of the median (approximate" in st.fig_caption.text()   # CT-R2 N3: 3 plates
     st.center_sel.setCurrentIndex(st.center_sel.findData("mean"))
     assert all(m.item(i).isEnabled() for i in range(st.error_sel.count()))
 

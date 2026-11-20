@@ -50,8 +50,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import PathPatch
 
-# keep text EDITABLE in vector exports (Illustrator / Inkscape) — for every figure and table
-matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+# Text stays EDITABLE in vector exports (Illustrator / Inkscape): every figure and table is drawn
+# and saved inside matplotlib.rc_context(_FIG_RC / _TABLE_RC). Nothing is set globally: the old
+# module-level rcParams.update changed every later figure of the process (CT-R2 group 8 d).
 
 import scipy
 from scipy import stats as st
@@ -149,6 +150,7 @@ DEFAULTS = {
     "posthoc": "auto",             # auto | dunnett    (Dunnett vs --control; CT-R1 B1)
     "equivalence_margin": None,    # TOST margin in data units (CT-R1 B4)
     "log_y_drop_nonpositive": False,
+    "detect": None,                # planned power: the difference to detect, data units (CT-R2)
     "legend_key": True,            # write <figure>_legend_key.<fmt> + <figure>_legend_text.txt
 }
 
@@ -208,9 +210,13 @@ def _numbers(series):
         return pd.to_numeric(series, errors="coerce").astype(float), 0, False
     txt = _cells(series)
     num = pd.to_numeric(txt, errors="coerce")
-    bad = txt.notna() & num.isna() & ~txt.astype(str).str.lower().isin(["nan"])
+    # CT-R2 group 9: any TEXT in a value cell that is not a number ("NA", "nan", "n/a", "-") counts
+    # as "not a number"; only a truly empty cell is "empty" (the note is how a user finds a
+    # mis-exported column). "nan" used to count as empty.
+    bad = txt.notna() & num.isna()
     comma = False
-    if bad.any() and txt[bad].astype(str).str.match(_DECIMAL_COMMA_RE).all():
+    digits = bad & txt.astype(str).str.contains(r"\d")
+    if digits.any() and txt[digits].astype(str).str.match(_DECIMAL_COMMA_RE).all():
         # European decimal commas ("2,34"): read them as numbers instead of dropping every row
         num = pd.to_numeric(txt.astype(str).str.replace(",", ".", regex=False).where(txt.notna(), np.nan),
                             errors="coerce")
@@ -254,8 +260,8 @@ def read_table(path, return_info=False, *, text_columns=None):
     * Labels stay labels: nothing is turned into "missing" except an empty cell (pandas' default
       NA strings -- None, NA, nan, null, N/A ... -- are ordinary names here), and label columns are
       kept as text exactly as typed ('007', '1.0', '0.10').
-    * `#` is not a comment character: only whole lines that START with `#` are skipped, so a
-      sample called 'T7 #2' or a plate called 'plate #1' keeps its row.
+    * `#` is not a comment character: only whole lines that START with `#` BEFORE the header row
+      are skipped (CT-R2 N6), so a sample called '#1', 'T7 #2' or a plate 'plate #1' keeps its row.
     * The delimiter (comma, semicolon, tab, pipe) is detected from the header, and European
       decimal commas ("2,34") are read as numbers. A file that parses to a single column is
       refused with a message that says so.
@@ -271,14 +277,36 @@ def read_table(path, return_info=False, *, text_columns=None):
     Returns the DataFrame, or (DataFrame, info) with return_info=True."""
     ext = os.path.splitext(str(path))[1].lower()
     info = {"delimiter": None, "decimal": ".", "rows": 0, "columns": [], "comment_lines": 0}
+    base = os.path.basename(str(path))
     if ext in (".xlsx", ".xls"):
-        raw = pd.read_excel(path, dtype=object, keep_default_na=False, na_values=[""])
+        # CT-R2: a file named .xlsx that is not a workbook (or an unreadable one) gave a traceback
+        try:
+            raw = pd.read_excel(path, dtype=object, keep_default_na=False, na_values=[""])
+        except Exception as e:                                         # noqa: BLE001
+            raise StatsError("could not read %s as an Excel workbook (%s: %s). Save it again from Excel "
+                             "as .xlsx, or export it as a CSV file." % (base, type(e).__name__, e))
         info["delimiter"] = "excel"
     else:
-        with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
-            lines = fh.read().splitlines()
-        kept = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
-        info["comment_lines"] = sum(1 for ln in lines if ln.lstrip().startswith("#"))
+        not_csv = ("%s does not look like a CSV table (is it an Excel or binary file saved with a .%s "
+                   "name?)" % (base, ext.lstrip(".") or "csv"))
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(4096)
+            # CT-R2 (g): an .xlsx (zip), an old .xls (OLE) or any binary file renamed .csv gave
+            # pandas' "Error tokenizing data. C error: ..."
+            if head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")) or b"\x00" in head:
+                raise StatsError(not_csv)
+            with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+                lines = fh.read().splitlines()
+        except OSError as e:
+            raise StatsError("could not open %s (%s)." % (base, e.strerror or e))
+        # CT-R2 N6: a line starting with '#' is a comment only BEFORE the header row (the shipped
+        # validation CSVs have such lines). After the header it is data: samples '#1', '#2' ...
+        head = 0
+        while head < len(lines) and (not lines[head].strip() or lines[head].lstrip().startswith("#")):
+            head += 1
+        info["comment_lines"] = sum(1 for ln in lines[:head] if ln.lstrip().startswith("#"))
+        kept = [ln for ln in lines[head:] if ln.strip()]
         if not kept:
             raise StatsError("%s is empty (no header line)." % os.path.basename(str(path)))
         sep = _sniff_delimiter(kept[0], "\t" if ext in (".tsv", ".txt") else ",")
@@ -286,6 +314,8 @@ def read_table(path, return_info=False, *, text_columns=None):
         try:
             raw = pd.read_csv(io.StringIO("\n".join(kept)), sep=sep, dtype=str,
                               keep_default_na=False, na_values=[""], skip_blank_lines=True)
+        except (pd.errors.ParserError, UnicodeDecodeError):
+            raise StatsError(not_csv)
         except Exception as e:                                         # noqa: BLE001
             raise StatsError("could not read %s as a %s-separated table: %s"
                              % (os.path.basename(str(path)), _DELIM_NAMES[sep], e))
@@ -436,7 +466,8 @@ def _normalize_core(df, group, value, replicate, metric, subgroup=None):
     blank_v = out["value"].isna()
     if blank_v.any():
         n_text = min(nbad, int(blank_v.sum()))
-        why = "no numeric %s value" % vcol
+        # CT-R2 (g): "no numeric value value" when the column is called 'value'
+        why = "no numeric value" if str(vcol).strip().lower() == "value" else "no numeric %s value" % vcol
         if n_text:
             why += " (%d not a number, %d empty)" % (n_text, int(blank_v.sum()) - n_text)
         _drop(blank_v, why)
@@ -618,6 +649,22 @@ def pairwise_mwu(groups):
     return _holm(raw)
 
 
+def _rank_ready(v):
+    """Unit values rounded to 12 significant digits before a RANK test (Kruskal-Wallis, Dunn,
+    Mann-Whitney): plate means that are equal on paper ((2.0 + 2.1 + 1.96) / 3 and 2.02) can differ
+    in the last bits and would not count as ties. The R app does the same (CT-R2 group 9). Never
+    used before a parametric test."""
+    return np.array([float("%.12g" % x) for x in np.asarray(v, float)])
+
+
+def _mwu_method(a, b):
+    """'exact' or 'asymptotic': scipy.stats.mannwhitneyu's own automatic choice (exact when one
+    side has at most 8 values and there are no ties), made explicit so it can be reported."""
+    allv = np.concatenate([np.asarray(a, float), np.asarray(b, float)])
+    ties = len(np.unique(allv)) < len(allv)
+    return "asymptotic" if (len(a) > 8 and len(b) > 8) or ties else "exact"
+
+
 def tukey(groups):
     """Tukey HSD (Tukey-Kramer for unequal n). Groups with fewer than 2 values cannot be
     tested: they get p = NaN (reported as n/a) instead of crashing scipy (AUDIT-2026-10.md)."""
@@ -769,7 +816,7 @@ def plates_needed(d, power=0.80, alpha=0.05, n_max=1000):
     return None
 
 
-def power_summary(groups, power=0.80, alpha=0.05):
+def power_summary(groups, power=0.80, alpha=0.05, detect=None):
     """What this design can detect (CT-R1 B3), from the observed unit-level pooled SD:
     the smallest difference found with 80 % power at the current n per group, and the n per
     group needed for the largest and the smallest observed pairwise difference (two-sided
@@ -794,6 +841,12 @@ def power_summary(groups, power=0.80, alpha=0.05):
     if diffs:
         out.update({"largest_diff": diffs[-1], "n_for_largest": plates_needed(diffs[-1] / sd, power, alpha),
                     "smallest_diff": diffs[0], "n_for_smallest": plates_needed(diffs[0] / sd, power, alpha)})
+    if detect is not None:
+        # CT-R2 item 7: planned power for a difference the USER names (not the observed one, which
+        # is circular); never fewer than MIN_UNITS_ADVISED units
+        nd = plates_needed(float(detect) / sd, power, alpha)
+        out.update({"detect": float(detect),
+                    "n_for_detect": None if nd is None else max(MIN_UNITS_ADVISED, nd)})
     return out
 
 
@@ -878,13 +931,16 @@ def pairwise_table(groups, posthoc, omni, margin=None):
             qcache[key] = float(st.studentized_range.ppf(0.95, k, dfree))
         return qcache[key]
 
+    # CT-R2 N10: a rank test's row carries no parametric CI, Cohen's d or Hedges' g (they described
+    # a different analysis than the p beside them); the difference of medians is given instead
+    rank = name == "Dunn (Holm)" or omni.get("test") == "Mann–Whitney U"
     rows = []
     for (a, b), p in posthoc.items():
         xa, xb = np.asarray(groups.get(a, []), float), np.asarray(groups.get(b, []), float)
         ma = float(np.mean(xa)) if len(xa) else float("nan")
         mb = float(np.mean(xb)) if len(xb) else float("nan")
         lo = hi = float("nan"); method = ""
-        if len(xa) >= 2 and len(xb) >= 2:
+        if len(xa) >= 2 and len(xb) >= 2 and not rank:
             diff = ma - mb
             se, dfree = _welch_se_df(xa, xb)
             with np.errstate(all="ignore"):
@@ -904,7 +960,10 @@ def pairwise_table(groups, posthoc, omni, margin=None):
                "p_adj": p, "signif": stars(p),
                "n_a": int(len(xa)), "n_b": int(len(xb)),
                "diff_ci95_lo": lo, "diff_ci95_hi": hi, "ci_method": method,
-               "cohens_d": cohens_d(xa, xb), "hedges_g": hedges_g(xa, xb)}
+               "median_diff": (float(np.median(xa) - np.median(xb)) if len(xa) and len(xb)
+                               else float("nan")),
+               "cohens_d": float("nan") if rank else cohens_d(xa, xb),
+               "hedges_g": float("nan") if rank else hedges_g(xa, xb)}
         if margin:
             tp = tost_p(xa, xb, margin)
             row["tost_p"] = tp
@@ -968,6 +1027,42 @@ def _n_range(ns, tg, uw):
     return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
 
 
+def sensitivity_check(groups, order, tg, use_param, ctrl):
+    """CT-R2 item 7: 3+ samples on the parametric path -- the omnibus p and the pairwise
+    conclusions (adjusted p < 0.05) under equal variances (ANOVA + Tukey HSD) and without that
+    assumption (Welch ANOVA + Games-Howell), computed directly from the unit values. None when it
+    does not apply; {"text": ...} says why when it cannot be run."""
+    if len(order) < 3 or not use_param or len(tg) < 3:
+        return None
+    if ctrl is not None:
+        return {"text": "not run with Dunnett's test (it has no unequal-variance version here)."}
+    gv = [groups[g] for g in tg]
+    r = _quiet(st.f_oneway, *gv)
+    p_eq = float(r.pvalue) if r is not None else float("nan")
+    p_w = welch_anova_p(gv)
+    if p_w != p_w or p_eq != p_eq:
+        return {"p_equal": p_eq, "p_welch": p_w,
+                "text": "Welch's ANOVA cannot be computed (a sample has zero variance), so the analysis "
+                        "could not be repeated without the equal-variance assumption."}
+    sub = {g: groups[g] for g in tg}
+    t = _quiet(tukey, sub) or {}
+    gh = games_howell(sub)
+    sig_eq = {k for k, v in t.items() if v == v and v < 0.05}
+    sig_w = {k for k, v in gh.items() if v == v and v < 0.05}
+    diffs = (["%s vs %s is significant only with equal variances assumed (Tukey HSD)" % k
+              for k in itertools.combinations(tg, 2) if k in sig_eq and k not in sig_w] +
+             ["%s vs %s is significant only without that assumption (Games-Howell)" % k
+              for k in itertools.combinations(tg, 2) if k in sig_w and k not in sig_eq])
+    if (p_eq < 0.05) != (p_w < 0.05):
+        diffs.insert(0, "the omnibus test is significant only %s"
+                     % ("with equal variances assumed" if p_eq < 0.05 else "without that assumption"))
+    head = ("omnibus %s with equal variances assumed (one-way ANOVA) and %s without (Welch ANOVA); "
+            % (p_text(p_eq), p_text(p_w)))
+    tail = ("conclusions are the same under both (Tukey HSD and Games-Howell, adjusted p < 0.05)."
+            if not diffs else "; ".join(diffs) + ".")
+    return {"p_equal": p_eq, "p_welch": p_w, "differ": diffs, "text": head + tail}
+
+
 class PosthocResult(dict):
     """The {(a, b): adjusted p} dict run_stats() has always returned, plus `.name`: the post-hoc
     test that produced it ("Tukey HSD, adjusted p", "Welch t-test", ...). Figures read the name
@@ -976,7 +1071,7 @@ class PosthocResult(dict):
 
 
 def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", control=None,
-              equivalence_margin=None):
+              equivalence_margin=None, detect=None):
     """Compute normality, an omnibus test, and pairwise post-hoc p-values on the chosen unit.
 
     Returns (omni, posthoc, unit, have_rep) as always. New keyword arguments (all optional):
@@ -1048,7 +1143,15 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         sd_ratio = float(max(sds) / min(sds)) if min(sds) > 0 else float("inf")
     else:
         sd_ratio = float("nan")
-    all_normal = all((p != p) or p > 0.05 for p in normal.values())
+    # CT-R2 item 3: per-sample Shapiro tests at 0.05 sent NORMAL data to a rank test in 14 % of
+    # runs with 3 samples x 8 plates (21-24 % with 5). The gate is now Bonferroni over the m
+    # samples whose normality could be tested: non-normal only if the smallest p < 0.05 / m.
+    sw_p = {g: p for g, p in normal.items() if p == p}
+    sw_m = len(sw_p)
+    sw_thr = 0.05 / sw_m if sw_m else 0.05
+    all_normal = all(p >= sw_thr for p in sw_p.values())
+    sw_how = "Shapiro–Wilk (Bonferroni over %s)" % _plural(sw_m, "sample")
+    sw_thr_txt = "threshold 0.05/%d = %.3g" % (sw_m, sw_thr)
     # the n that decides the method: the samples that can be tested (a 1-plate sample is n/a)
     min_n = min((ns[g] for g in tg), default=min(ns.values()) if ns else 0)
     if parametric == "auto":
@@ -1066,13 +1169,20 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                       "(Mann–Whitney cannot go below p = 0.10 at 3 vs 3). This follows SuperPlots "
                       "(Lord et al. 2020). Override with `--parametric`."
                       % (uw, min_n, "plate means" if unit == "replicate" else "plaque values"))
+        elif use_param and not sw_m:
+            choice = ("Every sample has at least 8 %ss; Shapiro–Wilk could not be run (no sample has "
+                      "spread), so a parametric test is used. Override with `--parametric`." % uw)
         elif use_param:
-            choice = ("Every sample has at least 8 %ss and none fails Shapiro–Wilk (all p > 0.05), so a "
-                      "parametric test is used. Override with `--parametric`." % uw)
+            choice = ("Every sample has at least 8 %ss and %s does not reject normality (smallest %s, "
+                      "%s), so a parametric test is used. Override with `--parametric`."
+                      % (uw, sw_how, p_text(min(sw_p.values())), sw_thr_txt))
         else:
-            bad = [g for g, p in normal.items() if p == p and p <= 0.05]
-            choice = ("With at least 8 %ss per sample, Shapiro–Wilk rejects normality for %s (p ≤ 0.05), "
-                      "so a rank-based test is used. Override with `--parametric`." % (uw, ", ".join(map(str, bad))))
+            bad = [g for g, p in sw_p.items() if p < sw_thr]
+            reject_txt = ("With at least 8 %ss per sample, %s rejects normality for %s (%s)"
+                          % (uw, sw_how, _and_list(["%s (%s)" % (g, p_text(sw_p[g])) for g in bad])
+                             if len(bad) > 1 else "%s" % bad[0],
+                             sw_thr_txt if len(bad) > 1 else "%s, %s" % (p_text(sw_p[bad[0]]), sw_thr_txt)))
+            choice = reject_txt + ", so a rank-based test is used. Override with `--parametric`."
     else:
         use_param = (parametric == "parametric")
         choice = "`--parametric %s` was chosen by the user." % parametric
@@ -1090,11 +1200,13 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         if ctrl not in order:
             raise StatsError("control %r is not one of the samples: %s" % (control, ", ".join(map(str, order))))
         if not use_param:
-            notes.append("Shapiro–Wilk rejects normality for at least one sample; Dunnett's test "
-                         "(parametric) was run because --posthoc dunnett was chosen.")
+            # CT-R2 N1: the choice text used to go on "so a rank-based test is used" although
+            # Dunnett's (parametric) test was run. Describe what ran.
+            choice = ("%s; Dunnett's test (parametric) was run because you chose it (`--posthoc dunnett`). "
+                      "Drop `--posthoc dunnett` to get the rank-based test." % reject_txt)
+        elif parametric == "auto":
+            choice = "`--posthoc dunnett` was chosen by the user (a parametric test). " + choice
         use_param = True
-        choice = "`--posthoc dunnett` was chosen by the user (a parametric test). " + choice \
-            if parametric == "auto" else choice
 
     if not use_param and min_n < 4:
         warns.append("Non-parametric test with <4 per group: significance can be UNREACHABLE "
@@ -1112,19 +1224,31 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                                "sd": float(np.std(v, ddof=1)) if len(v) > 1 else float("nan"),
                                "sem": float(np.std(v, ddof=1) / math.sqrt(len(v))) if len(v) > 1 else float("nan"),
                                "n": int(len(v))} for g, v in groups.items()}}
-    lev_txt = "Levene p = %s" % fmt_p(levene_p)
+    lev_txt = "Levene " + p_text(levene_p)            # CT-R2 N2: never "p = < 0.001"
     if k == 2:
         a, b = groups[order[0]], groups[order[1]]
         omni["test"] = "Welch t-test" if use_param else "Mann–Whitney U"
         p = np.nan
         if len(a) >= 2 and len(b) >= 2:
-            r = (_quiet(st.ttest_ind, a, b, equal_var=False) if use_param
-                 else _quiet(st.mannwhitneyu, a, b, alternative="two-sided"))
+            if use_param:
+                r = _quiet(st.ttest_ind, a, b, equal_var=False)
+            else:
+                # CT-R2 N10: scipy's own choice (exact below 9 per side without ties), made explicit
+                # so the report can say which p it is
+                ra, rb = _rank_ready(a), _rank_ready(b)
+                how = _mwu_method(ra, rb)
+                omni["p_method"] = how
+                r = _quiet(st.mannwhitneyu, ra, rb, alternative="two-sided", method=how)
             p = float(r.pvalue) if r is not None else np.nan
             if p != p:
                 notes.append("The two samples have no spread (identical values), so no test is possible (p = n/a).")
         omni["p"] = p
-        omni["effect"] = {"cohens_d": cohens_d(a, b), "hedges_g": hedges_g(a, b)}
+        omni["effect"] = ({"cohens_d": cohens_d(a, b), "hedges_g": hedges_g(a, b)} if use_param else {})
+        if not use_param:
+            notes.append("Mann–Whitney U p is %s; difference and effect sizes are not shown for rank tests "
+                         "(the pairwise table gives the difference of medians)."
+                         % ("exact (no ties, at most 8 per side)" if omni.get("p_method") == "exact"
+                            else "asymptotic (normal approximation with tie and continuity correction)"))
         omni["variance_rule"] = ("Welch's t-test does not assume equal variances." if use_param
                                  else "Mann–Whitney U is rank-based (no variance assumption).")
         if posthoc_req == "dunnett":
@@ -1177,8 +1301,8 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                     posthoc = games_howell({g: groups[g] for g in order})
                     omni["posthoc"] = "Games-Howell"
                     if equal_var == "auto":
-                        warns.append("Levene p = %s: group variances differ, so Welch's ANOVA and "
-                                     "Games-Howell (no equal-variance assumption) were used." % fmt_p(levene_p))
+                        warns.append("Levene %s: group variances differ, so Welch's ANOVA and "
+                                     "Games-Howell (no equal-variance assumption) were used." % p_text(levene_p))
             if not welch:
                 omni["test"] = "one-way ANOVA"
                 r = _quiet(st.f_oneway, *gv)
@@ -1199,22 +1323,44 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
             omni["variance_rule"] = rule
             ev = equal_variance_check({g: groups[g] for g in tg})
             omni["variance_check"] = ev
-            n_min_all = min(ns.values())
+            # CT-R2 N11: the n of the note is that of the samples that can be tested (a 1-plate
+            # sample is n/a and printed "With 1 plates per group")
+            n_min_t = min((ns[g] for g in tg), default=0)
+            # CT-R2 N9: Welch's ANOVA is undefined when a sample has zero spread, so it is never
+            # recommended then; CT-R2 N7: under Dunnett the advice must be one that can be followed
+            flat = [g for g in tg if np.ptp(groups[g]) == 0]
+            if flat:
+                advice = ("Welch's ANOVA is not an alternative here: %s %s no spread (identical %s values)."
+                          % (_and_list(list(map(str, flat))), "has" if len(flat) == 1 else "have",
+                             "plate-mean" if unit == "replicate" else "plaque"))
+            elif ctrl is not None:
+                advice = ("If you expect the groups to differ in spread, drop --posthoc dunnett and use "
+                          "--equal-var no (Welch ANOVA + Games-Howell).")
+            else:
+                advice = "If you expect the groups to differ in spread, choose --equal-var no (Welch)."
             # wording identical to plaque_stats/app.R spread_check(); only the last clause names the
             # CLI option where the R app names its "Variances: unequal (Welch)" control
-            if n_min_all < 5 and not welch:      # app.R: only when the classic path ran
+            if 2 <= n_min_t < 5 and not welch:      # app.R: only when the classic path ran
                 notes.append(
-                    "%s assume the groups have similar spread. With %d %s per group this cannot be "
-                    "checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to "
-                    "differ in spread, choose --equal-var no (Welch)."
+                    "%s assume the groups have similar spread. With %s per group this cannot be "
+                    "checked reliably (largest/smallest SD ratio here: %s). %s"
                     % ("ANOVA and Dunnett's test" if ctrl is not None else "ANOVA and Tukey",
-                       n_min_all, _unit_word(unit), _ratio_txt(ev["sd_ratio"])))
+                       _plural(n_min_t, _unit_word(unit, 1)), _ratio_txt(ev["sd_ratio"]), advice))
             if not welch and ev["p_adj"] == ev["p_adj"] and ev["p_adj"] < 0.05:
-                warns.append(
-                    "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
-                    "%s): Welch ANOVA + Games-Howell is the safer analysis."
-                    % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"])))
+                if flat:
+                    warns.append(
+                        "The spread differs between groups (SD ratio %s): %s Classic ANOVA + %s were "
+                        "used; check the values of %s." % (_ratio_txt(ev["sd_ratio"]), advice,
+                                                          "Dunnett's test" if ctrl is not None else "Tukey HSD",
+                                                          _and_list(list(map(str, flat)))))
+                else:
+                    warns.append(
+                        "The spread differs between groups more than chance explains (SD ratio %s, adjusted "
+                        "%s): Welch ANOVA + Games-Howell is the safer analysis%s."
+                        % (_ratio_txt(ev["sd_ratio"]), p_text(ev["p_adj"]),
+                           " (drop --posthoc dunnett and use --equal-var no)" if ctrl is not None else ""))
         else:
+            gv = [_rank_ready(v) for v in gv]          # CT-R2 g9: ties as R counts them
             hres = _quiet(st.kruskal, *gv)
             N = sum(len(x) for x in gv); kk = len(gv)
             omni["test"] = "Kruskal–Wallis"
@@ -1229,9 +1375,14 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                 # before was (H - k + 1) / (N - k), which is eta squared (H); both are given now.
                 omni["effect"] = {"epsilon_squared": H / (N - 1) if N > 1 else float("nan"),
                                   "eta_squared_H": (H - kk + 1) / (N - kk) if N > kk else float("nan")}
-                posthoc = dunn({g: groups[g] for g in tg})
+                posthoc = dunn({g: _rank_ready(groups[g]) for g in tg})
             omni["posthoc"] = "Dunn (Holm)"
+            omni["p_method"] = "asymptotic"
             omni["variance_rule"] = "Kruskal–Wallis and Dunn's test are rank-based (no variance assumption)."
+            notes.append("Kruskal–Wallis and Dunn's p are asymptotic (chi-squared / normal approximation; "
+                         "with few values per sample they can be far from exact). Difference and effect "
+                         "sizes are not shown for rank tests (the pairwise table gives the difference of "
+                         "medians).")
         if ctrl is None:
             posthoc = {(a, b): posthoc.get((a, b), posthoc.get((b, a), float("nan")))
                        for a, b in itertools.combinations(order, 2)}
@@ -1248,7 +1399,15 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     omni["equivalence_margin"] = margin
     pw = pairwise_table(groups, posthoc, omni, margin) if posthoc else pd.DataFrame()
     omni["pairwise"] = pw.to_dict("records")
-    omni["power"] = power_summary(groups)
+    try:
+        det = float(detect) if detect not in (None, "") else None
+    except (TypeError, ValueError):
+        raise StatsError("--detect must be a number: the difference to detect, in the unit of the "
+                         "measurement (got %r)." % (detect,))
+    if det is not None and not (det > 0 and math.isfinite(det)):
+        raise StatsError("--detect must be greater than 0 (got %r)." % (detect,))
+    omni["power"] = power_summary(groups, detect=det)
+    omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl)
     omni["icc"] = plate_variance_share(df)
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
     posthoc = PosthocResult(posthoc or {})
@@ -1402,6 +1561,9 @@ def center_table(df, order, opts, by=("group",)):
     return out
 
 
+BOOT_MIN_PLATES = 10            # from here on the plate bootstrap of the median keeps its 95 % CI name
+BOOT_APPROX = ("bootstrap interval of the median (approximate: too narrow with fewer than about "
+               "%d plates)" % BOOT_MIN_PLATES)
 _ERR_WORDS = {"sd": "SD", "sem": "SEM", "ci95": "95 % CI", "iqr": "IQR (25th to 75th percentile)"}
 
 
@@ -1438,8 +1600,18 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
         bits.append("Large points: plate means.")
         if center == "median":
             bar = "median of all plaques"
-            wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
-                  % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
+            # CT-R2 N3: the plate-cluster bootstrap covers only 73-90 % at 3-8 plates, so below
+            # 10 plates (or when the count is unknown) it is not called a 95 % CI
+            if error == "ci95" and ns and ns[-1] < 2:
+                # one plate per sample: center_table() resamples the plaques, not plates
+                wh = ("95 %% CI of the median (%s bootstrap resamples of the plaques, seed %d)"
+                      % (format(BOOT_N, ","), BOOT_SEED))
+            elif error == "ci95" and not (ns and ns[0] >= BOOT_MIN_PLATES):
+                wh = ("%s (plates resampled, %s bootstrap resamples, seed %d)"
+                      % (BOOT_APPROX, format(BOOT_N, ","), BOOT_SEED))
+            else:
+                wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
+                      % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
             if error == "iqr":
                 wh = "IQR of the plaques (25th to 75th percentile)"
         else:
@@ -1518,8 +1690,12 @@ def _log_guard(values, opts, what="value"):
         raise StatsError("%s of %d are zero or negative and cannot be drawn on a log axis. Turn the "
                          "log axis off, or pass --log-y-drop-nonpositive to hide them on the figure "
                          "(they stay in the statistics)." % (_plural(bad, what), len(v)))
-    return v > 0, ("%s ≤ 0 %s not shown on the log axis (still in the statistics)"
-                   % (_plural(bad, what), "is" if bad == 1 else "are"))
+    # CT-R2 group 8 c: the plotted plate means, bar and whisker are computed from the values that
+    # are drawn; the statistics (and the paste-ready sentence) use every value. Say both.
+    it = "it" if bad == 1 else "them"
+    return v > 0, ("%s ≤ 0 %s not shown on the log axis: the plotted plate means, bar and whisker "
+                   "leave %s out, the statistics include %s"
+                   % (_plural(bad, what), "is" if bad == 1 else "are", it, it))
 
 
 def _log_axis(ax, lo, hi):
@@ -1534,32 +1710,130 @@ def _log_axis(ax, lo, hi):
     ax.yaxis.set_minor_formatter(NullFormatter())
 
 
-def _fit_xticklabels(fig, ax):
+TICK_SHORT_MAX = 22             # with the key on the figure, longer tick labels get an ellipsis
+AXES_MIN_SHARE = 0.45          # the axes keep at least this share of the figure height
+
+
+def _wrap2(txt):
+    """The label on at most two lines, broken at the space nearest its middle ('' if none)."""
+    t = str(txt)
+    sp = [i for i, c in enumerate(t) if c == " "]
+    if not sp or "\n" in t:
+        return ""
+    i = min(sp, key=lambda k: abs(k - len(t) / 2.0))
+    return t[:i] + "\n" + t[i + 1:]
+
+
+def short_labels(names, limit=TICK_SHORT_MAX):
+    """Tick labels for long sample names: an ellipsis in the middle ('MG1655 + p…e for test)');
+    when that would make two names look the same (they differ only in the middle), a window
+    around where they differ ('…variant 01 (long…'). Names up to `limit` characters are kept."""
+    names = [str(n) for n in names]
+    h = (limit - 1) // 2
+    out = [n if len(n) <= limit else n[:h] + "…" + n[-(limit - 1 - h):] for n in names]
+    if len(set(out)) == len(set(names)):
+        return out
+    long_ = [n for n in names if len(n) > limit]
+    lcp = len(os.path.commonprefix(long_)) if len(long_) > 1 else 0
+    start = max(0, lcp - (limit - 2) // 2)
+    out = []
+    for n in names:
+        if len(n) <= limit:
+            out.append(n); continue
+        w = n[start:start + limit - 2]
+        out.append(("…" if start > 0 else "") + w + ("…" if start + limit - 2 < len(n) else ""))
+    return out if len(set(out)) == len(set(names)) else names
+
+
+def _fit_xticklabels(fig, ax, can_shorten=False):
     """Rotate the x tick labels (right-aligned) when they would run into each other (CT-R1
-    DA-F10, web F14): 30° when that separates them, else 45°, else 90°. Long names get a smaller
-    font instead of being wrapped (two-line labels collide when rotated: follow-up S1)."""
+    DA-F10, web F14): 30° when that separates them, else 45°, else 90°; long names get a smaller
+    font. CT-R2 (h): 12 long names took 60 % of the figure height. In order: (1) a label is
+    wrapped at a space onto two lines when that shortens its rotated footprint (the angle is
+    chosen for the two-line height, so wrapped labels do not collide); (2) with `can_shorten`
+    (the key on the figure names every sample) labels longer than 22 characters get an ellipsis
+    in the middle (fig._ticks_shortened = True: the caption says the full names are in the key);
+    (3) _keep_axes_share() then grows the figure if the axes still have < 45 % of its height."""
     labs = [t for t in ax.get_xticklabels() if t.get_text()]
+    fig._ticks_shortened = False
     if len(labs) < 2:
         return False
     try:
         r = _renderer(fig)
-        w = max(t.get_window_extent(r).width for t in labs)
-        h = max(t.get_window_extent(r).height for t in labs)
         xs = sorted(ax.transData.transform((t.get_position()[0], 0))[0] for t in labs)
         gap = min(b - a for a, b in zip(xs, xs[1:]))
     except Exception:                                    # noqa: BLE001
         return False
+
+    def size():
+        return (max(t.get_window_extent(r).width for t in labs),
+                max(t.get_window_extent(r).height for t in labs))
+
+    def put(texts):
+        # through set_xticklabels: Text.set_text on a tick label is undone by the formatter at draw
+        nonlocal labs
+        fs, fw = labs[0].get_fontsize(), labs[0].get_fontweight()
+        ax.set_xticklabels(texts, fontsize=fs, fontweight=fw)
+        labs = [t for t in ax.get_xticklabels() if t.get_text()]
+
+    def plan(w, h):
+        a = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+        return a, w * math.sin(math.radians(a)) + h * math.cos(math.radians(a))
+
+    w, h = size()
     if w <= 0.92 * gap:
         return False
     if max(len(t.get_text()) for t in labs) > 18:
         fs = labs[0].get_fontsize()
         for t in labs:
             t.set_fontsize(min(fs, 9.5))
-        h *= min(fs, 9.5) / fs
-    angle = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+        w, h = size()
+    orig = [t.get_text() for t in labs]
+    ticks_all = [t.get_text() for t in ax.get_xticklabels()]
+    if len(ticks_all) != len(orig):                       # only plain one-label-per-tick axes
+        orig_put = None
+    else:
+        orig_put = True
+    angle, foot = plan(w, h)
+    wrapped = [_wrap2(x) or x for x in orig]
+    if wrapped != orig and orig_put:                      # (1) two lines if that is smaller
+        put(wrapped)
+        w2, h2 = size()
+        a2, f2 = plan(w2, h2)
+        if f2 < foot and w2 > 0.92 * gap:
+            angle, foot, w, h = a2, f2, w2, h2
+        elif w2 <= 0.92 * gap:
+            angle, foot, w, h = 0, h2, w2, h2
+        else:
+            put(orig)
+    H = fig.get_size_inches()[1]
+    if (orig_put and can_shorten and foot / fig.dpi > 0.20 * H
+            and max(len(x) for x in orig) > TICK_SHORT_MAX):
+        put(short_labels(orig))                           # (2) the key has the full names
+        fig._ticks_shortened = True
+        w, h = size()
+        angle, foot = plan(w, h) if w > 0.92 * gap else (0, h)
     for t in labs:
-        t.set_rotation(angle); t.set_ha("right" if angle < 90 else "center")
-        t.set_rotation_mode("anchor" if angle < 90 else "default")
+        t.set_rotation(angle); t.set_ha("right" if 0 < angle < 90 else "center")
+        t.set_rotation_mode("anchor" if 0 < angle < 90 else "default")
+    return True
+
+
+def _keep_axes_share(fig, ax, share=AXES_MIN_SHARE):
+    """(3) Grow the figure height until the axes have at least `share` of it (CT-R2 h). Returns
+    True when it grew; the caller runs the layout again."""
+    W, H = fig.get_size_inches()
+    ah = _axes_in(fig, ax)[1]
+    if ah >= share * H - 1e-6:
+        return False
+    d = (share * H - ah) / (1.0 - share)
+    fig.set_size_inches(W, H + d)
+    kb = float(getattr(fig, "_key_below_in", 0.0) or 0.0)
+    if kb > 0:                                          # the key strip keeps its height in inches
+        for a in fig.axes:
+            leg = a.get_legend()
+            if leg is not None:
+                leg.set_bbox_to_anchor((0.5, KEY_CAPTION_IN / (H + d)), transform=fig.transFigure)
     return True
 
 
@@ -1586,10 +1860,27 @@ def _caption(fig, bits):
         return None
     import textwrap
     txt = " · ".join(bits) + "."
-    per = max(40, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))   # wrap to the figure width
-    txt = "\n".join(textwrap.wrap(txt, per)) or txt
-    return fig.text(0.012, 0.008, txt, ha="left", va="bottom", fontsize=7.5,
-                    color="#5b6a65", style="italic")
+    # CT-R2 group 8 a: wrapped to the MEASURED width of the figure as it is now (after any growth
+    # for a key below), not to a character estimate that long names overran
+    avail = 0.97 * fig.get_size_inches()[0]
+    kw = dict(fontsize=7.5, style="italic")
+    per = max(20, int(fig.get_size_inches()[0] * 72 / (7.5 * 0.52)))
+    lines = textwrap.wrap(txt, per) or [txt]
+    while per > 20 and max(_text_in(fig, ln, **kw)[0] for ln in lines) > avail:
+        per -= 3
+        lines = textwrap.wrap(txt, per, break_long_words=True) or [txt]
+    return fig.text(0.012, 0.008, "\n".join(lines), ha="left", va="bottom", color="#5b6a65", **kw)
+
+
+def _final_size(fig):
+    """(width, height) in inches of the figure as SAVED (bbox_inches="tight", 0.1 in padding),
+    after every layout step: front-ends report this instead of the requested size (CT-R2 g8 a)."""
+    try:
+        bb = fig.get_tightbbox(_renderer(fig))
+        return (round(float(bb.width) + 0.2, 2), round(float(bb.height) + 0.2, 2))
+    except Exception:                                    # noqa: BLE001
+        w, h = fig.get_size_inches()
+        return (round(float(w), 2), round(float(h), 2))
 
 
 def _tight(fig, caption=None):
@@ -1619,6 +1910,16 @@ def _tight(fig, caption=None):
 
 def _layout(fig, caption):
     _tight(fig, caption)
+    if fig.axes and _keep_axes_share(fig, fig.axes[0]):   # CT-R2 (h): after the caption too
+        _tight(fig, caption)
+    # CT-R2 group 8 b: a key placed below is kept out of tight_layout (it has its own strip), but
+    # bbox_inches="tight" also skips artists outside the layout, so without a caption under it
+    # the saved file lost the key. Once the layout is final it counts again.
+    if float(getattr(fig, "_key_below_in", 0.0) or 0.0) > 0:
+        for a in fig.axes:
+            leg = a.get_legend()
+            if leg is not None:
+                leg.set_in_layout(True)
 
 
 KEY_RIGHT_MAX_FRAC = 0.28      # the embedded key stays at the right only while this narrow
@@ -1635,11 +1936,14 @@ def _place_key(fig, ax, key, **kw):
     if not key or not key.get("entries"):
         return None
     W, H = fig.get_size_inches()
+    ah = _axes_in(fig, ax)[1]
     leg = _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), ncol=1, **kw)
     r = _renderer(fig)
     bb = leg.get_window_extent(r)
     w1, h1 = bb.width / fig.dpi, bb.height / fig.dpi
-    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= 0.98 * H:
+    # CT-R2 group 8 b: a key TALLER than the axes squeezed the plot (8.4 x 3.6 in, 15 plates):
+    # it stays at the right only when it fits both the width share and the axes height
+    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= ah:
         return leg
     leg.remove()
     nrows = len(_lk.rows(key)[0])
@@ -1747,14 +2051,18 @@ def annotation_plan(order, posthoc, opts):
             plan["pairs"] = [pr for pr in allpairs if ref in pr]
             plan["mode"] = "vsref"
             plan["ref"] = ref
-            plan["letters"] = {(b if a == ref else a): stars(_p(pr) if _has(pr) else float("nan"))
+            # CT-R2 group 9: an untestable comparison (a 1-plate sample) is n/a, never "ns"
+            raw = {pr: posthoc.get(pr, posthoc.get((pr[1], pr[0]))) for pr in plan["pairs"]}
+            plan["letters"] = {(b if a == ref else a): stars(raw[pr] if raw[pr] is not None else float("nan"))
                                for pr in plan["pairs"] for a, b in [pr]}
             nsig = sum(1 for pr in plan["pairs"] if _p(pr) < 0.05)
+            nna = sum(1 for v in plan["letters"].values() if v == "n/a")
             plan["note"] += ("With %d samples each sample is compared with %s only: the stars above "
                              "each sample give that comparison (%d of %d with adjusted p < 0.05; %s "
-                             "itself is marked ref.). Every pair is in the pairwise table. `--annotate "
+                             "itself is marked ref.%s). Every pair is in the pairwise table. `--annotate "
                              "letters` gives a compact letter display, `--annotate all` every bracket."
-                             % (len(order), ref, nsig, len(plan["pairs"]), ref))
+                             % (len(order), ref, nsig, len(plan["pairs"]), ref,
+                                "; n/a = could not be tested, fewer than 2 plates" if nna else ""))
             return plan
         else:
             plan["pairs"] = sig or [(order[i], order[i + 1]) for i in range(len(order) - 1)]
@@ -1842,6 +2150,27 @@ def palette_repeat_note(items, opts, what="sample", how="a hatch"):
             % (len(items), what, name, len(pal), span, how))
 
 
+PALETTE_MIN_DELTA_E = 10.0     # two colours closer than this (CIE76 ΔE*ab) are hard to tell apart
+
+
+def palette_close_note(items, opts, what="sample"):
+    """A note when the palette colours that encode `items` are too close to tell apart (CT-R2
+    group 8 e). Rule: any two DIFFERENT colours used closer than ΔE*ab = 10 (CIE76, in CIE Lab;
+    for greys that is a lightness step of less than 10 L* units). None otherwise."""
+    pal = clean_palette(opts.get("palette"))
+    used = list(dict.fromkeys(_lk.to_hex(pal[i % len(pal)]).upper() for i in range(len(items))))
+    if len(used) < 2:
+        return None
+    lab = {c: _lk._srgb_to_lab(matplotlib.colors.to_rgb(c)) for c in used}
+    d, a, b = min((math.dist(lab[a], lab[b]), a, b) for a, b in itertools.combinations(used, 2))
+    if d >= PALETTE_MIN_DELTA_E:
+        return None
+    name = _palette_name(pal) or "chosen"
+    return ("The %s palette's colours are hard to tell apart for %d %ss: the closest two (%s and %s) "
+            "differ by ΔE = %.1f (CIE76), below %g. Choose a palette with more distinct colours "
+            "(okabe, tab10) or fewer %ss." % (name, len(items), what, a, b, d, PALETTE_MIN_DELTA_E, what))
+
+
 def _and_list(names):
     names = [str(n) for n in names]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -1903,7 +2232,11 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]                                     # what can be DRAWN (all of it, unless log)
-    cen_tab = center_table(df, order, opts)                # the statistic: from ALL the values
+    # CT-R2 group 8 c: the marks are computed from the values that are drawn (on a log axis with
+    # hidden values <= 0 the plate mean of {0, 1.2} used to be drawn at 0.6, below the axis)
+    hidden = not bool(np.all(drawmask))
+    cen_tab = center_table(ddf if hidden else df, order, opts)
+    rm_draw = replicate_means(ddf) if (hidden and rm is not None) else rm
 
     data = [ddf.loc[ddf["group"] == g, "value"].values for g in order]
     n_all = [int((df["group"] == g).sum()) for g in order]
@@ -1956,9 +2289,11 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                     jx = x0 + rng.uniform(-opts["jitter"], opts["jitter"], size=len(vv))
                     ax.scatter(jx, vv, s=opts["point_size"], color=rcol[r], alpha=0.45,
                                edgecolor="none", zorder=3, marker=rmark[r])
-            gm = rm[rm["group"] == g]
+            gm = rm_draw[rm_draw["group"] == g] if rm_draw is not None else rm.iloc[0:0]
             if log_y:
                 gm = gm[gm["value"] > 0]
+            if len(gm):
+                bottoms.append(float(gm["value"].min()))
             jx = (x0 + np.linspace(-0.05, 0.05, len(gm))) if len(gm) > 1 else np.array([float(x0)])
             for mk in dict.fromkeys(rmark[r] for r in gm["replicate"]):
                 sel = np.array([rmark[r] == mk for r in gm["replicate"]], bool)
@@ -2016,13 +2351,18 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     caption_bits = [log_note]
     if opts.get("show_value", True) and not show_val:
         caption_bits.append("Bar values are in the summary table")
-    if log_y and bottoms:                         # the violins were estimated in log10 units, which
+    if log_y and [b for b in bottoms if b > 0]:   # the violins were estimated in log10 units, which
         b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
     _tight(fig)                                  # first pass: the axes get their real size
-    if _fit_xticklabels(fig, ax):
+    key_names = fig.key_placement != "off" and any(e.get("section") == "sample" for e in key.get("entries", []))
+    if _fit_xticklabels(fig, ax, can_shorten=key_names):
         _tight(fig)
+    if _keep_axes_share(fig, ax):
+        _tight(fig)
+    if getattr(fig, "_ticks_shortened", False):
+        caption_bits.append("Full sample names are in the key")
     aw, ah = _axes_in(fig, ax)
 
     # ---- everything above the data is laid out in INCHES and converted to data units at the
@@ -2113,6 +2453,7 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
     _layout(fig, cap)
+    fig.final_size_in = _final_size(fig)
     return fig
 
 
@@ -2185,9 +2526,13 @@ def _centers_from(summ, omni, center, error):
     return out
 
 
-def _what_values(center, error, have_rep, unit):
-    """'mean ± SEM of the plate means' -- what the quoted numbers are."""
+def _what_values(center, error, have_rep, unit, n_min=None):
+    """'mean ± SEM of the plate means' -- what the quoted numbers are. `n_min`: the fewest plates
+    behind a plate-bootstrap median interval (CT-R2 N3: approximate below 10 plates)."""
     stat = _CENTER_WORDS.get((center, error), center)
+    if (center, error) == ("median", "ci95") and have_rep and unit == "replicate" \
+            and not (n_min is not None and (n_min >= BOOT_MIN_PLATES or n_min < 2)):
+        stat = "median (%s)" % BOOT_APPROX
     if center == "median":
         return "%s of all plaques" % stat
     return "%s of the %s" % (stat, "plate means" if (have_rep and unit == "replicate") else "plaques")
@@ -2232,7 +2577,8 @@ def paste_sentence(metric, summ=None, omni=None, unit=None, have_rep=None, opts=
         have_rep = unit == "replicate"
     order = list(summ["group"])
     cen = centers or _centers_from(summ, omni, center, error)
-    what = _what_values(center, error, have_rep, unit)
+    n_cen = [c[3] for c in cen.values() if c is not None and c[3] is not None]
+    what = _what_values(center, error, have_rep, unit, min(n_cen) if n_cen else None)
     on = ("plate means" if unit == "replicate" else
           "single plaques (pseudoreplicated: plaques of one plate are not independent)")
     nplq = {r["group"]: int(r["n"]) for _, r in summ.iterrows()}
@@ -2338,8 +2684,9 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
                else "the data have no plate/replicate column")
         L.append("- **Statistical unit:** the plaque (%s). Plaques on one plate are not independent, "
                  "so these p-values are too small; %s.\n" % (why, _n_list(omni.get("n_per_group", {}), unit)))
-    L.append("- **Omnibus test:** %s, %s (Levene p = %s)\n"
-             % (omni["test"], p_text(omni["p"]), fmt_p(omni.get("levene_p"))))
+    pm = omni.get("p_method")
+    L.append("- **Omnibus test:** %s%s, %s (Levene %s)\n"
+             % (omni["test"], " (%s p)" % pm if pm else "", p_text(omni["p"]), p_text(omni.get("levene_p"))))
     if omni.get("posthoc"):
         post = omni["posthoc"]
         if post == "Dunnett":
@@ -2361,24 +2708,35 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
     if posthoc:
         L.append("\n**Pairwise (adjusted p; differences, CIs and effect sizes on the %s):**\n" % uw)
         rows = []
+        rank = omni.get("posthoc") == "Dunn (Holm)" or omni.get("test") == "Mann–Whitney U"
         for r in pw:
             ci = ("[%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
                   if r.get("diff_ci95_lo") == r.get("diff_ci95_lo") else "n/a")
-            row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
-                   "difference (A−B)": _num(r["mean_diff"], 3), "95 % CI": ci,
-                   "CI type": r.get("ci_method") or "", "Cohen's d": _num(r["cohens_d"]),
-                   "Hedges' g": _num(r["hedges_g"]), "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
+            if rank:                  # CT-R2 N10: no parametric CI / d / g beside a rank p
+                row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
+                       "difference of medians (A−B)": _num(r.get("median_diff"), 3),
+                       "95 % CI": "", "Cohen's d": "", "Hedges' g": "",
+                       "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
+            else:
+                row = {"pair": "%s vs %s" % (r["group_a"], r["group_b"]),
+                       "difference (A−B)": _num(r["mean_diff"], 3), "95 % CI": ci,
+                       "CI type": r.get("ci_method") or "", "Cohen's d": _num(r["cohens_d"]),
+                       "Hedges' g": _num(r["hedges_g"]), "p_adj": fmt_p(r["p_adj"]), "signif": stars(r["p_adj"])}
             if "tost_p" in r:
                 row["TOST p"] = fmt_p(r["tost_p"])
             rows.append(row)
         if not rows:
             rows = [{"pair": f"{a} vs {b}", "p_adj": fmt_p(p), "signif": stars(p)} for (a, b), p in posthoc.items()]
         L.append(_md(pd.DataFrame(rows)))
+        if rank and pw:
+            L.append("\n_Difference and effect sizes are not shown for rank tests; the difference of "
+                     "medians is given instead._")
     if omni.get("equivalence_margin") and pw:
         m = omni["equivalence_margin"]
         L.append("\n**Equivalence (TOST, two one-sided Welch t-tests on the %s, margin ±%g):** "
                  "a pair is called equivalent when TOST p < 0.05, i.e. the 90 %% CI of the "
-                 "difference lies inside ±%g.\n" % (uw, m, m))
+                 "difference lies inside ±%g. TOST p-values are per pair, not adjusted across pairs."
+                 "\n" % (uw, m, m))   # CT-R2 N11
         for r in pw:
             L.append("- %s vs %s: TOST %s — %s." % (r["group_a"], r["group_b"], p_text(r.get("tost_p")),
                                                    r.get("equivalence", "not testable")))
@@ -2391,6 +2749,9 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
     if ann is None:
         ann = annotation_plan(order, posthoc, o)["note"]
     L.append(fig_txt + ((" " + ann) if ann else ""))
+    sens = (omni.get("sensitivity") or {}).get("text")
+    if sens:
+        L.append("- **Sensitivity:** %s\n" % sens)
     L.append("\n## Design and power\n")
     L.append("- " + power_sentence(omni.get("power"), unit))
     icc = omni.get("icc")
@@ -2418,13 +2779,31 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
 
 
 def power_sentence(pw, unit="replicate"):
-    """One sentence from power_summary() (CT-R1 B3)."""
+    """One sentence from power_summary() (CT-R1 B3); with a user-named difference (--detect) that
+    sentence leads and the observed-effect sentence is one clause (CT-R2 item 7)."""
     uw = _unit_word(unit)
     if not pw or not pw.get("available"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
+    if pw.get("detect") is not None:
+        nd = pw.get("n_for_detect")
+        need = "more than 1,000 %s per sample" % uw if nd is None else "%s per sample" % _plural(nd, _unit_word(unit, 1))
+        s = ("**Power:** to detect a difference of %.3g (the difference you named) with %d %% power "
+             "(two-sided α = %g, two-sample t-test at the observed pooled SD of the %s, %.3g; for a single "
+             "two-sample comparison, without multiplicity adjustment) you need %s (you have %d%s)."
+             % (pw["detect"], round(100 * pw["power"]), pw["alpha"],
+                "plate means" if unit == "replicate" else "plaques", pw["pooled_sd"], need,
+                pw["n_per_group"], "" if pw.get("equal_n", True) else " in the smallest sample"))
+        s += " With the current design a difference of %.3g would be detected" % pw["detectable_diff"]
+        if "largest_diff" in pw:
+            nl = pw["n_for_largest"]
+            s += (" and the largest observed difference (%.3g) would need %s"
+                  % (pw["largest_diff"], "more than 1,000 %s" % uw if nl is None else
+                     _plural(max(MIN_UNITS_ADVISED, nl), _unit_word(unit, 1)) + " per sample"))
+        return s + "."
     s = ("**Power:** (computed from the observed spread; treat as a rough guide) with %d %s per "
          "sample and the observed pooled SD of the %s (%.3g), a difference "
-         "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
+         "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test; for a "
+         "single two-sample comparison, without multiplicity adjustment)."
          % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
             pw["pooled_sd"], pw["detectable_diff"], round(100 * pw["power"]), pw["alpha"]))
     if not pw.get("equal_n", True):
@@ -2651,6 +3030,7 @@ def _two_sample_test(control_vals, treat_vals, parametric):
     if len(a) < 2 or len(b) < 2:
         return float("nan"), "n/a (need ≥2 per side)"
     if parametric == "nonparametric":
+        a, b = _rank_ready(a), _rank_ready(b)
         r = _quiet(st.mannwhitneyu, a, b, alternative="two-sided")
         if r is None:
             return float("nan"), "Mann–Whitney U (all ties)"
@@ -2712,20 +3092,25 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto", unit="
                 warns.append("%s / %s has %s: it cannot be tested; add %s (its comparison is n/a)."
                              % (g, s, _plural(len(vals), _unit_word(unit, 1)), uw))
             if s != control and len(ctrl) and len(vals):
+                rank = False
                 if posthoc == "dunnett":
                     p = dn_p.get((s, control), float("nan"))
                     lo, hi = dn_ci.get((s, control), (float("nan"), float("nan")))
                     test = "Dunnett" if p == p else "n/a (need ≥2 per side)"
+                    cim = "Dunnett simultaneous" if lo == lo else ""
                 else:
                     p, test = _two_sample_test(ctrl, vals, parametric)
-                    lo = hi = float("nan")
-                    if len(ctrl) >= 2 and len(vals) >= 2:
+                    lo = hi = float("nan"); cim = ""
+                    rank = test.startswith("Mann")
+                    # CT-R2 N4/N10: an unadjusted Welch-t interval, labelled so; none beside a rank test
+                    if len(ctrl) >= 2 and len(vals) >= 2 and not rank:
                         se, dfree = _welch_se_df(vals, ctrl)
                         if se > 0 and dfree == dfree:
                             h = float(st.t.ppf(0.975, dfree)) * se
                             lo, hi = float(np.mean(vals) - np.mean(ctrl) - h), float(np.mean(vals) - np.mean(ctrl) + h)
+                            cim = "Welch t, unadjusted"
                 mc, mm = float(np.mean(ctrl)), float(np.mean(vals))
-                cd = cohens_d(vals, ctrl)
+                cd = float("nan") if rank else cohens_d(vals, ctrl)
                 comps.append({"group": g, "subgroup": s, "control": control,
                               "mean_control": round(mc, 4), "mean_subgroup": round(mm, 4),
                               # CT-R1 SM-F14: a % change of a control mean <= 0 is meaningless
@@ -2736,7 +3121,9 @@ def grouped_stats(df, group_order, sub_order, control, parametric="auto", unit="
                               # tested 'ns'; label it n/a so the report/plot don't imply a null result
                               "test": test, "p": p, "signif": stars(p) if p == p else "n/a",
                               "mean_diff": mm - mc, "diff_ci95_lo": lo, "diff_ci95_hi": hi,
-                              "hedges_g": hedges_g(vals, ctrl)})
+                              "ci_method": cim,
+                              "median_diff": float(np.median(vals) - np.median(ctrl)),
+                              "hedges_g": float("nan") if rank else hedges_g(vals, ctrl)})
     comps_df = pd.DataFrame(comps)
     if len(comps_df):
         comps_df["p_raw"] = comps_df["p"]
@@ -2788,7 +3175,10 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     log_y = bool(opts.get("log_y"))
     drawmask, log_note = _log_guard(df["value"].values, opts)
     ddf = df[drawmask]
-    cen_tab = center_table(df, group_order, opts, by=("group", "subgroup"))
+    hidden = not bool(np.all(drawmask))                    # CT-R2 group 8 c: marks from drawn values
+    if hidden and pm is not None:
+        pm = _plate_means_gs(ddf)
+    cen_tab = center_table(ddf if hidden else df, group_order, opts, by=("group", "subgroup"))
     K = max(len(sub_order), 1)
     slot = 0.82 / K
     offs = {s: (i - (K - 1) / 2.0) * slot for i, s in enumerate(sub_order)}
@@ -2872,6 +3262,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     _tight(fig)
     if _fit_xticklabels(fig, ax):
         _tight(fig)
+    if _keep_axes_share(fig, ax):                  # CT-R2 (h)
+        _tight(fig)
     aw, ah = _axes_in(fig, ax)
 
     # ---- headroom laid out in inches (CT-R1 SM-F13: log axis; brackets never touch n labels)
@@ -2880,6 +3272,7 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     fin = {k: v for k, v in tops.items() if v == v and (v > 0 or not log_y)}
     if not fin:
         _layout(fig, _caption(fig, caption_bits))
+        fig.final_size_in = _final_size(fig)
         return fig
     n_plan = None
     if opts.get("show_n", True) and cells:
@@ -2953,6 +3346,7 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     if log_y:
         _log_axis(ax, *ax.get_ylim())
     _layout(fig, _caption(fig, caption_bits))
+    fig.final_size_in = _final_size(fig)
     return fig
 
 
@@ -2986,8 +3380,8 @@ def _write_grouped_report(path, metric, summ, comp, unit, control, args):
         L.append("")
     L.append("Each subgroup is compared with the control **%s** within its group, on %s.\n" % (control, unote))
     if len(comp):
-        L.append("| group | subgroup | control mean | subgroup mean | difference (95 % CI) | change | "
-                 "Hedges' g | test | p | |")
+        L.append("| group | subgroup | control mean | subgroup mean | difference (%s) | change | "
+                 "Hedges' g | test | p | |" % ("simultaneous 95 % CI" if dunn else "95 % CI (unadjusted)"))
         L.append("|---|---|---:|---:|---:|---:|---:|---|---:|---|")
         for _, r in comp.iterrows():
             ci = (" [%s, %s]" % (_num(r["diff_ci95_lo"], 3), _num(r["diff_ci95_hi"], 3))
@@ -3001,7 +3395,11 @@ def _write_grouped_report(path, metric, summ, comp, unit, control, args):
              + ("p-values and simultaneous 95 % CIs are Dunnett's (each subgroup vs the control within "
                 "its group); Dunnett's test assumes similar variances. " if dunn else
                 "p-values are Holm-adjusted within each group (raw p in the CSV as p_raw); the CI is a "
-                "plain Welch-t interval. ")
+                "plain Welch-t interval, NOT adjusted (ci_method in the CSV), so a CI that excludes 0 "
+                "beside a Holm-adjusted 'ns' is not a contradiction. "
+                + ("Rank tests (Mann–Whitney) get no CI or Hedges' g: difference and effect sizes are "
+                   "not shown for rank tests (median_diff in the CSV). "
+                   if len(comp) and comp["test"].astype(str).str.startswith("Mann").any() else ""))
              + "Change = (subgroup − control)/control, n/a when the control mean is ≤ 0._\n")
     L.append("## Paste-ready sentence\n")
     L.append("> " + paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args))
@@ -3044,6 +3442,26 @@ def _save_fig(fig, base, args):
             fig.savefig("%s.%s" % (base, fmt), **kw)
 
 
+def grouped_ignored_notes(args):
+    """One sentence per one-factor option that grouped mode does not use, when it is set to a
+    non-default value (CT-R2 N5). The defaults the apps pass produce nothing."""
+    out = []
+    if args.get("equivalence_margin") not in (None, ""):
+        out.append("--equivalence-margin is not used in grouped mode (no equivalence test is run); "
+                   "run the samples without --subgroup for TOST equivalence tests.")
+    ev = {True: "yes", False: "no"}.get(args.get("equal_var"), args.get("equal_var"))
+    if str(ev or "auto").strip().lower() != "auto":
+        out.append("--equal-var %s is not used in grouped mode: each subgroup is compared with the control "
+                   "by a Welch t-test (no equal-variance assumption), or by Dunnett's test (similar "
+                   "variances assumed) with --posthoc dunnett." % str(ev).strip().lower())
+    if str(args.get("annotate") or "auto").strip().lower() == "letters":
+        out.append("--annotate letters is not available in grouped mode (each subgroup is compared only "
+                   "with its control); stars are shown instead.")
+    if args.get("detect") not in (None, ""):
+        out.append("--detect is not used in grouped mode (no power calculation is made).")
+    return out
+
+
 def run_grouped(args):
     """Grouped control-comparison mode. Optional args: data may be a DataFrame; sub_order (the
     on-screen subgroup order), _sublabel (key title), posthoc (auto|dunnett), unit.
@@ -3069,6 +3487,8 @@ def run_grouped(args):
     elif control not in sub_order:
         sub_order = [control] + sub_order
     df = df[df["group"].isin(group_order) & df["subgroup"].isin(sub_order)].reset_index(drop=True)
+    # CT-R2 N5: options of the one-factor analysis used to be ignored here without a word
+    notes += grouped_ignored_notes(args)
     o = _plot_opts(args)                                   # option errors before any file is written
     _, log_note = _log_guard(df["value"].values, o)
     if log_note:                                           # CT-R1 SM-F13: say how many are hidden
@@ -3089,9 +3509,13 @@ def run_grouped(args):
     _save_fig(fig, base, args)
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
+    final_size = list(getattr(fig, "final_size_in", fig.get_size_inches()))
     plt.close(fig)
 
     rn = palette_repeat_note(sub_order, o, "subgroup level", "a different marker")
+    cn = palette_close_note(sub_order, o, "subgroup level")
+    if cn:
+        notes.append(cn)
     if rn:
         notes.append(rn)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _have_rep=unit == "replicate")
@@ -3100,6 +3524,7 @@ def run_grouped(args):
     prov = _prov(args)
     prov.update({"mode": "grouped", "metric": metric, "groups": group_order,
                  "subgroups": sub_order, "control": control, "unit": unit,
+                 "figure_size_in_final": final_size,
                  "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
                               "numpy": np.__version__, "pandas": pd.__version__,
                               "scipy": scipy.__version__}})
@@ -3117,7 +3542,7 @@ def run_grouped(args):
             "control": control, "unit": unit, "summary": summ, "comparisons": comp,
             "warnings": info["warnings"], "notes": notes + info["notes"], "parse_note": parse_note,
             "paste_sentence": paste_sentence(metric, comp=comp, unit=unit, control=control, opts=args),
-            "out": os.path.abspath(out)}
+            "figure_size_in_final": final_size, "out": os.path.abspath(out)}
 
 
 def run(args):
@@ -3148,7 +3573,7 @@ def run(args):
     omni, posthoc, unit, have_rep = run_stats(
         df, order, args["unit"], args["parametric"], equal_var=args.get("equal_var", "auto"),
         posthoc=args.get("posthoc") or "auto", control=args.get("control"),
-        equivalence_margin=args.get("equivalence_margin"))
+        equivalence_margin=args.get("equivalence_margin"), detect=args.get("detect"))
     summ = group_summary(df, order, unit=unit)
     rep = replicate_means(df)
     summ.to_csv(os.path.join(out, f"summary_by_group_{mt}.csv"), index=False)
@@ -3187,6 +3612,7 @@ def run(args):
     if args.get("legend_key", True):             # the figure's legend key + text starter, beside it
         _lk.write_key_files(_lk.from_figure(fig), base, args["formats"], dpi=args["dpi"])
     ann = getattr(fig, "annotation_note", "")
+    final_size = list(getattr(fig, "final_size_in", fig.get_size_inches()))
     plt.close(fig)
 
     if log_note:
@@ -3196,6 +3622,9 @@ def run(args):
         rn = palette_repeat_note(order, o, "sample", "a hatch" if not _neutral else "a different marker")
         if rn:
             notes.append(rn)
+        cn = palette_close_note(order, o, "sample")
+        if cn:
+            notes.append(cn)
     centers = center_table(df, order, o)
     rargs = dict(args, _parse_note=parse_note, _data_notes=notes, _centers=centers,
                  _annotation_note=ann)
@@ -3206,7 +3635,7 @@ def run(args):
             save_pairwise_table(unit_means, posthoc, os.path.join(out, f"pairwise_table_{mt}"),
                                 metric, unit, args["formats"], pairwise=pw)
     prov = _prov(args)
-    prov.update({"metric": metric, "groups": order, "unit": unit,
+    prov.update({"metric": metric, "groups": order, "unit": unit, "figure_size_in_final": final_size,
                  "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
                               "numpy": np.__version__, "pandas": pd.__version__,
                               "scipy": scipy.__version__}})
@@ -3225,7 +3654,7 @@ def run(args):
             "notes": notes + list(omni.get("notes", [])), "parse_note": parse_note,
             "paste_sentence": sentence,
             "figure_sentence": figure_sentence(o, have_rep, list(summ["n_units"])),
-            "annotation_note": ann, "out": os.path.abspath(out)}
+            "annotation_note": ann, "figure_size_in_final": final_size, "out": os.path.abspath(out)}
 
 
 def _safe(s):
@@ -3251,14 +3680,21 @@ def build_args():
                         "means; an error without a plate column) or plaque (pseudoreplicated)")
     p.add_argument("--parametric", choices=["auto", "parametric", "nonparametric"])
     p.add_argument("--equal-var", dest="equal_var", choices=["auto", "yes", "no"],
-                   help="3+ samples: auto = Levene decides (and a warning when the SDs differ more "
-                        "than 3-fold), no = Welch ANOVA + Games-Howell always, yes = ANOVA + Tukey always")
+                   help="3+ samples: auto = Levene decides (Welch ANOVA + Games-Howell when Levene "
+                        "p < 0.05, else ANOVA + Tukey; on the ANOVA path a note when a sample has fewer "
+                        "than 5 units and a warning when the largest and smallest SD differ by a "
+                        "Bonferroni-adjusted F test, p < 0.05), no = Welch ANOVA + Games-Howell "
+                        "always, yes = ANOVA + Tukey always")
     p.add_argument("--posthoc", choices=["auto", "dunnett"],
                    help="dunnett = every sample vs --control (or each subgroup vs the control in "
                         "grouped mode), with simultaneous 95%% CIs; assumes similar variances")
     p.add_argument("--equivalence-margin", dest="equivalence_margin", type=float,
                    help="add a TOST equivalence test per pair: are the unit means within ± this "
                         "many units (e.g. 0.2 mm)?")
+    p.add_argument("--detect", dest="detect", type=float,
+                   help="planned power: the plates per sample needed to detect this difference (in "
+                        "the unit of the measurement, e.g. 0.2 mm) with 80%% power at the observed "
+                        "pooled SD (two-sided alpha 0.05; never fewer than 3)")
     p.add_argument("--annotate", choices=["auto", "all", "adjacent", "letters", "none"],
                    help="brackets: auto (significant pairs; > 5 samples: only vs the reference), "
                         "all, adjacent, letters (compact letter display) or none")

@@ -275,7 +275,7 @@ def test_one_sentence_everywhere_with_three_decimals_and_no_double_plaque():
     assert a == b
     assert a.startswith("Plaque diameters measured with Plaque Toolkit agreed closely with Fiji / ImageJ")
     assert "Plaque plaque" not in a and "r = 0.997" in a and "ICC(A,1) = 0.997" in a
-    assert "The difference did not depend on plaque size" in a and "each limit ±" in a
+    assert "No proportional bias was detected" in a and "each limit ±" in a      # CT-R2 N8 wording
 
 
 def test_a_constant_offset_is_not_called_significant_from_float_noise():

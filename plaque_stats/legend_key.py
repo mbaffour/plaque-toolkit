@@ -25,6 +25,7 @@ Qt worker threads).
 """
 from __future__ import annotations
 
+import math
 import os
 
 import matplotlib
@@ -426,6 +427,28 @@ def _colour_words(entries):
                 shade[h] = "medium " + base
         for i in idx:
             words[i] = shade[entries[i]["colour"]]
+    # CT-R2 group 8 e: three or more different greys in one key (the grays palette) read as
+    # 'dark grey', 'slate grey', 'charcoal grey' ... that nobody can match to the figure. They
+    # are numbered by lightness instead: 'grey 1 of 5 (darkest)' ... 'grey 5 of 5 (lightest)'.
+    greys = []
+    for e in entries:
+        c = e.get("colour")
+        if not c:
+            continue
+        L, a, b = _srgb_to_lab(mcolors.to_rgb(c))
+        h = mcolors.to_hex(c, keep_alpha=False).upper()
+        if math.hypot(a, b) < 6.0 and 10.0 <= L <= 95.0 and h not in greys:
+            greys.append(h)
+    if len(greys) >= 3:
+        ranked = sorted(greys, key=lambda h: _srgb_to_lab(mcolors.to_rgb(h))[0])
+        n = len(ranked)
+        for i, e in enumerate(entries):
+            c = e.get("colour")
+            h = mcolors.to_hex(c, keep_alpha=False).upper() if c else None
+            if h in ranked:
+                k = ranked.index(h) + 1
+                words[i] = "grey %d of %d%s" % (k, n, " (darkest)" if k == 1 else
+                                                " (lightest)" if k == n else "")
     return words
 
 
