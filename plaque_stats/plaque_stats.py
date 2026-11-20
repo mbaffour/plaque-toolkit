@@ -287,7 +287,15 @@ def read_table(path, return_info=False, *, text_columns=None):
                              "as .xlsx, or export it as a CSV file." % (base, type(e).__name__, e))
         info["delimiter"] = "excel"
     else:
+        not_csv = ("%s does not look like a CSV table (is it an Excel or binary file saved with a .%s "
+                   "name?)" % (base, ext.lstrip(".") or "csv"))
         try:
+            with open(path, "rb") as fh:
+                head = fh.read(4096)
+            # CT-R2 (g): an .xlsx (zip), an old .xls (OLE) or any binary file renamed .csv gave
+            # pandas' "Error tokenizing data. C error: ..."
+            if head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")) or b"\x00" in head:
+                raise StatsError(not_csv)
             with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
                 lines = fh.read().splitlines()
         except OSError as e:
@@ -306,6 +314,8 @@ def read_table(path, return_info=False, *, text_columns=None):
         try:
             raw = pd.read_csv(io.StringIO("\n".join(kept)), sep=sep, dtype=str,
                               keep_default_na=False, na_values=[""], skip_blank_lines=True)
+        except (pd.errors.ParserError, UnicodeDecodeError):
+            raise StatsError(not_csv)
         except Exception as e:                                         # noqa: BLE001
             raise StatsError("could not read %s as a %s-separated table: %s"
                              % (os.path.basename(str(path)), _DELIM_NAMES[sep], e))
@@ -456,7 +466,8 @@ def _normalize_core(df, group, value, replicate, metric, subgroup=None):
     blank_v = out["value"].isna()
     if blank_v.any():
         n_text = min(nbad, int(blank_v.sum()))
-        why = "no numeric %s value" % vcol
+        # CT-R2 (g): "no numeric value value" when the column is called 'value'
+        why = "no numeric value" if str(vcol).strip().lower() == "value" else "no numeric %s value" % vcol
         if n_text:
             why += " (%d not a number, %d empty)" % (n_text, int(blank_v.sum()) - n_text)
         _drop(blank_v, why)
@@ -1699,32 +1710,130 @@ def _log_axis(ax, lo, hi):
     ax.yaxis.set_minor_formatter(NullFormatter())
 
 
-def _fit_xticklabels(fig, ax):
+TICK_SHORT_MAX = 22             # with the key on the figure, longer tick labels get an ellipsis
+AXES_MIN_SHARE = 0.45          # the axes keep at least this share of the figure height
+
+
+def _wrap2(txt):
+    """The label on at most two lines, broken at the space nearest its middle ('' if none)."""
+    t = str(txt)
+    sp = [i for i, c in enumerate(t) if c == " "]
+    if not sp or "\n" in t:
+        return ""
+    i = min(sp, key=lambda k: abs(k - len(t) / 2.0))
+    return t[:i] + "\n" + t[i + 1:]
+
+
+def short_labels(names, limit=TICK_SHORT_MAX):
+    """Tick labels for long sample names: an ellipsis in the middle ('MG1655 + p…e for test)');
+    when that would make two names look the same (they differ only in the middle), a window
+    around where they differ ('…variant 01 (long…'). Names up to `limit` characters are kept."""
+    names = [str(n) for n in names]
+    h = (limit - 1) // 2
+    out = [n if len(n) <= limit else n[:h] + "…" + n[-(limit - 1 - h):] for n in names]
+    if len(set(out)) == len(set(names)):
+        return out
+    long_ = [n for n in names if len(n) > limit]
+    lcp = len(os.path.commonprefix(long_)) if len(long_) > 1 else 0
+    start = max(0, lcp - (limit - 2) // 2)
+    out = []
+    for n in names:
+        if len(n) <= limit:
+            out.append(n); continue
+        w = n[start:start + limit - 2]
+        out.append(("…" if start > 0 else "") + w + ("…" if start + limit - 2 < len(n) else ""))
+    return out if len(set(out)) == len(set(names)) else names
+
+
+def _fit_xticklabels(fig, ax, can_shorten=False):
     """Rotate the x tick labels (right-aligned) when they would run into each other (CT-R1
-    DA-F10, web F14): 30° when that separates them, else 45°, else 90°. Long names get a smaller
-    font instead of being wrapped (two-line labels collide when rotated: follow-up S1)."""
+    DA-F10, web F14): 30° when that separates them, else 45°, else 90°; long names get a smaller
+    font. CT-R2 (h): 12 long names took 60 % of the figure height. In order: (1) a label is
+    wrapped at a space onto two lines when that shortens its rotated footprint (the angle is
+    chosen for the two-line height, so wrapped labels do not collide); (2) with `can_shorten`
+    (the key on the figure names every sample) labels longer than 22 characters get an ellipsis
+    in the middle (fig._ticks_shortened = True: the caption says the full names are in the key);
+    (3) _keep_axes_share() then grows the figure if the axes still have < 45 % of its height."""
     labs = [t for t in ax.get_xticklabels() if t.get_text()]
+    fig._ticks_shortened = False
     if len(labs) < 2:
         return False
     try:
         r = _renderer(fig)
-        w = max(t.get_window_extent(r).width for t in labs)
-        h = max(t.get_window_extent(r).height for t in labs)
         xs = sorted(ax.transData.transform((t.get_position()[0], 0))[0] for t in labs)
         gap = min(b - a for a, b in zip(xs, xs[1:]))
     except Exception:                                    # noqa: BLE001
         return False
+
+    def size():
+        return (max(t.get_window_extent(r).width for t in labs),
+                max(t.get_window_extent(r).height for t in labs))
+
+    def put(texts):
+        # through set_xticklabels: Text.set_text on a tick label is undone by the formatter at draw
+        nonlocal labs
+        fs, fw = labs[0].get_fontsize(), labs[0].get_fontweight()
+        ax.set_xticklabels(texts, fontsize=fs, fontweight=fw)
+        labs = [t for t in ax.get_xticklabels() if t.get_text()]
+
+    def plan(w, h):
+        a = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+        return a, w * math.sin(math.radians(a)) + h * math.cos(math.radians(a))
+
+    w, h = size()
     if w <= 0.92 * gap:
         return False
     if max(len(t.get_text()) for t in labs) > 18:
         fs = labs[0].get_fontsize()
         for t in labs:
             t.set_fontsize(min(fs, 9.5))
-        h *= min(fs, 9.5) / fs
-    angle = next((a for a in (30, 45) if gap * math.sin(math.radians(a)) >= 1.25 * h), 90)
+        w, h = size()
+    orig = [t.get_text() for t in labs]
+    ticks_all = [t.get_text() for t in ax.get_xticklabels()]
+    if len(ticks_all) != len(orig):                       # only plain one-label-per-tick axes
+        orig_put = None
+    else:
+        orig_put = True
+    angle, foot = plan(w, h)
+    wrapped = [_wrap2(x) or x for x in orig]
+    if wrapped != orig and orig_put:                      # (1) two lines if that is smaller
+        put(wrapped)
+        w2, h2 = size()
+        a2, f2 = plan(w2, h2)
+        if f2 < foot and w2 > 0.92 * gap:
+            angle, foot, w, h = a2, f2, w2, h2
+        elif w2 <= 0.92 * gap:
+            angle, foot, w, h = 0, h2, w2, h2
+        else:
+            put(orig)
+    H = fig.get_size_inches()[1]
+    if (orig_put and can_shorten and foot / fig.dpi > 0.20 * H
+            and max(len(x) for x in orig) > TICK_SHORT_MAX):
+        put(short_labels(orig))                           # (2) the key has the full names
+        fig._ticks_shortened = True
+        w, h = size()
+        angle, foot = plan(w, h) if w > 0.92 * gap else (0, h)
     for t in labs:
-        t.set_rotation(angle); t.set_ha("right" if angle < 90 else "center")
-        t.set_rotation_mode("anchor" if angle < 90 else "default")
+        t.set_rotation(angle); t.set_ha("right" if 0 < angle < 90 else "center")
+        t.set_rotation_mode("anchor" if 0 < angle < 90 else "default")
+    return True
+
+
+def _keep_axes_share(fig, ax, share=AXES_MIN_SHARE):
+    """(3) Grow the figure height until the axes have at least `share` of it (CT-R2 h). Returns
+    True when it grew; the caller runs the layout again."""
+    W, H = fig.get_size_inches()
+    ah = _axes_in(fig, ax)[1]
+    if ah >= share * H - 1e-6:
+        return False
+    d = (share * H - ah) / (1.0 - share)
+    fig.set_size_inches(W, H + d)
+    kb = float(getattr(fig, "_key_below_in", 0.0) or 0.0)
+    if kb > 0:                                          # the key strip keeps its height in inches
+        for a in fig.axes:
+            leg = a.get_legend()
+            if leg is not None:
+                leg.set_bbox_to_anchor((0.5, KEY_CAPTION_IN / (H + d)), transform=fig.transFigure)
     return True
 
 
@@ -1801,6 +1910,8 @@ def _tight(fig, caption=None):
 
 def _layout(fig, caption):
     _tight(fig, caption)
+    if fig.axes and _keep_axes_share(fig, fig.axes[0]):   # CT-R2 (h): after the caption too
+        _tight(fig, caption)
     # CT-R2 group 8 b: a key placed below is kept out of tight_layout (it has its own strip), but
     # bbox_inches="tight" also skips artists outside the layout, so without a caption under it
     # the saved file lost the key. Once the layout is final it counts again.
@@ -2245,8 +2356,13 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
     _tight(fig)                                  # first pass: the axes get their real size
-    if _fit_xticklabels(fig, ax):
+    key_names = fig.key_placement != "off" and any(e.get("section") == "sample" for e in key.get("entries", []))
+    if _fit_xticklabels(fig, ax, can_shorten=key_names):
         _tight(fig)
+    if _keep_axes_share(fig, ax):
+        _tight(fig)
+    if getattr(fig, "_ticks_shortened", False):
+        caption_bits.append("Full sample names are in the key")
     aw, ah = _axes_in(fig, ax)
 
     # ---- everything above the data is laid out in INCHES and converted to data units at the
@@ -3145,6 +3261,8 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     _wrap_title(fig, ax, opts)
     _tight(fig)
     if _fit_xticklabels(fig, ax):
+        _tight(fig)
+    if _keep_axes_share(fig, ax):                  # CT-R2 (h)
         _tight(fig)
     aw, ah = _axes_in(fig, ax)
 

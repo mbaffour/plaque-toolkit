@@ -79,6 +79,34 @@ _lk = _load_legend_key()
 # plaque_stats/agreement/agreement.py (CLI + web app); tests/test_ct_r1_agreement_validate.py
 # compares the two copies text-for-text. Edit one, paste into the other.
 # (The two packages are frozen separately, so one cannot import the other.)
+AGREEMENT_VERSION = "1.1.0"   # the stand-alone agreement tool's own version (frozen / no toolkit)
+
+
+def version_label():
+    """'Plaque Toolkit 1.3.0 (agreement.py)' when the toolkit's _version.py can be found (CT-R2
+    web (f): the report said 'agreement.py v1.1.0' beside a 'Plaque Toolkit 1.3.0' statistics
+    report), else 'agreement.py v<AGREEMENT_VERSION>' for the stand-alone / frozen tool."""
+    try:
+        from _version import __version__ as v                 # repo root on sys.path
+        return "Plaque Toolkit %s (agreement.py)" % v
+    except Exception:                                         # noqa: BLE001
+        pass
+    import os as _os
+    d = _os.path.dirname(_os.path.abspath(__file__))
+    for _ in range(3):
+        d = _os.path.dirname(d)
+        vp = _os.path.join(d, "_version.py")
+        if _os.path.isfile(vp) and _os.path.isfile(_os.path.join(d, "plaque_size_tool.py")):
+            try:
+                ns = {}
+                with open(vp, encoding="utf-8") as fh:
+                    exec(compile(fh.read(), vp, "exec"), ns)
+                return "Plaque Toolkit %s (agreement.py)" % ns["__version__"]
+            except Exception:                                 # noqa: BLE001
+                break
+    return "agreement.py v%s" % AGREEMENT_VERSION
+
+
 def _mean(a):
     return sum(a) / len(a)
 
@@ -863,8 +891,8 @@ def run(args):
     # report + paste-ready sentence
     sent = report_sentence(s, unit, what, lt, lm)
     with open(os.path.join(out, "agreement_report_%s.md" % suf), "w", encoding="utf-8") as f:
-        f.write("# Method-comparison report - %s\n\n_Generated %s | agreement.py v%s_\n\n"
-                % (what, stamp, __version__))
+        f.write("# Method-comparison report - %s\n\n_Generated %s | %s_\n\n"
+                % (what, stamp, version_label()))
         f.write("**%s vs %s**  (bias = %s - %s)\n\n" % (lt, lm, lt, lm))
         f.write("| statistic | value |\n|---|---|\n")
         f.write("| n pairs | %d |\n" % s["n"])
@@ -911,7 +939,7 @@ def run(args):
              s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
-               "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": __version__,
+               "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": version_label(),
                "numpy": np.__version__, "pandas": pd.__version__, "stats": row},
               open(os.path.join(out, "run_config_%s.json" % suf), "w"), indent=2, default=float)
     return s

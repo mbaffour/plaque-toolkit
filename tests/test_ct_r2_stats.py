@@ -639,4 +639,86 @@ def test_g9_text_in_a_value_cell_is_not_a_number(tmp_path, token):
     p.write_text("group,replicate,value\nA,p1,1.0\nA,p2,%s\nA,p3,1.2\nB,p1,2.0\nB,p2,\nB,p3,2.2\nB,p4,2.1\n" % token,
                  encoding="utf-8")
     res, _ = _run(tmp_path, str(p))
-    assert "2 rows dropped: no numeric value value (1 not a number, 1 empty)." in res["notes"]
+    assert "2 rows dropped: no numeric value (1 not a number, 1 empty)." in res["notes"]
+
+
+# =========================================================================== 8 (web tester): f, g, h
+def test_g8f_agreement_report_names_the_toolkit_version(tmp_path):
+    ns = {}
+    exec(open(os.path.join(ROOT, "_version.py"), encoding="utf-8").read(), ns)
+    want = "Plaque Toolkit %s (agreement.py)" % ns["__version__"]
+    assert cli_ag.version_label() == want == app_ag.version_label()
+    tool, ref = _pairs(12)
+    csv = tmp_path / "pairs.csv"
+    pd.DataFrame({"toolkit_mm": tool, "manual_mm": ref}).to_csv(csv, index=False)
+    a = vars(cli_ag.build_args().parse_args([str(csv), "--tool", "toolkit_mm", "--manual", "manual_mm",
+                                             "--out", str(tmp_path / "o")]))
+    a["formats"] = ["png"]
+    with contextlib.redirect_stdout(io.StringIO()):
+        cli_ag.run(a)
+    rep = [f for f in os.listdir(tmp_path / "o") if f.endswith(".md")][0]
+    assert "| %s_" % want in (tmp_path / "o" / rep).read_text(encoding="utf-8")
+    import json
+    cfg = [f for f in os.listdir(tmp_path / "o") if f.startswith("run_config")][0]
+    assert json.load(open(tmp_path / "o" / cfg))["version"] == want
+
+
+@pytest.mark.parametrize("content", [b"PK\x03\x04\x14\x00\x00\x00fake xlsx", b"\xd0\xcf\x11\xe0\xa1\xb1old xls",
+                                     b"a,b\n1\x002\n", b"a\n1\n2,3,4\n5,6\n"])
+def test_g8g_a_non_table_with_a_csv_name_is_a_plain_error(tmp_path, content):
+    p = tmp_path / "data.csv"
+    p.write_bytes(content)
+    with pytest.raises(ps.StatsError) as e:
+        ps.read_table(str(p))
+    assert ("data.csv does not look like a CSV table (is it an Excel or binary file saved with a .csv "
+            "name?)") in str(e.value)
+    assert "tokenizing" not in str(e.value)
+
+
+def test_g8g_no_doubled_word_in_the_dropped_rows_note():
+    df = pd.DataFrame({"group": ["A", "A", "B", "B"], "replicate": ["p1", "p2", "p1", "p2"],
+                       "value": ["1.0", "x", "2.0", "2.1"]})
+    out, _ = ps.normalize(df, "group", None, "replicate", "metric")
+    assert ps.data_notes(out) == ["1 row dropped: no numeric value (1 not a number, 0 empty)."]
+
+
+def _long_names_frame():
+    r = np.random.default_rng(3)
+    names = ["MG1655 + phage variant %02d (long name for test)" % i for i in range(1, 13)]
+    df = pd.DataFrame([{"group": g, "replicate": "plate%d" % p, "value": float(v)}
+                       for k, g in enumerate(names) for p in range(1, 4) for v in r.normal(1.5 + .08 * k, .3, 8)])
+    return df, names
+
+
+def test_g8h_long_tick_labels_leave_the_axes_45_percent_and_use_the_key(tmp_path):
+    import matplotlib.pyplot as plt
+    df, names = _long_names_frame()
+    o = ps._plot_opts(dict(violin_fill="group", palette=list(ps.PALETTES["tab10"])))
+    fig = ps.plot_violin(df, names, o, "value", {})
+    W, H = fig.get_size_inches()
+    ax = fig.axes[0]
+    assert ps._axes_in(fig, ax)[1] >= 0.45 * H - 0.01
+    ticks = [t.get_text() for t in ax.get_xticklabels()]
+    assert all(len(t) <= ps.TICK_SHORT_MAX for t in ticks) and len(set(ticks)) == 12
+    assert any("01" in t for t in ticks) and all("…" in t for t in ticks)
+    assert ax.get_position().x0 * W < 2.0                         # no blank left third
+    cap = [t.get_text() for t in fig.texts if t.get_position() == (0.012, 0.008)]
+    assert cap and "Full sample names are in the key" in cap[0].replace("\n", " ")
+    from legend_key import from_figure
+    assert [e["label"] for e in from_figure(fig)["entries"][:12]] == names     # the key keeps them
+    plt.close(fig)
+    # grey violins, no key on the figure: the names stay complete (wrapped), axes still >= 45 %
+    fig = ps.plot_violin(df, names, ps._plot_opts(dict(legend=False)), "value", {})
+    W, H = fig.get_size_inches()
+    ticks = [t.get_text().replace("\n", " ") for t in fig.axes[0].get_xticklabels()]
+    assert ticks == names
+    assert ps._axes_in(fig, fig.axes[0])[1] >= 0.45 * H - 0.01
+    plt.close(fig)
+
+
+def test_g8h_short_labels_stay_distinct():
+    n = ["MG1655 + phage variant %02d (long name for test)" % i for i in range(1, 4)] + ["WT"]
+    s = ps.short_labels(n)
+    assert s[-1] == "WT" and len(set(s)) == 4 and all(len(x) <= ps.TICK_SHORT_MAX for x in s)
+    name = "Escherichia coli K-12 MG1655 plus T4"
+    assert ps.short_labels([name, "B"]) == [name[:10] + "…" + name[-11:], "B"]   # ellipsis in the middle

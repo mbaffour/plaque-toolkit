@@ -190,6 +190,34 @@ def area_to_diam(areas):
 # plaque_stats/agreement/agreement.py (CLI + web app); tests/test_ct_r1_agreement_validate.py
 # compares the two copies text-for-text. Edit one, paste into the other.
 # (The two packages are frozen separately, so one cannot import the other.)
+AGREEMENT_VERSION = "1.1.0"   # the stand-alone agreement tool's own version (frozen / no toolkit)
+
+
+def version_label():
+    """'Plaque Toolkit 1.3.0 (agreement.py)' when the toolkit's _version.py can be found (CT-R2
+    web (f): the report said 'agreement.py v1.1.0' beside a 'Plaque Toolkit 1.3.0' statistics
+    report), else 'agreement.py v<AGREEMENT_VERSION>' for the stand-alone / frozen tool."""
+    try:
+        from _version import __version__ as v                 # repo root on sys.path
+        return "Plaque Toolkit %s (agreement.py)" % v
+    except Exception:                                         # noqa: BLE001
+        pass
+    import os as _os
+    d = _os.path.dirname(_os.path.abspath(__file__))
+    for _ in range(3):
+        d = _os.path.dirname(d)
+        vp = _os.path.join(d, "_version.py")
+        if _os.path.isfile(vp) and _os.path.isfile(_os.path.join(d, "plaque_size_tool.py")):
+            try:
+                ns = {}
+                with open(vp, encoding="utf-8") as fh:
+                    exec(compile(fh.read(), vp, "exec"), ns)
+                return "Plaque Toolkit %s (agreement.py)" % ns["__version__"]
+            except Exception:                                 # noqa: BLE001
+                break
+    return "agreement.py v%s" % AGREEMENT_VERSION
+
+
 def _mean(a):
     return sum(a) / len(a)
 
