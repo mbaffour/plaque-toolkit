@@ -342,7 +342,6 @@ def test_f8_desktop_has_no_hide_control_and_refusal_says_why(st, dialogs, tmp_pa
     dialogs["open"].append((K_ZEROS, ""))
     st._load_study()
     assert "Not loaded" in st.err.text() and "zero or negative" in st.err.text()
-    assert "this tab refuses them" in st.err.text()
     assert st._samples == []
 
 
@@ -366,8 +365,8 @@ def test_n3_median_bootstrap_wording_has_no_nested_brackets():
             "10 plates, plates resampled, 2,000 bootstrap resamples, seed 7).") in fs
     assert _depth(fs) <= 1 and ";" not in fs
     w = ps._what_values("median", "ci95", True, "replicate", 3)
-    assert w == ("median of all plaques, whisker: bootstrap interval of the median, approximate (too "
-                 "narrow with fewer than about 10 plates)")
+    assert w == ("median of all plaques, whisker: bootstrap interval of the median, approximate, too "
+                 "narrow with fewer than about 10 plates")
     df = ps.read_table(F_ONE)
     d, _ = ps.normalize(df, "group", "diameter_mm", "replicate", "metric")
     d = d[d["group"] != "mutB"]
@@ -376,8 +375,8 @@ def test_n3_median_bootstrap_wording_has_no_nested_brackets():
         summ = ps.group_summary(d, order, unit=unit)
         cen = ps.center_table(d, order, o)
         s = ps.paste_sentence("diameter", summ, omni, unit, hr, o, centers=cen)
-        # the value range "(2.41–2.82)" is the only bracket before the description bracket
-        assert "approximate (too narrow" in s and _depth(s) <= 2, s
+        # the value range "(2.41–2.82)" and the description "(median ...; N = ...)" are siblings
+        assert "approximate, too narrow" in s and _depth(s) <= 1, s
         assert "((" not in s and "median (bootstrap" not in s
 
 
@@ -500,3 +499,14 @@ def test_web_size_line_is_the_served_file_and_says_why():
     said = [float(x) for x in re.match(r"figure: ([\d.]+) x ([\d.]+) in", line).groups()]
     assert abs(said[0] - w) <= 0.05 and abs(said[1] - h) <= 0.05, (line, w, h)
     assert "margin around the figure is trimmed" in line and "(9.0 x 5.4 in)" in line, line
+
+
+def test_f8_desktop_shows_the_size_warning_when_a_value_reaches_it(st, dialogs):
+    """Values <= 0 cannot be loaded here, but one that reaches the tab another way is warned about
+    on screen with the engine's words (its ZIP report already had them)."""
+    _fill(st, THREE)
+    st._add_plate(0, [0.0, 1.0, 1.1], [0.0, 1.0, 1.2])
+    st._refresh_tree()
+    st.analyse_btn.click()
+    assert ("1 value is zero or negative: a plaque size cannot be; check the column (they are included "
+            "in this analysis).") in st.warn_lbl.text()

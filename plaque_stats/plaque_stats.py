@@ -2617,7 +2617,8 @@ def _what_values(center, error, have_rep, unit, n_min=None):
     if (center, error) == ("median", "ci95") and have_rep and unit == "replicate" \
             and not (n_min is not None and (n_min >= BOOT_MIN_PLATES or n_min < 2)):
         # CT-R3 (stats N3): one level of brackets at most, also inside a two-sample sentence
-        return "median of all plaques, whisker: %s" % BOOT_APPROX
+        return ("median of all plaques, whisker: bootstrap interval of the median, approximate, %s"
+                % BOOT_APPROX_REASON)
     if center == "median":
         return "%s of all plaques" % stat
     return "%s of the %s" % (stat, "plate means" if (have_rep and unit == "replicate") else "plaques")

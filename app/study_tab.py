@@ -355,8 +355,8 @@ def _ui_words(text, ref=None):
     (CT-R1 F9, brief rule 6), on screen AND in the ZIP's report (CT-R2 F13). Whole engine phrases
     are replaced first (longest first), so '--equal-var no (Welch)' becomes 'Variances: Unequal
     (Welch)', never '... (Welch) (Welch)'; `ref` is the Compare reference ('Compare: vs mutA
-    (Dunnett)'). A bracket phrase repeated by any route is said once. Not applied to the legend
-    text starter, which must stay identical to the ZIP's legend text file."""
+    (Dunnett)'). A bracket phrase repeated by any route is said once. CT-R3 F4: also applied to the
+    legend text starter AND to the ZIP's legend text file, so the two stay identical."""
     text = str(text or "").replace("`", "")
     pairs = list(_FLAG_WORDS)
     if ref:
@@ -1527,8 +1527,7 @@ class StudyTab(QWidget):
                      for i, col, cell, why in sorted(bad)[:8]]
             self._warn("Not loaded: %s has %d cell(s) that are not plaque sizes — %s%s. A diameter or "
                        "area must be a positive number (leave the cell empty for a plate without "
-                       "plaques). Fix these cells and load the file again. (The command line and the "
-                       "web app analyse such values with a warning; this tab refuses them.)"
+                       "plaques). Fix these cells and load the file again."
                        % (source, len(bad), "; ".join(where), "; …" if len(bad) > 8 else ""))
             return
         samples, plates, index = [], [], {}
@@ -1871,6 +1870,9 @@ class StudyTab(QWidget):
         omni, posthoc, unit, have_rep = ps.run_stats(
             df, order, "auto", sc["parametric"], equal_var=sc["equal_var"], posthoc=sc["posthoc"],
             control=sc["control"], detect=sc.get("detect"))
+        sw = ps.size_warning(df["value"].values, metric_name)          # CT-R3 F8 (as the engine's ZIP)
+        if sw:
+            omni["warnings"].insert(0, sw)
         summ = ps.group_summary(df, order, unit=unit)
         rep = ps.replicate_means(df)
         pairwise = pd.DataFrame(omni.get("pairwise") or [])
@@ -2122,7 +2124,8 @@ class StudyTab(QWidget):
         summ, comp, unit, info = ps.grouped_stats(df, group_order, sub_order, control, parametric,
                                                   return_info=True)
         pm = ps._plate_means_gs(df)
-        warns = list(info.get("warnings") or []) + list(self._plate_warns)
+        sw = ps.size_warning(df["value"].values, metric_name)          # CT-R3 F8 (as the engine's ZIP)
+        warns = ([sw] if sw else []) + list(info.get("warnings") or []) + list(self._plate_warns)
         if excluded:
             warns.append("%d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
                          "2nd-factor tags to compare every plate as single-factor samples."
