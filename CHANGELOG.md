@@ -66,18 +66,23 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
     1.87 mm → 89 / 62 / 3.16 mm; Plate_8 27 / 27 / 3.89 mm → 27 / 22 / 5.39 mm (the
     command-line default gives 5.97, 3.79 and 5.57 mm on 16, 48 and 19 plaques). Choose
     **Small** for the old behaviour.
-    **Known limits of Auto, found by the second test round and not yet fixed (do not rely on
-    Auto sizes for publication until this paragraph is gone):** the per-plate CSV that "Save
-    results" and Batch write (`data-green-*.csv`) does not carry the flags yet, so sizes
-    computed from those files, or imported from them into the Analyze tab, still include the
-    `CORE?` / `NO_SIZE` rows (bundled Plate_6: 3.16 mm in the app, 2.57 mm from the saved file);
+    **Known limits of Auto (measured in the second test round; treat Auto sizes as
+    provisional and check them against Standard or manual tracing before publishing):**
     the ±5 % rule for split pieces was fitted on its own sweep (`validation/split_sweep/`) and
     fails outside it (neighbours at 90°, unequal neighbours: 6–16 % short); a 1 % change of
-    exposure can move a plaque between the standard, split, small and `CORE?` classes; haloed
-    plaques wider than roughly 150 px are outlined at their dark centre by the standard pass
-    itself; and a quarter to a third of the plaques on haloed plates are left out of the size
-    summary, not at random. The halo thresholds were set on the bundled plates only. Whether the
-    halo or the dark centre is the right edge for a given phage is the experimenter's call.
+    exposure can move a plaque between the standard, split, small and `CORE?` classes (19
+    changes of "is it sized" over 12 runs on 6 bundled plates); a quarter to a third of the
+    plaques on haloed plates are left out of the size summary, not at random; the halo
+    thresholds were set on the bundled plates only. A simpler rule (size only standard-pass
+    outlines) was scored on a frozen benchmark (`validation/detection_benchmark/`) and did not
+    beat the current rule, so the rule is unchanged. Whether the halo or the dark centre is the
+    right edge for a given phage is the experimenter's call.
+  * **A limit of the standard pass itself, now warned about (all engines, command line
+    included; no number changes):** on synthetic plates a haloed plaque about 140 px or wider is
+    outlined at its dark centre, and the bundled plates enlarged 2× show the same drop in
+    median. The app and the command line now warn "plaques wider than about 135 px (X mm at
+    this image's scale) may be outlined at their dark centre; photograph at lower magnification
+    or resize the image". The synthetic limit has not been measured against manual tracing.
   * The dish, and so the mm scale, now comes from the standard pass. On four bundled plates the
     old dish was a threshold halo 4–5 % too wide (Plate_8, 11, 14, 17), so every mm size on them
     grows by about that much; Plate_2, which had no dish, now gets one.
@@ -97,6 +102,33 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **Fiji agreement, pasted columns.** A header such as `AREA_MM2`, a row-number column, `.62`,
   `1,234.5` or a non-numeric line used to shift or change the pairs without notice; they are now
   read correctly or refused with the line named.
+* **Compare tab: plaque counts and titers.** Compare used the standard pass only, while Measure
+  and Batch default to Auto, so the same plates gave different counts on different tabs. Compare
+  now has the same **Plaque size** choice and finds exactly the plaques Measure and Batch find.
+  With the shared default (Auto) the counts on plates of small plaques rise, and titers with
+  them. Five bundled small-plaque plates at 10⁻⁶ / 100 µL, before → after: 33 → 46, 15 → 47,
+  0 → 38, 1 → 37, 16 → 41 plaques (0 → 3.8 × 10⁸ PFU/mL on the third). Choose **Standard** for
+  the old counts. `CORE?` / `NO_SIZE` plaques count toward the titer but are left out of size
+  and turbidity summaries ("Sizes and turbidity from N of M plaques"). The command-line
+  `plaque_turbidity.py` is unchanged unless you pass the new `--multiscale`. All three tabs
+  read one default (`DEFAULT_PLAQUE_SIZE` in `app/engine_api.py`).
+* **Compare no longer searches sub-folders** (Batch never did); both tabs say how many
+  sub-folders were not searched. The command-line tool still searches them.
+* **Statistics, 8 or more plates per sample (Python engine and R app).** The normality check
+  that decides between parametric and rank tests is now Bonferroni-corrected across samples.
+  Before, normal equal-variance data were sent to Kruskal-Wallis in 15 % of runs with 3 samples
+  and 27 % with 5; now 5–6 %. Samples whose smallest Shapiro p lies between 0.05/m and 0.05
+  therefore get a parametric test. Below 8 plates nothing changes.
+* **Rank tests.** Plate means are rounded to 12 significant digits before ranking, so means that
+  are equal on paper count as ties (R and Python then agree); rank-test rows no longer show a
+  parametric CI, Cohen's d or Hedges' g (the difference of medians is given instead).
+* **Log axis with hidden values.** The drawn plate means, bar and whisker are computed from the
+  values that are drawn; the statistics still use every value, and the caption says so.
+* **Files.** A line starting with `#` is a comment only before the header row, so samples named
+  `#1` are data everywhere (statistics engine, R app, Analyze tab). Text such as `NA` or `-` in a
+  value cell is counted as "not a number".
+* **Agreement wording.** The Koo & Li grade is given for the ICC's 95 % interval ("moderate to
+  excellent"), not the point estimate; no verdict is printed below 5 pairs.
 * **QC flags.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is for a shape
   far from round (low solidity or an elongated outline). `EDGE` is measured against the lawn
   edge (0.93 of the dish radius), so it now fires for plaques at the rim. New flags `NESTED`
@@ -206,6 +238,54 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **About** lists all seven tabs; Help documents' table-of-contents and cross-document links work.
 * Agreement CLI: an unknown `--tool` / `--manual` column is a one-line message listing the
   numeric columns.
+
+### Second test round (same branch): what it changed
+
+Six fresh testers re-ran every round-1 finding on the fixed build (about 100 of 148 confirmed
+fixed, the rest partly) and reported 81 new ones; the entries below are the fixes for those.
+
+* **The size rule reaches every file and tool.** The app's per-plate CSVs
+  (`data-green-*.csv` from "Save results" and Batch) now end with `QC_FLAG` / `QC_REASON` for
+  every engine; `--multiscale` always writes them; `summarize_plates.py`, `compile_excel.py`
+  and `make_figure.py` take sizes only from plaques whose size is used and say "sizes from N of M
+  plaques" (`N_SIZED` column). Flags are recognised however a spreadsheet re-saved them (case,
+  spaces, header spelling). Before this, the same plate gave 62 plaques at 3.63 mm or 89 at
+  3.13 mm depending on which saved file was imported into Analyze.
+* **Plaques whose size is not used are visible.** On the canvas, the saved figure and the key
+  they are drawn dotted and labelled "7 (core)" / "23 (split)"; the flag line counts the current
+  plaques by `SOURCE` ("15 auto (standard pass), 12 split, 14 small (10 of them outlined at the
+  dark centre only)") and follows edits; `per_plate.csv` has `n_sized`, `n_core`, `n_no_size`,
+  which add up to `n_plaques`; drawing round a dark-centre plaque replaces it instead of adding
+  a second one.
+* **Plate warnings** on Measure, Batch and Compare and in `run_metadata.json`: no dish found
+  (sizes then stay blank instead of 0.0 mm); fewer than half of the plaques sized; a quarter or
+  more of the plaques under 16 px across (single sizes are uncertain at that size: about ±30 %
+  against manual tracing in `validation/tiny_plaques.csv`); the large-plaque limit above.
+* **Legend keys for Batch and turbidity overlays** (key image and text beside every overlay,
+  "Place key on figure" honoured); overlay labels scale with the image.
+* **Measure editing.** A Dish-size change is its own undo step; undo after Save marks the plate
+  unsaved; only Select / pan grabs the scale bar; the parameter rows fold on short windows.
+* **Analyze tab.** A sample named `#3 phage` survives Save / Load; Load study refuses text, zero
+  and negative sizes; a table holding several images becomes one plate per image; each plate
+  remembers how many plaques were left out and why (tree, Report, ZIP, study file); the Report
+  follows Center / Error-bar changes without re-running; the ZIP report uses the tab's control
+  names; the Compare reference follows a rename; choices that cannot be combined with Dunnett are
+  greyed, and a refused combination keeps the last valid result; the size a figure is really
+  saved at is reported; controls wrap in narrow windows.
+* **Statistics engine.** Every report branch now says what actually ran (Dunnett after a
+  rejected normality check; no "Welch is safer" after a fallback from Welch); every p is written
+  "p < 0.001", never "p = < 0.001"; options that do nothing in grouped mode say so; the grouped
+  table's interval is labelled "unadjusted"; Kruskal-Wallis and Dunn p are labelled asymptotic
+  and Mann-Whitney exact where it is; the plate-bootstrap interval of the median is called
+  approximate below 10 plates (it covers 73–90 % there); TOST and the power sentence state that
+  they are per comparison. New: `--detect DIFF` (plates needed to detect a difference you name)
+  and a sensitivity line comparing equal and unequal variances. Long sample names no longer
+  squeeze the plot (labels wrap, or are shortened when the key names every sample); the engine
+  no longer changes matplotlib settings for the rest of the program.
+* **A frozen detection benchmark** (`validation/detection_benchmark/`): the second-round
+  tester's synthetic plates and perturbations, kept so that any future change to detection or
+  sizing is scored on scenes it was not tuned on. Its absolute numbers are pessimistic compared
+  with the real Fiji pairs and are for comparing rules, not for quoting accuracy.
 
 ### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
 
