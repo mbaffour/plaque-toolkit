@@ -306,8 +306,13 @@ def test_n1_sizes_and_turbidity_leave_out_core_and_no_size(tmp_path):
                        "CLARITY": [""] * 4, "QC_FLAG": ["OK", "EDGE", "CORE?", "SPLIT|NO_SIZE"]})
     s = ptb.summarise(df).iloc[0]
     assert s["N_PLAQUES"] == 4 and s["N_SIZED"] == 2 and s["TRANSMITTANCE_PLAQUE_MEAN"] == 1.5
-    figs = ptb.write_plots(df, str(tmp_path), formats=("png",))
-    assert figs and all("(n = 2)" in f.get("title", "") or True for f in figs)
+    from matplotlib.axes import Axes
+    seen = []
+    real = Axes.boxplot
+    import unittest.mock as _m
+    with _m.patch.object(Axes, "boxplot", lambda self, x, **k: seen.append([len(v) for v in x]) or real(self, x, **k)):
+        figs = ptb.write_plots(df, str(tmp_path), formats=("png",))
+    assert figs and seen and all(n == [2] for n in seen)        # 2 sized plaques per box plot
     assert len(ptb.sized_rows(df)) == 2
     # the default (no QC_FLAG column) summary is exactly as before
     s0 = ptb.summarise(df.drop(columns=["QC_FLAG"])).iloc[0]
@@ -766,3 +771,15 @@ def test_c_per_plate_counts_add_up(tmp_path):
     assert (row["n_plaques"], row["n_sized"], row["n_core"], row["n_no_size"]) == (41, 21, 10, 10)
     assert row["n_plaques"] == row["n_sized"] + row["n_core"] + row["n_no_size"]
     assert "n_no_size" in appui.BATCH_COLUMNS
+
+
+def test_n7_a_hand_drawn_rim_stays_a_hand_calibration_after_the_dish_box(sample_editor, dialogs):
+    tab, ed = sample_editor
+    dialogs.double = (90.0, True)
+    cx, cy = ed.plate["center"]; r = ed.plate["radius"]
+    ed._set_tool("dish")
+    for a in (0.0, 2.0, 4.0):
+        ed._dish_click(QPointF(cx + r * math.cos(a), cy + r * math.sin(a)))
+    assert ed.export_state()["edits"]["calibration"] == "set plate" and ed.edited
+    tab.plate.setValue(85)
+    assert ed.export_state()["edits"]["calibration"] == "set plate" and ed.edited

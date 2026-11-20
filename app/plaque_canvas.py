@@ -1057,8 +1057,10 @@ class PlaqueCanvas(QWidget):
         else:
             self.plate_mm = mm
             self.ppm = mm / float(diam_px)
-        # CT-R2 N7: the scale now comes from the dish (the Dish box), whatever set it before
-        self._calib_source = "dish"
+        # CT-R2 N7: the scale now comes from the dish and the Dish box, whatever set it before
+        # (the Ruler included) -- except a rim drawn by hand with Set plate, which stays a hand
+        # calibration ("set plate", so the result still counts as edited)
+        self._calib_source = "set plate" if self._calib_source == "set plate" else "dish"
         self._sync_det()
         self._retag(); self._refresh_key()
         self._layout_cache = None

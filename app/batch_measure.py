@@ -288,7 +288,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             plaque_gui.save_results(plaques, orig_bgr, path, perimg, ppm,
                                     lawn_gray, plate=plate, published=(mode == "published"),
                                     write_provenance=False,   # the batch writes its own below
-                                    key=bool(key_on_figure), write_key=True)
+                                    key=bool(key_on_figure), write_key=True,
+                                    precise=(mode == "precise"))
 
             # ---- optional Fiji-calibrated cropped-plate TIFF ------------- #
             if crops:

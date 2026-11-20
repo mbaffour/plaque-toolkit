@@ -793,7 +793,11 @@ def render_overlay(orig, rec, out_dir, key_on_figure=True):
     for p, cls in zip(rec["plaques"], rec["classes"]):
         _n, rgb, style = OVERLAY_CLASSES[cls]
         pgui.draw_outline(img, p, rgb, style, m["line"])
-    key = overlay_key(rec)
+    try:
+        key = overlay_key(rec)
+    except Exception as e:                       # noqa: BLE001 -- a key never stops the overlay
+        print("  (legend key skipped for %s: %s)" % (rec.get("plate"), e))
+        key = None
     patch, avoid = None, []
     if key_on_figure and key:
         patch = pgui.key_image_for(img.shape, key)
@@ -809,7 +813,11 @@ def render_overlay(orig, rec, out_dir, key_on_figure=True):
         pgui._paste_key(img, patch)
     path = os.path.join(out_dir, "overlay_%s.png" % rec["plate"])
     pst.imwrite_checked(path, img)
-    key_files = pgui.write_key_files_for(key, path) if key else []
+    try:
+        key_files = pgui.write_key_files_for(key, path) if key else []
+    except Exception as e:                       # noqa: BLE001
+        print("  (legend key files skipped for %s: %s)" % (rec.get("plate"), e))
+        key_files = []
     lk = _legend_key_module()
     return {"png": path, "key_files": key_files,
             "legend_text": lk.text_starter(key) if (lk is not None and key) else ""}

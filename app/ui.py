@@ -515,12 +515,7 @@ class MeasureTab(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self._params_auto:
-            vp = self.parentWidget()
-            avail = vp.height() if vp is not None else self.height()
-            want = avail < self._COLLAPSE_BELOW
-            if want != self._params_collapsed:
-                self._set_params_collapsed(want)
+        self._auto_fold()
         # The tab's real minimum height depends on its width (the toolbars wrap). Publish it,
         # so the outer scroll area scrolls only when the window is too small for that minimum
         # and otherwise hands the canvas all the height that is left (CT-R1 F11).
@@ -534,6 +529,17 @@ class MeasureTab(QWidget):
         super().showEvent(e)
         self._show_status()                    # this tab's own message comes back with it
 
+    def _auto_fold(self):
+        """Fold the parameter rows on a short window -- only once a plate is on screen: before
+        that the Dish, Engine and Plaque size boxes are what the user needs."""
+        if not self._params_auto:
+            return
+        vp = self.parentWidget()
+        avail = vp.height() if vp is not None else self.height()
+        want = self.editor is not None and avail < self._COLLAPSE_BELOW
+        if want != self._params_collapsed:
+            self._set_params_collapsed(want)
+
     def _params_toggled(self, _checked=False):
         self._params_auto = False
         self._set_params_collapsed(not self._params_collapsed)
@@ -545,7 +551,7 @@ class MeasureTab(QWidget):
         self.mode_help.setVisible(not on)
         self._update_params_summary()
         self.params_summary.setVisible(on)
-        self.params_toggle.setText("Parameters ▾" if on else "▴")
+        self.params_toggle.setText("Parameters ▾" if on else "Fold ▴")
         self.params_toggle.setChecked(on)
         self._params_box.setTitle("" if on else "Parameters")
         # one line means one line: no room for the (empty) title, and the photo's info strip
@@ -977,6 +983,7 @@ class MeasureTab(QWidget):
         self.editor.calibration_changed.connect(self._on_calibration_changed)
         self.editor.dirty_changed.connect(lambda _on=True: self._show_status())
         self.canvas_layout.addWidget(self.editor, 1)
+        QTimer.singleShot(0, self._auto_fold)
         QTimer.singleShot(0, self._sync_min_height)     # once the editor has its width
 
     def _status_text(self):
