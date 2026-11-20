@@ -241,7 +241,8 @@ def detect_plate_scaled(path, plate_size, scale, transfer=None):
                 else cv2.ellipse2Poly((int(round(p["center"][0])), int(round(p["center"][1]))),
                                       (int(round(p["radius"])),) * 2, 0, 0, 360, 5))
         plaques.append({"hull": hull, "area_pxl": float(p["area_pxl"]),
-                        "diameter_mm": round(pgui.measure(p["area_pxl"], ppm, False)[2], 2),
+                        # CT-R3 F1: blank (not 0.0) without a mm scale; app path only
+                        "diameter_mm": pgui.mm_cell(pgui.measure(p["area_pxl"], ppm, False)[2], ppm),
                         "qc_flag": flag, "size_ok": plaque_qc.size_ok(flag)})
     dish_center = dish_r = dish_mask = None
     if plate is not None:

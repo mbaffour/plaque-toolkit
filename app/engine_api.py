@@ -207,8 +207,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
         rows.append({"INDEX": i, "AREA_PXL": round(p["area_pxl"], 2),
-                     "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": round(area_mm2, 2),
-                     "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
+                     # CT-R3 F1: no mm scale = blank mm cells (was 0.0) in every file from here
+                     "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": pgui.mm_cell(area_mm2, ppm),
+                     "DIAMETER_MM": pgui.mm_cell(dia_mm, ppm), "MEAN_GRAY": round(mg, 2),
                      "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""),
                      "CIRCULARITY": circs[i - 1], "OVERLAP": ("yes" if ov else "no"),
                      "SOURCE": p["source"], "QC_FLAG": qc[i - 1][0], "QC_REASON": qc[i - 1][1]})

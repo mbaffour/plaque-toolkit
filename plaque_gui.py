@@ -439,6 +439,16 @@ def measure(area_pxl, pxl_per_mm, published=None):
     return dia_pxl, area_mm2, dia_mm
 
 
+def mm_cell(value, pxl_per_mm, ndigits=2):
+    """A millimetre cell of a per-plaque file the APP writes: the rounded value, or NaN (an
+    EMPTY cell in the CSV) when there is no mm scale. CT-R3 F1: no scale = no millimetres;
+    these files said 0.0 mm, which Analyze took as a measured size. The CLI's own files
+    (plaque_size_tool.py default / --published / -small) are frozen and do not use this."""
+    if not pxl_per_mm:
+        return float("nan")
+    return round(float(value), ndigits)
+
+
 def qc_flags(plaques, orig_bgr, pxl_per_mm, plate=None, circularities=None):
     """[(QC_FLAG, QC_REASON)] per plaque -- the ONE call behind the Measure table
     (engine_api.measure_table), Save results' data-green CSV, the Batch CSVs and the Compare
@@ -1291,7 +1301,11 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     The desktop app passes all of them: its Save used to record whatever engine another tab
     had last run. ``labels`` / ``key`` style the overlay (see annotate_plaques);
     ``write_key=True`` also writes out_<stem>_legend_key.<overlay format> (+ .png) and
-    out_<stem>_legend_text.txt."""
+    out_<stem>_legend_text.txt.
+
+    CT-R3 F1: with no mm scale (``pxl_per_mm`` None) AREA_MM2 and DIAMETER_MM are left EMPTY
+    (they were 0.0) for every caller -- the app's Save results, Batch, this module's editor and
+    measure_samples.py. plaque_size_tool.py's own files do not come from here."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -1312,8 +1326,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
             "INDEX_COL": i,
             "AREA_PXL": round(p["area_pxl"], 2),
             "DIAMETER_PXL": round(dia_pxl, 2),
-            "AREA_MM2": round(area_mm2, 2),
-            "DIAMETER_MM": round(dia_mm, 2),
+            "AREA_MM2": mm_cell(area_mm2, pxl_per_mm),        # CT-R3 F1: blank, not 0.0,
+            "DIAMETER_MM": mm_cell(dia_mm, pxl_per_mm),       # without a mm scale
             "MEAN_GRAY": round(mg, 2),
             "TURBIDITY_REL": round(tb, 3),
             "SOURCE": p["source"],
