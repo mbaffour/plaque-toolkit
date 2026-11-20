@@ -659,7 +659,8 @@ spread_check <- function(groups, unit_word = "plates") {
   sds <- vapply(g, stats::sd, 0); n <- lengths(g)
   ia <- which.max(sds); ib <- which.min(sds)
   ratio <- if (sds[ib] > 0) sds[ia] / sds[ib] else if (sds[ia] > 0) Inf else NA_real_
-  rtxt <- if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "Inf"
+  # CT-R3 F11: "n/a" when nothing has any spread (no ratio exists), "Inf" only for a finite SD over zero, as _ratio_txt()
+  rtxt <- if (is.na(ratio)) "n/a" else if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "Inf"
   note <- NULL
   # (merged Python rule) Welch's ANOVA is no alternative when a sample has no spread at all
   flat <- names(g)[sds == 0]
@@ -701,6 +702,16 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   requested <- unit
   if (unit == "auto") unit <- if (have_rep) "replicate" else "plaque"
   warns <- character(0); notes <- character(0)
+  # CT-R3 F8 (the Python engine's warning for a size column): a plaque size of zero or less cannot be
+  # real, so the column is probably wrong; the values stay in the analysis. Size columns are the ones
+  # whose name has diam, area, radius, mm or um in it.
+  vcol <- attr(d, "info")$value_col
+  if (length(vcol) == 1 && !is.na(vcol) && grepl("diam|area|radius|mm|um", tolower(vcol))) {
+    nz <- sum(d$value <= 0, na.rm = TRUE)
+    if (nz > 0)
+      warns <- c(warns, sprintf("%d value%s %s zero or negative: a plaque size cannot be; check the column (%s included in this analysis).",
+                                nz, if (nz == 1) "" else "s", if (nz == 1) "is" else "are", if (nz == 1) "it is" else "they are"))
+  }
   # CT-R1 F2: the unit REPORTED is the unit TESTED. plaque_stats.py keeps the label
   # "replicate" when --unit replicate is forced on a file without a plate column although it
   # then tests plaques; here that case is called what it is.
@@ -765,9 +776,10 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
                               if (length(one) > 1) "their comparisons are" else "its comparisons are"))
   }
   if (!use_param && min_n < 4)
-    warns <- c(warns, paste("Non-parametric test with fewer than 4 values per group: significance can be",
-                            "unreachable (Mann-Whitney cannot go below p = 0.10 at 3 vs 3) or only approximate",
-                            "(Kruskal-Wallis). With few plates prefer a parametric test on the plate means."))
+    # CT-R3 F11: the Python engine's sentence, word for word
+    warns <- c(warns, paste0("Non-parametric test with <4 per group: significance can be UNREACHABLE ",
+                             "(Mann\u2013Whitney floor p=0.10 at 3 vs 3) or floored/approximate (Kruskal\u2013Wallis at ",
+                             "small N). With few plates prefer a parametric test on the plate means."))
 
   out <- list(unit = unit, unit_requested = requested, have_rep = have_rep, rm = rm, src = src,
               groups = groups, n_per_group = ns, min_n = as.integer(min_n), plates = plates,

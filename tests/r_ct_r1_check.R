@@ -888,3 +888,21 @@ testServer(app, {
   })
 })
 
+# ---- F8 (R cell) + F11 -------------------------------------------------------------------------
+stZ <- plaque_run_stats(tidy(fx("ct_r3_k_zeros.csv")))
+chk("R3_F8_zero_size_warning", any(stZ$warnings == "8 values are zero or negative: a plaque size cannot be; check the column (they are included in this analysis)."),
+    paste(stZ$warnings, collapse = " | "))
+chk("R3_F8_zeros_stay_in_the_analysis", near(stZ$p, 6.24e-03, 0.01e-3) || abs(stZ$p - 6.24e-03) < 5e-6, sprintf("p = %.6g", stZ$p))
+dTit <- tidy(fx("ct_r3_k_zeros.csv")); attr(dTit, "info")$value_col <- "titer"
+chk("R3_F8_no_warning_for_a_column_that_is_not_a_size", !any(grepl("zero or negative", plaque_run_stats(dTit)$warnings)))
+dOne <- tidy(fx("ct_r3_k_zeros.csv")); dOne$value[dOne$value <= 0] <- 1.5; dOne$value[1] <- 0
+chk("R3_F8_singular", any(grepl("^1 value is zero or negative: a plaque size cannot be; check the column \\(it is included in this analysis\\)\\.$", plaque_run_stats(dOne)$warnings)))
+stI <- plaque_run_stats(tidy(fx("ct_r3_all_identical.csv")))
+chk("R3_F11_all_identical_says_na_not_inf", grepl("SD ratio here: n/a\\)", stI$spread_note %||% "") && !grepl("Inf", paste(stI$spread_note, stI$warnings)), stI$spread_note %||% "none")
+stNP <- plaque_run_stats(tidy(fx("ct_r1_D_two_12v14.csv")), parametric = "nonparametric", unit = "plaque")
+dSmall <- tidy(fx("ct_r1_B_unequal.csv")); keepp <- dSmall$replicate %in% paste0("plate", 1:3); dSmall <- dSmall[keepp, ]
+stSm <- plaque_run_stats(dSmall, unit = "replicate", parametric = "nonparametric")
+chk("R3_F11_fewer_than_4_wording_as_python", any(stSm$warnings == "Non-parametric test with <4 per group: significance can be UNREACHABLE (Mann–Whitney floor p=0.10 at 3 vs 3) or floored/approximate (Kruskal–Wallis at small N). With few plates prefer a parametric test on the plate means."),
+    paste(stSm$warnings, collapse = " | "))
+chk("R3_F11_en_dashes", identical(stSm$test, "Kruskal–Wallis") && grepl("Mann–Whitney U", plaque_run_stats(tidy(fx("ct_r2_mwu_5v6_noties.csv")), parametric = "nonparametric")$test, fixed = TRUE) &&
+      !any(grepl("Mann-Whitney|Kruskal-Wallis", c(stSm$warnings, stSm$notes))), stSm$test)
