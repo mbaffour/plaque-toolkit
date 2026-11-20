@@ -210,3 +210,61 @@ def test_p1_app_detection_carries_the_no_dish_warning(no_dish_plate):
     det = engine_api.detect_single(no_dish_plate, plate_mm=90, scale="auto")
     assert det["plate"] is None
     assert any(w.startswith("No dish found") for w in det["dish_warnings"])
+
+
+# --------------------------------------------------------------------------- #
+#  Part 2: the frozen detection benchmark (validation/detection_benchmark) -- a few
+#  headline numbers, so a change to a scene or to the harness is seen (under ~30 s)
+# --------------------------------------------------------------------------- #
+SYNTH_SHARP_12_SUM = 315469509
+SPLIT_3_SUM = 728237916
+# (scene, mode, true discs matched of 48, rows sized incl. false positives): CLI default vs
+# Auto with the round-1 rule
+SYNTH_12_HEADLINE = [("sharp", "standard", 16, 16), ("sharp", "auto", 31, 31),
+                     ("halo", "standard", 17, 17), ("halo", "auto", 38, 41)]
+
+
+@pytest.fixture(scope="module")
+def bench():
+    d = os.path.join(REPO_ROOT, "validation", "detection_benchmark")
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import score
+    return score
+
+
+def test_p2_benchmark_scenes_are_the_frozen_ones(bench):
+    import scenes
+    assert len(scenes.split_cases()) == 40
+    img, truth, dish = scenes.synth_scene(12.0, "sharp")
+    assert len(truth) == 48 and img.shape == (1157, 1543, 3) and round(dish) == 1080
+    # a pixel checksum of two scenes: any edit to the drawing or the seeds changes it
+    assert int(img.astype(np.int64).sum()) == SYNTH_SHARP_12_SUM
+    simg, discs, case = scenes.split_scene(3)
+    assert case[0] == "soft k=2" and len(discs) == 3
+    assert int(simg.astype(np.int64).sum()) == SPLIT_3_SUM
+
+
+def test_p2_benchmark_headline_numbers(bench, tmp_path):
+    import cv2
+    import scenes
+    # synth sharp + halo at 12 px/mm: standard (CLI default) vs Auto detection
+    recs = []
+    for typ in ("sharp", "halo"):
+        img, truth, _ = scenes.synth_scene(12.0, typ)
+        p = str(tmp_path / ("s_%s.png" % typ))
+        cv2.imwrite(p, img)
+        tp = np.array([[d["x"], d["y"]] for d in truth])
+        for mode in ("standard", "auto"):
+            df, _d = bench._detect(p, scenes.DISH_MM, mode)
+            pairs = bench.H.match(tp, df[["X", "Y"]].values.astype(float), scenes.synth_tolerance(truth))
+            recs.append((typ, mode, len(pairs), int(bench.sized(df, "r1" if mode == "auto" else mode).sum())))
+    assert recs == SYNTH_12_HEADLINE
+    # split scene 1 (neighbour 1.6x larger, 0.7 apart): the big one is outlined at its core (-60 %)
+    img, discs, _ = scenes.split_scene(1)
+    p = str(tmp_path / "split1.png")
+    cv2.imwrite(p, img)
+    df, _d = bench._detect(p, scenes.SPLIT_MM, "auto")
+    x, y, D = discs[1]
+    j = int(np.hypot(df["X"] - x, df["Y"] - y).idxmin())
+    assert round(float(df["DIAMETER_PXL"].iloc[j]) / D - 1, 3) == -0.901
