@@ -134,10 +134,12 @@ def size_summary_lines(flag_strings):
 # about the halo's size. Measured on the frozen benchmark's plate model with the CLI default
 # (validation/detection_benchmark/standard_range.py): haloed discs within +-5 % every time up to
 # 135 px, at the centre from 140 px (1 of 3 at 141 px in the benchmark's own scenes); sharp discs
-# up to 300 px (first failures 250-350 px). It is the frozen engine's limit, not Auto's.
+# every time only up to 225 px (failures seen at 250-350 px, depending on the layout). Below about
+# 70 px every outline is 5-28 % too big. Synthetic blur model; the frozen engine's limit, not Auto's.
 STANDARD_HALO_MAX_PX = 135
-# warn when the plate's largest outline reaches this: plaques of that size are close enough to
-# the limit that the larger ones on the plate (or the same plate photographed closer) cross it
+# warn when the plate's largest outline reaches this (a choice, not a measurement: about 3/4 of
+# the limit). Blind spot: a plate whose plaques are ALL past the limit shows only centres of
+# ~0.4 D and may not reach it.
 STANDARD_HALO_WARN_PX = 100
 
 
