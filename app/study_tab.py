@@ -86,6 +86,31 @@ def _shadow(widget, blur=18, dy=2, alpha=40):
         pass
 
 
+def _flow(items, hspace=8, vspace=6):
+    """A widget laying `items` left to right and wrapping to the next line when out of width
+    (CT-R2 F16: the Analyze tab needed ~1100 px, so buttons fell off narrow windows)."""
+    from app.plaque_canvas import FlowLayout
+    w = QWidget()
+    fl = FlowLayout(w, margin=0, hspace=hspace, vspace=vspace)
+    for it in items:
+        fl.addWidget(it)
+    return w
+
+
+def _pair(label, widget, label_w=None, widget_w=None):
+    """A caption and its control kept together on one line inside a flow."""
+    w = QWidget()
+    h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+    if label is not None:
+        if label_w:
+            label.setFixedWidth(label_w)
+        h.addWidget(label)
+    if widget_w:
+        widget.setFixedWidth(widget_w)
+    h.addWidget(widget)
+    return w
+
+
 # CT-R1 F6: a column is the diameter only when its name says diameter AND millimetres
 # ("DIAMETER_MM", "diameter_mm", "Diameter (mm)"). "Diameter (µm)", "DIAMETER_PXL", an area-only
 # file or a lone "count" column used to be read as diameters in mm.
@@ -568,7 +593,7 @@ class StudyTab(QWidget):
         self.add_csv_btn.setToolTip("Add saved per-plaque CSV(s) as replicate plates of the selected "
                                     "sample. Each file = one replicate; it needs a diameter-in-mm column.")
         self._bind(self.add_csv_btn, self._add_csvs)
-        self.assign_btn = QPushButton("Import & assign…"); self.assign_btn.setObjectName("Primary")
+        self.assign_btn = QPushButton("Import && assign…")   # CT-R2 F16: '&' alone is a mnemonic; self.assign_btn.setObjectName("Primary")
         self.assign_btn.setToolTip("Pick many plate CSVs at once and map each to a sample in one table "
                                    "(each CSV = one replicate plate). No sample needs to be selected first.")
         self._bind(self.assign_btn, self._import_assign)
@@ -581,14 +606,8 @@ class StudyTab(QWidget):
         self.down_btn = QToolButton(); self.down_btn.setText("▼"); self.down_btn.setToolTip("Move the selected sample down (right on the figure)")
         self._bind(self.up_btn, lambda: self._move_sample(-1))
         self._bind(self.down_btn, lambda: self._move_sample(+1))
-        row = QHBoxLayout()
-        for b in (self.new_sample_btn, self.add_cur_btn, self.add_csv_btn, self.assign_btn):
-            row.addWidget(b)
-        row.addSpacing(10)
-        for b in (self.edit_btn, self.remove_btn, self.up_btn, self.down_btn):
-            row.addWidget(b)
-        row.addStretch()
-        v.addLayout(row)
+        v.addWidget(_flow([self.new_sample_btn, self.add_cur_btn, self.add_csv_btn, self.assign_btn,
+                           self.edit_btn, self.remove_btn, self.up_btn, self.down_btn]))   # CT-R2 F16
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
@@ -607,10 +626,9 @@ class StudyTab(QWidget):
         self.clear_btn = QPushButton("Clear all"); self._bind(self.clear_btn, self._clear_all)
         self.save_study_btn = QPushButton("Save study…"); self._bind(self.save_study_btn, self._save_study)
         self.load_study_btn = QPushButton("Load study…"); self._bind(self.load_study_btn, self._load_study)
-        brow = QHBoxLayout(); brow.addWidget(self.count_lbl); brow.addStretch()
-        for b in (self.clear_btn, self.save_study_btn, self.load_study_btn):
-            brow.addWidget(b)
-        v.addLayout(brow)
+        self.count_lbl.setWordWrap(True)
+        v.addWidget(self.count_lbl)
+        v.addWidget(_flow([self.clear_btn, self.save_study_btn, self.load_study_btn]))
         return card
 
     # ================================================================ ANALYZE
@@ -625,7 +643,6 @@ class StudyTab(QWidget):
         v.addWidget(self.mode_lbl)
 
         # analyze controls: metric + control + test + variances + compare-to + Analyze
-        row = QHBoxLayout()
         self.metric_sel = QComboBox()
         for lab, key in self.METRICS:
             self.metric_sel.addItem(lab, key)
@@ -662,13 +679,10 @@ class StudyTab(QWidget):
         self.cmp_to_sel.currentIndexChanged.connect(self._on_cmp_changed)
         self.analyse_btn = QPushButton("  Analyze  "); self.analyse_btn.setObjectName("Primary")
         self._bind(self.analyse_btn, self._analyse)
-        row.addWidget(QLabel("Metric:")); row.addWidget(self.metric_sel)
-        row.addSpacing(8); row.addWidget(self.ctrl_cap); row.addWidget(self.control_sel)
-        row.addSpacing(8); row.addWidget(QLabel("Test:")); row.addWidget(self.param_sel)
-        row.addSpacing(8); row.addWidget(self.var_cap); row.addWidget(self.var_sel)
-        row.addSpacing(8); row.addWidget(self.cmp_to_cap); row.addWidget(self.cmp_to_sel)
-        row.addStretch(); row.addWidget(self.analyse_btn)
-        v.addLayout(row)
+        # CT-R2 F16: the row wraps in a narrow window (the Analyze button used to be off screen)
+        v.addWidget(_flow([_pair(QLabel("Metric:"), self.metric_sel), _pair(self.ctrl_cap, self.control_sel),
+                           _pair(QLabel("Test:"), self.param_sel), _pair(self.var_cap, self.var_sel),
+                           _pair(self.cmp_to_cap, self.cmp_to_sel), self.analyse_btn], hspace=14))
 
         # CT-R1 F19: errors of the last action (cleared by every action) ...
         self.err = _MsgLabel(""); self.err.setWordWrap(True); self.err.setVisible(False)
@@ -718,15 +732,8 @@ class StudyTab(QWidget):
         self.key_btn = QPushButton("Legend key…"); self._bind(self.key_btn, self._save_key)
         self.key_btn.setToolTip("Save the figure's legend key: every sample/plate with its exact "
                                 "colour and marker, in the figure's font and format.")
-        s = QHBoxLayout()
-        for b in (self.savefig_btn, self.key_btn):
-            s.addWidget(b)
-        s.addWidget(self.legend_cb)
-        s.addSpacing(10)
-        for b in (self.savesum_btn, self.savedata_btn, self.zip_btn):
-            s.addWidget(b)
-        s.addStretch()
-        v.addLayout(s)
+        v.addWidget(_flow([self.savefig_btn, self.key_btn, self.legend_cb, self.savesum_btn,
+                           self.savedata_btn, self.zip_btn]))                          # CT-R2 F16
         # legend text starter: read-only, follows the figure on screen, one Copy button
         self.key_text = QLineEdit(); self.key_text.setReadOnly(True)
         self.key_text.setPlaceholderText("Analyze to get a sentence listing every sample with its colour.")
@@ -773,11 +780,14 @@ class StudyTab(QWidget):
 
     def _build_customize_panel(self):
         box = QFrame(); box.setObjectName("SummaryCard")
-        g = QGridLayout(box); g.setContentsMargins(12, 8, 12, 8); g.setHorizontalSpacing(12); g.setVerticalSpacing(4)
+        g = QVBoxLayout(box); g.setContentsMargins(12, 8, 12, 8); g.setSpacing(4)
+        pairs = []
 
         def add(r, c, label, widget):
+            # CT-R2 F16: label/control pairs of one width in a flow, so the panel reads as a grid
+            # in a wide window and wraps (2 or 1 per line) in a narrow one instead of scrolling
             cap = QLabel(label); cap.setObjectName("FieldLabel")
-            g.addWidget(cap, r, c * 2); g.addWidget(widget, r, c * 2 + 1)
+            pairs.append(_pair(cap, widget, label_w=74, widget_w=150))
             return cap
 
         # combos
@@ -852,11 +862,12 @@ class StudyTab(QWidget):
         add(3, 0, "Point size", self.point_size); add(3, 1, "Jitter", self.jitter); add(3, 2, "Opacity", self.alpha)
         add(4, 0, "Width (in)", self.width_in); add(4, 1, "Height (in)", self.height_in); add(4, 2, "Export DPI", self.dpi_in)
         add(5, 0, "Theme", self.theme_sel); add(5, 1, "Seed", self.seed_in)
-        cbrow = QHBoxLayout()
-        for cb in (self.show_points, self.show_n, self.show_value, self.logy_cb, self.logy_drop_cb, self.frame_cb):
-            cbrow.addWidget(cb)
-        cbrow.addStretch()
-        g.addLayout(cbrow, 5, 4, 1, 2)
+        g.addWidget(_flow(pairs, hspace=16, vspace=4))
+        # CT-R2 F4: what size the saved figure will really be (a key placed below makes it taller)
+        self.size_lbl = QLabel(""); self.size_lbl.setObjectName("Placeholder"); self.size_lbl.setWordWrap(True)
+        g.addWidget(self.size_lbl)
+        g.addWidget(_flow([self.show_points, self.show_n, self.show_value, self.logy_cb,
+                           self.logy_drop_cb, self.frame_cb], hspace=12))
 
         # wire every cosmetic control to a live redraw
         self.center_sel.currentIndexChanged.connect(self._sync_controls)
@@ -2105,6 +2116,10 @@ class StudyTab(QWidget):
         opts = self._opts(self._last[1]["metric_key"])
         try:
             fig = self._render(opts)
+            # CT-R2 F4/F19: the size the figure really has (a key below makes it taller), taken
+            # BEFORE a canvas is attached (a Qt canvas resizes its figure)
+            self._fig_size = tuple(float(x) for x in fig.get_size_inches())
+            self.size_lbl.setText(self._size_note(self._fig_size, opts, "Saved figures will be"))
         except (Exception, SystemExit) as e:                      # noqa: BLE001 -- CT-R1 F1/F19
             # the old figure no longer matches the controls: take it off screen, keep the results
             self._clear_fig_area(restore_placeholder=True)
@@ -2122,6 +2137,77 @@ class StudyTab(QWidget):
         if self._last is not None and self.savesum_btn.isEnabled():
             for b in self._figure_buttons:
                 b.setEnabled(True)
+
+    @staticmethod
+    def _size_note(size, opts, lead="Saved at"):
+        """'Saved at 6.0 × 7.5 in: the key was placed below, so the figure is taller than the 5.4 in
+        asked for.' (CT-R2 F4: the status and the ZIP used to report the size asked for)."""
+        w, h = size
+        txt = "%s %.1f × %.1f in" % (lead, w, h)
+        aw, ah = float(opts["width"]), float(opts["height"])
+        if abs(h - ah) > 0.05 and abs(w - aw) <= 0.05:
+            return txt + (": the key was placed below, so the figure is %s than the %.1f in asked for."
+                          % ("taller" if h > ah else "shorter", ah))
+        if abs(h - ah) > 0.05 or abs(w - aw) > 0.05:
+            return txt + (": the figure grew to fit its key and labels (%.1f × %.1f in asked for)."
+                          % (aw, ah))
+        return txt + "."
+
+    def _preview_scale(self, w_in):
+        """CT-R2 F19/F16: the preview is the figure at its size in inches, scaled AS A WHOLE so it
+        fits the panel (1.0 = 96 px per inch). Text keeps its proportion to the plot."""
+        if not self.isVisible():
+            return 1.0
+        sa = self._scroll_area()
+        if sa is None:
+            return 1.0
+        from PySide6.QtCore import QPoint
+        left = self.fig_holder.mapTo(self, QPoint(0, 0)).x()
+        m = self.fig_layout.contentsMargins()
+        avail = sa.viewport().width() - 2 * left - m.left() - m.right() - 4
+        return max(0.25, min(1.0, avail / (w_in * 96.0)))
+
+    def _scroll_area(self):
+        """The main window's scroll area that holds this tab (found once). Looked up from the
+        window, not by walking parentWidget(): that walk made PySide drop the wrappers of
+        unrelated combo-box models."""
+        sa = getattr(self, "_sa", None)
+        if sa is None:
+            from PySide6.QtWidgets import QScrollArea
+            w = self.window()
+            sa = next((a for a in (w.findChildren(QScrollArea) if w is not None else [])
+                       if a.widget() is self), None)
+            self._sa = sa
+        return sa
+
+    def _fit_canvas(self):
+        """Size the canvas to the figure's inches at the preview scale (no re-render)."""
+        if self.canvas is None or self._last_fig is None:
+            return
+        fig = self._last_fig
+        w_in, h_in = getattr(self, "_fig_size", None) or fig.get_size_inches()
+        dpi = 96.0 * self._preview_scale(w_in)
+        if abs(getattr(fig, "_original_dpi", fig.dpi) - dpi) > 0.5 or self.canvas.width() != int(round(w_in * dpi)):
+            fig._original_dpi = dpi
+            fig._set_dpi(dpi * self.canvas.device_pixel_ratio, forward=False)
+            self.canvas.setFixedSize(int(round(w_in * dpi)), int(round(h_in * dpi)))
+            m = self.fig_layout.contentsMargins()
+            self.fig_holder.setMinimumHeight(self.canvas.height() + self.toolbar.sizeHint().height() + 2
+                                             + m.top() + m.bottom())
+            self.canvas.draw_idle()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.canvas is not None and not getattr(self, "_fitting", False):
+            from PySide6.QtCore import QTimer
+            self._fitting = True
+
+            def fit():
+                try:
+                    self._fit_canvas()
+                finally:
+                    self._fitting = False
+            QTimer.singleShot(0, fit)
 
     def _clear_fig_area(self, restore_placeholder=False):
         """Remove the current figure container (or placeholder) from the plot area and close its
@@ -2152,9 +2238,14 @@ class StudyTab(QWidget):
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
         from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
         self._clear_fig_area()
-        # pin the canvas to the figure's true pixel size so its aspect never distorts
-        w_in, h_in = fig.get_size_inches()
-        px_w, px_h = int(round(w_in * 96)), int(round(h_in * 96))
+        # CT-R2 F19: the preview IS the figure at its size in inches: the figure's dpi is the
+        # preview scale (96 px per inch, less when the panel is narrower), set BEFORE the canvas
+        # exists, and the canvas is pinned to inches x dpi. (The canvas used to be pinned at 96 px
+        # per inch while the figure kept 100 dpi, so the preview was an 8.06 in figure.)
+        w_in, h_in = getattr(self, "_fig_size", None) or tuple(fig.get_size_inches())
+        dpi = 96.0 * self._preview_scale(w_in)
+        fig.set_dpi(dpi)
+        px_w, px_h = int(round(w_in * dpi)), int(round(h_in * dpi))
         container = QWidget()
         cl = QVBoxLayout(container); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(2)
         canvas = FigureCanvas(fig)
@@ -2206,7 +2297,7 @@ class StudyTab(QWidget):
         for name in ("report", "key_text"):
             if hasattr(self, name):
                 getattr(self, name).clear()
-        for name in ("warn_lbl", "fig_caption"):
+        for name in ("warn_lbl", "fig_caption", "size_lbl"):
             if hasattr(self, name):
                 getattr(self, name).setText("")
         for b in getattr(self, "_export_buttons", []):
@@ -2297,14 +2388,16 @@ class StudyTab(QWidget):
         fig = None
         try:
             fig = self._render(opts)       # a FRESH figure at exactly the configured size
+            size = tuple(float(x) for x in fig.get_size_inches())
             self._save_figure_file(fig, path, dpi)
         except (Exception, SystemExit) as e:                      # noqa: BLE001
             self._warn("Could not save figure: %s" % _stats_message(e)); return
         finally:
             if fig is not None:
                 plt.close(fig)                    # always release the export figure
-        msg = "Figure saved (%s, %.1f × %.1f in, %d dpi): %s" % (
-            ext.lstrip("."), opts["width"], opts["height"], dpi, path)
+        # CT-R2 F4: the size the file really has, and why it differs from the one asked for
+        msg = "Figure saved (%s, %d dpi): %s — %s" % (ext.lstrip("."), dpi, path,
+                                                     self._size_note(size, opts))
         if ext == ".eps":
             msg += " — EPS cannot store transparency: the violins are drawn opaque (use PDF or SVG to keep it)."
         self._status(msg, 8000)
@@ -2438,6 +2531,7 @@ class StudyTab(QWidget):
             base = os.path.join(out, ("grouped_%s" if kind == "grouped" else "violin_%s") % ps._safe(res["metric"]))
             fig = self._render(opts)
             try:
+                zip_size = [round(float(x), 3) for x in fig.get_size_inches()]
                 for fmt in formats:
                     self._save_figure_file(fig, "%s.%s" % (base, fmt), opts["dpi"])
                 fig_text = self._figure_text(fig)
@@ -2453,7 +2547,9 @@ class StudyTab(QWidget):
                     cfg["data"] = "Analyze tab study (in-memory, %d plaque rows)" % len(tidy)
                     cfg["source"] = "Plaque Toolkit — Analyze tab"
                     cfg["toolkit_version"] = (cfg.get("versions") or {}).get("toolkit")
-                    cfg["figure_size_in"] = [opts["width"], opts["height"]]
+                    cfg["figure_size_in"] = zip_size                       # CT-R2 F4: as saved
+                    cfg["figure_size_asked_in"] = [opts["width"], opts["height"]]
+                    cfg["figure_size_note"] = self._size_note(zip_size, opts)
                     with open(fp, "w", encoding="utf-8") as fh:
                         json.dump(cfg, fh, indent=2, default=str)
             # CT-R2 F7/F8: the plates' left-out account and the plates without sizes

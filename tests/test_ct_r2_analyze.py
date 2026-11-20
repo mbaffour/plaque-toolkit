@@ -604,3 +604,85 @@ def test_a_refused_combination_keeps_the_last_good_result(st, dialogs, tmp_path)
     z = _zip(st, dialogs, tmp_path)
     omni = pd.read_csv(io.BytesIO(z.read("omnibus_test_diameter_mm.csv")))
     assert omni["posthoc"][0] == "Dunnett"
+
+
+# --------------------------------------------------------------------------- F4 / F19 / F16
+LONG12 = ["T4 wild-type control #%d" % i if i % 2 else "lambda cI857 mutant line %02d" % i for i in range(12)]
+
+
+def _twelve(st):
+    _fill(st, [(n, "", [1.0 + 0.25 * k, 1.05 + 0.25 * k, 0.95 + 0.25 * k]) for k, n in enumerate(LONG12)], n=12)
+    st.fill_sel.setCurrentIndex(st.fill_sel.findData("group"))
+    st.width_in.setValue(6.0)
+    st.analyse_btn.click()
+    assert st._last is not None, st.err.text()
+
+
+def test_saved_size_is_reported_as_saved(win, st, dialogs, tmp_path):
+    """CT-R2 F4 (tab half): a figure that grew (key placed below) is reported at the size it was
+    saved at -- in the readout beside Width / Height, the Save figure status and the ZIP
+    run_config -- not at the 6.0 x 5.4 in asked for."""
+    from PIL import Image
+    _twelve(st)
+    st.dpi_in.setValue(100)
+    dialogs["save"].append((str(tmp_path / "f.png"), "PNG image (*.png)"))
+    st.savefig_btn.click()
+    w_px, h_px = Image.open(tmp_path / "f.png").size
+    w, h = w_px / 100.0, h_px / 100.0
+    assert h > 5.4 + 0.3                                    # it did grow (key below)
+    said = "%.1f × %.1f in" % (w, h)
+    msg = _status(win)
+    assert said in msg and "taller than the 5.4 in asked for" in msg, msg
+    assert said in st.size_lbl.text() and "taller than the 5.4 in asked for" in st.size_lbl.text()
+    z = _zip(st, dialogs, tmp_path)
+    cfg = json.loads(z.read("run_config_diameter_mm.json"))
+    assert abs(cfg["figure_size_in"][0] - w) < 0.011 and abs(cfg["figure_size_in"][1] - h) < 0.011
+    assert cfg["figure_size_asked_in"] == [6.0, 5.4]
+    png = Image.open(io.BytesIO(z.read("violin_diameter_mm.png"))).size
+    assert png == (w_px, h_px)
+
+
+def _shown(win, qtbot, size):
+    win.resize(*size); win.show(); qtbot.waitExposed(win)
+    win.tabs.setCurrentIndex(3)
+    qtbot.wait(100)
+
+
+def test_preview_is_the_figure_at_its_size_in_inches(win, st, dialogs, qtbot):
+    """CT-R2 F19 (first half): the preview used to be an 8.06 x 5.18 in figure (canvas at 96 px
+    per inch, figure at 100 dpi). It is now the chosen size in inches, scaled as a whole to fit
+    the panel, so text has the saved file's proportion to the plot."""
+    _shown(win, qtbot, (1320, 880))
+    _fill(st, THREE)
+    st.analyse_btn.click()
+    qtbot.wait(100)
+    fig = st._last_fig
+    assert np.allclose(fig.get_size_inches(), [8.4, 5.4], atol=0.011)
+    assert abs(st.canvas.width() / st.canvas.height() - 8.4 / 5.4) < 0.01
+    st.width_in.setValue(16.0)                               # wider than the panel: scaled down
+    win.resize(900, 600)
+    qtbot.wait(200)
+    fig = st._last_fig
+    assert np.allclose(fig.get_size_inches(), [16.0, 5.4], atol=0.02)
+    sa = st._scroll_area()
+    assert st.canvas.width() <= sa.viewport().width()
+    assert abs(st.canvas.width() / st.canvas.height() - 16.0 / 5.4) < 0.01
+    assert sa.horizontalScrollBar().maximum() == 0
+
+
+@pytest.mark.parametrize("size", [(1024, 700), (900, 600)])
+def test_no_button_off_screen_in_a_narrow_window(win, st, dialogs, qtbot, size):
+    """CT-R2 F16: at 1024x700 and 900x600 the tab needs no horizontal scrolling and every button
+    is on screen (the Analyze row, the compile row, the export bar and Customize wrap)."""
+    from PySide6.QtWidgets import QPushButton, QToolButton
+    _shown(win, qtbot, size)
+    _twelve(st)
+    qtbot.wait(200)
+    sa = st._scroll_area()
+    assert sa.horizontalScrollBar().maximum() == 0
+    vw = sa.viewport().width()
+    for b in st.findChildren(QPushButton) + st.findChildren(QToolButton):
+        if b.isVisibleTo(st) and b.window() is win:
+            right = b.mapTo(st, b.rect().topRight()).x()
+            assert right <= vw, (b.text(), right, vw)
+    assert st.assign_btn.text() == "Import && assign…"     # shows 'Import & assign…'
