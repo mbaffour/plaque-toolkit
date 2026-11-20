@@ -225,3 +225,127 @@ def test_n9_id_like_and_convert_on_diameter_columns_warn():
     w = B.column_warnings(_area_diam_df(), "DIAMETER_MM", "fiji_diam", True)
     assert len(w) == 2 and all("looks like a diameter" in x for x in w)
     assert B.column_warnings(_area_diam_df(), "AREA_MM2", "fiji_area", True) == []
+
+
+# =========================================================================== A: shared helpers
+def _wide(**kw):
+    return R1._wide(**kw)
+
+
+def _with_host(df, hosts=("a", "b")):
+    g = df.copy()
+    g["host"] = [hosts[i % len(hosts)] for i in range(len(g))]
+    return g
+
+
+def _app_texts(df, sel):
+    """Everything the app shows or writes for one analysis that came from the engine."""
+    a = A.compute(df, sel)
+    out = {"sentence": a["sentence"], "status": A.status_line(a), "summary": "\n".join(A.summary_lines(a))}
+    fig = A.make_figure(a)
+    try:
+        out["key text"] = A.app_words(lk.text_starter(lk.from_figure(fig)) or "")
+        kz = zipfile.ZipFile(io.BytesIO(A.key_zip_bytes(fig, A.file_base(a))))
+        for n in kz.namelist():
+            if n.endswith(".txt"):
+                out["key zip " + n] = kz.read(n).decode("utf-8")
+    finally:
+        R1.plt.close(fig)
+    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, a, sel, "x.csv", b"")))
+    for n in z.namelist():
+        if n.endswith((".md", ".txt", ".csv", ".json")):
+            out["zip " + n] = z.read(n).decode("utf-8", "replace")
+    return out
+
+
+_SCENARIOS = {
+    "default": {}, "equal": dict(equal_var="yes"), "unequal": dict(equal_var="no"),
+    "per plaque": dict(unit="plaque"), "per plate": dict(unit="replicate"),
+    "non-parametric": dict(parametric="nonparametric"), "dunnett": dict(compare="T4"),
+    "median": dict(center="median", error="iqr"), "letters": dict(brackets="letters"),
+    "all pairs": dict(brackets="all"), "palette": dict(palette_name="okabe"),
+    "log": dict(log_y=True), "unequal parametric": dict(parametric="parametric", equal_var="no"),
+}
+
+
+# =========================================================================== N5 + N13 (A)
+@pytest.mark.parametrize("name", list(_SCENARIOS))
+def test_n5_no_cli_option_in_anything_the_app_shows_or_writes(name):
+    df = _wide()
+    for tag, d in (("wide", df), ("no plates", df.drop(columns=["replicate"]))):
+        sel = R1._sel(d, **_SCENARIOS[name])
+        try:
+            texts = _app_texts(d, sel)
+        except (ps.StatsError, SystemExit) as e:
+            texts = {"message": A.message_of(e)}
+        for where, t in texts.items():
+            assert not re.search(r"--[a-z]", t), (name, tag, where, re.search(r".{0,50}--[a-z].{0,50}", t.replace("\n", " ")).group(0))
+
+
+def test_n5_one_plate_per_group_grouped_and_unequal_spread_files_too():
+    df = _wide()
+    one = df.assign(replicate="p1")
+    g = _with_host(df)
+    uv = pd.read_csv(os.path.join(R1.ROOT, "tests", "fixtures", "ct_r1_parity_unequalvar_3x8.csv"))
+    for d, kw in ((one, {}), (g, dict(subgroup="host")), (g, dict(subgroup="host", unit="plaque")),
+                  (uv, {}), (uv, dict(equal_var="yes"))):
+        for where, t in _app_texts(d, R1._sel(d, **kw)).items():
+            assert not re.search(r"--[a-z]", t), (kw, where)
+
+
+def test_n5_the_option_mapping_covers_every_engine_option():
+    for opt in ps.build_args()._option_string_actions:
+        if opt.startswith("--"):
+            out = A.app_words("Use `%s` or %s yes, then %s" % (opt, opt, opt))
+            assert "--" not in out, (opt, out)
+    assert A.app_words("(the statistical unit chosen: --unit plaque)") == "(Statistical unit = per plaque)"
+    assert A.app_words("`--equal-var no`: Welch") == "Variances = unequal: Welch"
+    assert A.app_words("see --nonsense-flag now") == "see nonsense flag now"
+
+
+def test_n13_variances_choices_say_what_auto_can_detect():
+    html = R1._html(A)
+    assert "auto (Welch when Levene rejects equal spread; needs 8+ plates per sample to detect it)" in html
+    assert "equal (ANOVA + Tukey)" in html and "unequal (Welch ANOVA + Games-Howell)" in html
+    assert "auto (Levene test)" not in html
+
+
+def test_n13_spread_warning_says_where_to_set_variances():
+    uv = pd.read_csv(os.path.join(R1.ROOT, "tests", "fixtures", "ct_r1_parity_unequalvar_3x8.csv"))
+    a = A.compute(uv, R1._sel(uv, equal_var="yes"))
+    spread = [w for w in a["warnings"] if "safer analysis" in w]
+    assert spread and spread[0].endswith("Set Variances to unequal to follow this advice.")
+    assert "Set Variances to unequal to follow this advice." in "\n".join(A.summary_lines(a))
+    assert A.with_advice(["x. Welch ANOVA + Games-Howell is the safer analysis."], "no") == \
+        ["x. Welch ANOVA + Games-Howell is the safer analysis."]            # already chosen: no advice
+    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(uv, a, R1._sel(uv, equal_var="yes"), "x.csv", b"")))
+    rep = z.read([n for n in z.namelist() if n.startswith("report_")][0]).decode()
+    assert "Set Variances to unequal to follow this advice." in rep
+
+
+# =========================================================================== N11 (A)
+def test_n11_subgroup_that_cannot_work_is_refused_in_plain_words():
+    df = _with_host(_wide())
+    base = R1._sel(df, subgroup="host")
+    assert A.compute(df, base)["mode"] == "grouped"                              # a real subgroup works
+    cases = [(dict(subgroup="group"), "same column as Group"),
+             (dict(subgroup="replicate"), r"Replicate \(plate\) column"),
+             (dict(subgroup="one"), "only one level"),
+             (dict(subgroup="host", order=["T4"]), None)]
+    one = df.assign(one="x")
+    for kw, msg in cases[:3]:
+        with pytest.raises(ps.StatsError, match=msg):
+            A.compute(one, R1._sel(one, **kw))
+    # a column where no sample has two levels: each sample has its own single host
+    nested = df.assign(host=df["group"].map({"T4": "h1", "T7": "h2", "lambda": "h3"}))
+    with pytest.raises(ps.StatsError, match="none of the selected samples"):
+        A.compute(nested, R1._sel(nested, subgroup="host"))
+    # judged on the SELECTED samples: only T4 selected with a host of one level -> one level
+    sub = df.assign(host=np.where(df["group"] == "T4", "a", np.where(np.arange(len(df)) % 2, "b", "c")))
+    with pytest.raises(ps.StatsError, match="only one level"):
+        A.compute(sub, R1._sel(sub, subgroup="host", order=["T4"]))
+    for kw, _ in cases[:3]:
+        try:
+            A.compute(one, R1._sel(one, **kw))
+        except ps.StatsError as e:
+            assert "comparisons tested" not in str(e) and "--" not in A.message_of(e)

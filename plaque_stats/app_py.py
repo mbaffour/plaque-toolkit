@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import zipfile
@@ -142,24 +143,68 @@ class Stale(Exception):
 
 
 # The engine words its messages for the command line; the app names its own controls instead.
-APP_WORDS = [("--equal-var no", "Variances = unequal"), ("--equal-var yes", "Variances = equal"),
-             ("--unit replicate", "Statistical unit = per plate"),
-             ("--unit plaque", "Statistical unit = per plaque"),
-             ("pass --log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
-             ("--log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
-             ("--annotate letters", "Brackets = letters"), ("--annotate all", "Brackets = all pairs"),
-             ("--parametric nonparametric", "Test type = non-parametric"),
-             ("--posthoc dunnett", "Compare to = each sample vs a control"),
-             ("--center median", "Centre marker = median"), ("--center mean", "Centre marker = mean"),
-             ("--error ", "Error bar "), ("--center", "Centre marker"), ("--error", "Error bar"),
-             ("--palette", "Colour theme"), ("--control", "Compare to"), ("--order", "Samples"),
-             ("--value", "Value column"), ("--unit", "Statistical unit")]
+# CT-R2 N5/N13: ONE mapping, applied to everything the app shows or writes that came from the
+# engine (messages, notes, warnings, status line, figure sentence, key text, the report on screen
+# and the report in the ZIP). First whole engine phrases, longest first; then every remaining
+# `--option [value]` through the control tables below, so no `--word` can reach the user.
+PHRASES = [
+    ("(the statistical unit chosen: --unit plaque)", "(Statistical unit = per plaque)"),
+    ("choose --equal-var no (Welch)", "set Variances to unequal (Welch)"),
+    ("pass --log-y-drop-nonpositive", "tick “Hide values ≤ 0 on the log axis”"),
+    ("--log-y-drop-nonpositive", "“Hide values ≤ 0 on the log axis”"),
+]
+# option -> the app control that sets it; option -> {value: the choice's name in that control}
+OPTION_CONTROLS = {
+    "unit": "Statistical unit", "parametric": "Test type", "equal-var": "Variances",
+    "posthoc": "Compare to", "control": "Compare to", "center": "Centre marker",
+    "error": "Error bar", "palette": "Colour theme", "order": "Samples", "value": "Value column",
+    "annotate": "Brackets", "log-y": "Log y-axis", "height": "Height", "width": "Width",
+    "group": "Group column", "replicate": "Replicate column", "subgroup": "Subgroup",
+    "title": "Title", "ylabel": "Y-axis label", "legend": "Place key on figure",
+    "equivalence-margin": "equivalence margin", "metric": "Metric to plot",
+}
+OPTION_VALUES = {
+    "unit": {"replicate": "per plate", "plaque": "per plaque", "auto": "auto"},
+    "parametric": {"nonparametric": "non-parametric", "parametric": "parametric", "auto": "auto"},
+    "equal-var": {"yes": "equal", "no": "unequal", "auto": "auto"},
+    "posthoc": {"dunnett": "each sample vs a control (Dunnett)", "auto": "all pairs"},
+    "annotate": {"letters": "letters", "all": "all pairs", "auto": "significant pairs",
+                 "adjacent": "neighbours", "none": "none"},
+    "center": {"mean": "mean", "median": "median"},
+    "error": {"sd": "SD", "sem": "SEM", "ci95": "95% CI", "iqr": "IQR", "none": "none", "auto": "auto"},
+}
+_OPTION = re.compile(r"`?--([a-z][a-z0-9-]*)(?: ([A-Za-z0-9-]+))?`?")
+
+
+def _option_words(m):
+    opt, val = m.group(1), m.group(2)
+    ctl = OPTION_CONTROLS.get(opt, opt.replace("-", " "))
+    shown = OPTION_VALUES.get(opt, {}).get(val) if val else None
+    if shown is not None:
+        return "%s = %s" % (ctl, shown)
+    return ctl + (" " + val if val else "")
 
 
 def app_words(msg):
-    for cli, app in APP_WORDS:
+    """Engine text in the app's words (CT-R2 N5/N13): no `--option` survives."""
+    msg = str(msg)
+    for cli, app in PHRASES:
         msg = msg.replace(cli, app)
-    return msg
+    return _OPTION.sub(_option_words, msg)
+
+
+SPREAD_ADVICE = "Welch ANOVA + Games-Howell is the safer analysis"
+
+
+def with_advice(warnings, equal_var):
+    """CT-R2 N13: the engine's spread warning recommends Welch; the app says where to set it."""
+    out = []
+    for w in warnings:
+        w = app_words(w)
+        if SPREAD_ADVICE in w and equal_var != "no":
+            w += " Set Variances to unequal to follow this advice."
+        out.append(w)
+    return out
 
 
 def message_of(e, path=None, name=None):
@@ -301,6 +346,41 @@ def build_opts(sel, n_colours):
     return opts, hint
 
 
+def check_subgroup(df, sel):
+    """CT-R2 N11: a Subgroup that cannot work is refused with a plain message (it used to give
+    "0 of 0 comparisons tested" and an empty table). Judged on the selected samples."""
+    sg, g, rep = sel.get("subgroup"), sel["group"], sel.get("replicate")
+    if not sg or sg == NONE:
+        return
+    if sg == g:
+        raise ps.StatsError("Subgroup is the same column as Group (%s). Pick a different column for the "
+                            "second factor, or set Subgroup to (none)." % sg)
+    if rep and rep != NONE and sg == rep:
+        raise ps.StatsError("Subgroup is the Replicate (plate) column (%s): every plate would become "
+                            "its own subgroup. Pick a different column for the second factor, or set "
+                            "Subgroup to (none)." % sg)
+    lab = pd.DataFrame({"g": ps._labels(df[g]), "s": ps._labels(df[sg])})
+    lab = lab[lab["g"].isin(sel.get("order") or lab["g"].unique())].dropna()
+    levels = list(dict.fromkeys(lab["s"]))
+    if len(levels) < 2:
+        raise ps.StatsError("The Subgroup column %s has only one level (%s) in the selected samples, so "
+                            "there is nothing to compare. Pick another column, or set Subgroup to (none)."
+                            % (sg, levels[0] if levels else "no values"))
+    if not (lab.groupby("g")["s"].nunique() >= 2).any():
+        raise ps.StatsError("In none of the selected samples does the Subgroup column %s have two or "
+                            "more levels, so no subgroup can be compared with a control within a "
+                            "sample. Pick another column, or set Subgroup to (none)." % sg)
+
+
+def in_app_words(a, sel):
+    """CT-R2 N5/N13: every engine text of the analysis, in the app's words, once."""
+    for k in ("sentence", "fig_sentence"):
+        a[k] = app_words(a[k])
+    a["notes"] = [app_words(n) for n in a["notes"]]
+    a["warnings"] = with_advice(a["warnings"], sel.get("equal_var"))
+    return a
+
+
 def compute(df, sel, info=None):
     """The whole analysis of the current inputs (CT-R1 F1-F3, F5, F8, F10, F11, F13, F25 and the
     new Variances / Compare to / Letters / log-y options). Returns a plain dict; every refusal is
@@ -324,6 +404,7 @@ def compute(df, sel, info=None):
     if not sel.get("order"):
         raise ps.StatsError("No sample is selected under “Samples (in this order)”. Pick at least one.")
     if grouped:
+        check_subgroup(df, sel)
         d, metric = ps.normalize_grouped(df, sel["group"], sg, sel["value"], rep, "metric")
     else:
         d, metric = ps.normalize(df, sel["group"], sel["value"], rep, "metric")
@@ -366,7 +447,7 @@ def compute(df, sel, info=None):
                     warnings=list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
                     sentence=ps.paste_sentence(metric, comp=comp, unit=unit, control=control, opts=opts),
                     fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"]), grouped=True))
-        return base
+        return in_app_words(base, sel)
     omni, posthoc, unit, have_rep = ps.run_stats(
         d, order, sel["unit"], sel["parametric"], equal_var=sel["equal_var"],
         posthoc=opts["posthoc"], control=opts["control"])
@@ -379,7 +460,7 @@ def compute(df, sel, info=None):
                 warnings=list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
                 sentence=ps.paste_sentence(metric, summ, omni, unit, have_rep, opts, centers=centers),
                 fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"])))
-    return base
+    return in_app_words(base, sel)
 
 
 def make_figure(a):
@@ -417,7 +498,7 @@ def status_line(a):
             o.get("test", "n/a"), ps.p_text(o.get("p", float("nan"))),
             "plate means" if a["unit"] == "replicate" else "single plaques",
             "N plates" if a["unit"] == "replicate" else "n plaques", nn or "n/a")
-    return head + " " + a["fig_sentence"]
+    return app_words(head + " " + a["fig_sentence"])
 
 
 def summary_lines(a):
@@ -426,7 +507,7 @@ def summary_lines(a):
     if a.get("parse_note"):
         lines.append("File: %s %s layout. %d rows used." % (a["parse_note"], a["layout"], len(a["d"])))
     lines += ["Note: " + app_words(n) for n in a.get("notes", [])]
-    lines += ["⚠ " + app_words(w) for w in a.get("warnings", [])]
+    lines += ["⚠ " + w for w in a.get("warnings", [])]
     if a.get("palette_hint"):
         lines.append("Note: " + a["palette_hint"])
     return lines
@@ -449,6 +530,15 @@ def table_image(df, base, title, formats=("png", "svg", "pdf")):
         for fmt in formats:
             fig.savefig("%s.%s" % (base, fmt), dpi=200, bbox_inches="tight", facecolor="white")
         plt.close(fig)
+
+
+def report_words(txt, equal_var):
+    """CT-R2 N5/N13: a text file of the engine's output in the app's words, with the same
+    'set Variances' advice the screen gives (a line at a time)."""
+    out = []
+    for ln in txt.split("\n"):
+        out.append(with_advice([ln], equal_var)[0] if SPREAD_ADVICE in ln else app_words(ln))
+    return "\n".join(out)
 
 
 def zip_bytes(df, a, sel, src_name=None, src_bytes=None):
@@ -487,7 +577,11 @@ def zip_bytes(df, a, sel, src_name=None, src_bytes=None):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for fn in sorted(os.listdir(outdir)):
-                z.write(os.path.join(outdir, fn), fn)
+                if fn.endswith((".md", ".txt")):          # the report in the app's words (N5/N13)
+                    with open(os.path.join(outdir, fn), encoding="utf-8") as fh:
+                        z.writestr(fn, report_words(fh.read(), sel.get("equal_var")))
+                else:
+                    z.write(os.path.join(outdir, fn), fn)
             if src_bytes is not None:                 # the input data itself (F23)
                 z.writestr("input_" + os.path.basename(src_name or "data.csv"), src_bytes)
         return buf.getvalue()
@@ -501,7 +595,11 @@ def key_zip_bytes(fig, base):
         paths = legend_key.write_key_files(key, os.path.join(tmp, base), ["png", "svg", "pdf"]) if key else []
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for fp in paths:
-                z.write(fp, os.path.basename(fp))
+                if fp.endswith(".txt"):                   # the text starter in the app's words (N5)
+                    with open(fp, encoding="utf-8") as fh:
+                        z.writestr(os.path.basename(fp), app_words(fh.read()))
+                else:
+                    z.write(fp, os.path.basename(fp))
     return buf.getvalue()
 
 
@@ -551,8 +649,10 @@ app_ui = ui.page_sidebar(
         ui.panel_conditional(
             "!input.subgroup || input.subgroup === '(none)'",
             ui.input_select("equal_var", "Variances",
-                            {"auto": "auto (Levene test)", "yes": "equal (ANOVA + Tukey)",
-                             "no": "unequal (Welch + Games-Howell)"}),
+                            {"auto": "auto (Welch when Levene rejects equal spread; "
+                                     "needs 8+ plates per sample to detect it)",
+                             "yes": "equal (ANOVA + Tukey)",
+                             "no": "unequal (Welch ANOVA + Games-Howell)"}),
             ui.output_ui("compare_picker"),
             ui.input_select("violin_fill", "Violin fill",
                             {"auto": "auto (grey when plates)", "neutral": "neutral grey",
@@ -861,12 +961,12 @@ def server(input, output, session):
             if o.get("posthoc"):
                 msg += "\nPairwise: %s" % o["posthoc"]
         for w in a.get("warnings", []):
-            msg += "\n\n⚠ " + app_words(w)
-        return msg
+            msg += "\n\n⚠ " + w
+        return app_words(msg)
 
     @render.text
     def sentence():
-        return analysis()["sentence"]          # CT-R1 F10: the engine's paste_sentence()
+        return analysis()["sentence"]          # CT-R1 F10: the engine's paste_sentence(), app words
 
     @render.download(filename=lambda: file_base(analysis()) + ".png")
     def dl_png():
@@ -890,7 +990,7 @@ def server(input, output, session):
     @render.text
     def key_text():
         key = figure_png()["key"]               # the key of the figure as it is drawn right now
-        return legend_key.text_starter(key) or "(no sample colours to key)"
+        return app_words(legend_key.text_starter(key) or "(no sample colours to key)")
 
     @render.download(filename=lambda: file_base(analysis()) + "_legend_key.zip")
     def dl_key():
