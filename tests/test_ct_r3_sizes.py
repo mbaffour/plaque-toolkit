@@ -534,13 +534,8 @@ def test_f6_validate_names_the_plaque_size_and_says_plainly_when_the_image_is_mi
     _label(other / "labels_plate0.json", "plate0.tif", "/nowhere/plate0.tif")
     r = V.score_label_file(str(other / "labels_plate0.json"), mode="current", search_dir=str(d))
     assert r["image"] == "plate0.tif" and r["engine"] == "Current, Auto"
-    # the bundled validation/ground_truth labels name photos that are not in the repository
-    gt = os.path.join(ROOT, "validation", "ground_truth")
-    res = V.validate(gt, modes=("current",))
-    assert res["n_label_files"] == 2
-    assert V.summary_status(res).startswith("No plate could be scored: all 2 plates failed")
-    assert all("was not found next to it or in the chosen folder" in e
-               for e in res["per_plate_df"]["error"])
+    # (the bundled validation/ground_truth labels hit the missing-image message on any machine
+    # without the author's photos; not asserted here, it depends on the machine)
 
 
 def test_f6_validate_status_counts_plates_and_save_follows(neutral_plate_tif, tmp_path, monkeypatch, qtbot):
