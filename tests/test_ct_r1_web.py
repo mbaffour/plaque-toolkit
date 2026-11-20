@@ -394,7 +394,7 @@ def test_a_f13_palette_validation_and_theme_hint():
         A.palette_choice("", "red", 3)
     pal, hint = A.palette_choice("set2", "red", 3)
     assert pal == list(ps.PALETTES["set2"]) and "not used while a colour theme" in hint
-    assert A.palette_choice("", ",,,", 3) == (list(ps.OKABE_ITO), "")
+    assert A.palette_choice("", ",,,", 3)[0] is None        # CT-R2 N10: no colours = no custom palette
 
 
 def test_a_f18_value_without_metric_is_wide(tmp_path):

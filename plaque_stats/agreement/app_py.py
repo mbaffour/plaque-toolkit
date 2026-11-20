@@ -405,7 +405,10 @@ def icc_cell(s):
         ci = "[%.3f–%.3f]" % (lo, hi)
     else:
         ci = "[n/a (%s)]" % icc_na_reason(s)
-    return "%.3f  %s  (%s)" % (s["icc"], ci, ag.icc_grade(s["icc"]))
+    # the engine's rule (CT-R2 N8): the grade is the grade of the INTERVAL, none without one
+    grade = ag.icc_grade_interval(lo, hi)
+    return "%.3f  %s  (%s)" % (s["icc"], ci, ("%s, graded on the interval" % grade) if grade
+                               else "no agreement grade without an interval")
 
 
 def _num(v, fmt):
@@ -455,7 +458,8 @@ def report_rows(s, u):
                      "%s to %s %s (bias ± t·SD·√(1+1/n))" % (_signed(s["pred_lo"], 3),
                                                               _signed(s["pred_hi"], 3), u)))
     rows += [
-        ("95% CI of each limit", "±%s %s (Bland & Altman 1999)" % (_num(s.get("loa_ci_halfwidth"), "%.3f"), u)),
+        ("%s95%% CI of each limit" % ("approximate " if s["n"] < ag.SMALL_N else ""),
+         "±%s %s (Bland & Altman 1999)" % (_num(s.get("loa_ci_halfwidth"), "%.3f"), u)),
         ("proportional bias (difference ~ mean)", "slope %s, %s" % (
             _signed(s.get("ba_slope"), 4), ag._pstr(s.get("ba_slope_p", float("nan"))))),
         ("RMSE / MAE (%s)" % u, "%s / %s" % (_num(s["rmse"], "%.3f"), _num(s["mae"], "%.3f"))),

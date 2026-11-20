@@ -162,6 +162,7 @@ OPTION_CONTROLS = {
     "group": "Group column", "replicate": "Replicate column", "subgroup": "Subgroup",
     "title": "Title", "ylabel": "Y-axis label", "legend": "Place key on figure",
     "equivalence-margin": "equivalence margin", "metric": "Metric to plot",
+    "detect": "Difference to detect",
 }
 OPTION_VALUES = {
     "unit": {"replicate": "per plate", "plaque": "per plaque", "auto": "auto"},
@@ -372,6 +373,7 @@ def build_opts(sel, n_colours):
                 log_y_drop_nonpositive=bool(sel["log_y"] and sel["log_drop"]),
                 width=float(sel["width"]), height=float(sel["height"]),
                 legend=bool(sel["place_key"]),
+                detect=sel.get("detect"),
                 title=literal_text(sel["title"]) or None, ylabel=literal_text(sel["ylabel"]) or None)
     pal, hint = palette_choice(sel["palette_name"], sel["palette_custom"], n_colours)
     if pal is not None:
@@ -457,7 +459,7 @@ def compute(df, sel, info=None):
         control = ctrl if ctrl in subs else (subs[0] if subs else None)
         sub_order = [control] + [s for s in subs if s != control]
         opts, hint = build_opts(sel, len(sub_order))
-        opts.update(order=order, _sublabel=sg, control=None)
+        opts.update(order=order, _sublabel=sg, control=None, detect=None)   # no power sentence in grouped mode
     else:
         opts, hint = build_opts(sel, len(order))
         opts["order"] = order
@@ -488,7 +490,7 @@ def compute(df, sel, info=None):
         return in_app_words(base, sel)
     omni, posthoc, unit, have_rep = ps.run_stats(
         d, order, sel["unit"], sel["parametric"], equal_var=sel["equal_var"],
-        posthoc=opts["posthoc"], control=opts["control"])
+        posthoc=opts["posthoc"], control=opts["control"], detect=opts.get("detect"))
     summ = ps.group_summary(d, order, unit=unit)
     centers = ps.center_table(d, order, o)
     rm = ps.replicate_means(d)
@@ -737,6 +739,8 @@ app_ui = ui.page_sidebar(
                              "yes": "equal (ANOVA + Tukey)",
                              "no": "unequal (Welch ANOVA + Games-Howell)"}),
             ui.output_ui("compare_picker"),
+            ui.input_numeric("detect", "Difference to detect (optional, in the unit of the measurement)",
+                             None, min=0),
             ui.input_select("violin_fill", "Violin fill",
                             {"auto": "auto (grey when plates)", "neutral": "neutral grey",
                              "group": "coloured by sample"})),
@@ -965,6 +969,14 @@ def server(input, output, session):
             cur = input.error()
         ui.update_select("error", choices=ch, selected=cur if cur in ch else "auto")
 
+    def _detect():
+        """CT-R2: the optional 'Difference to detect' (None when the box is empty)."""
+        try:
+            v = input.detect()
+        except Exception:                                   # noqa: BLE001
+            return None
+        return None if v is None or v != v else float(v)
+
     def _sel():
         return {"group": _in("group"), "value": _in("value"), "replicate": _in("replicate", NONE),
                 "subgroup": _in("subgroup", NONE), "control": _in("control"),
@@ -976,7 +988,7 @@ def server(input, output, session):
                 "show_n": input.show_n(), "show_value": input.show_value(), "frame": input.frame(),
                 "log_y": input.log_y(), "log_drop": input.log_drop(), "title": input.title(),
                 "ylabel": input.ylabel(), "width": input.width(), "height": input.height(),
-                "place_key": input.place_key()}
+                "place_key": input.place_key(), "detect": _detect()}
 
     @reactive.calc
     def result():

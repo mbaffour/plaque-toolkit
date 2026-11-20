@@ -495,3 +495,70 @@ def test_n14_browser_removing_the_control_sample_resets_compare_to(browser_page,
     page.wait_for_function("(c) => document.getElementById('messages').innerText.includes('Compare to was')",
                            arg=ctl, timeout=20000)
     assert page.query_selector("#fig_preview img") is not None
+
+
+# =========================================================================== after the engine merge
+@pytest.mark.parametrize("n", [3, 6, 15, 100])
+def test_b_agreement_grade_is_the_engines_interval_grade_everywhere(n):
+    d = _pairs_df(n, seed=n)
+    s = B.compute(d, "toolkit_mm", "manual_mm")
+    g = ag.icc_grade_interval(s["icc_lo"], s["icc_hi"])
+    cell = B.icc_cell(s)
+    if g:
+        assert "(%s, graded on the interval)" % g in cell
+    else:
+        assert "no agreement grade without an interval" in cell
+    sent = B.sentence_of(s, "mm", "diameters", "Plaque Toolkit", "Fiji / ImageJ")
+    assert (("graded on the interval" in sent) if g else ("no agreement grade" in sent))
+    z = _zip(d)
+    rep = z.read("agreement_report_diameters.md").decode()
+    assert cell in rep and sent in rep                         # screen == ZIP == sentence
+    csv = pd.read_csv(io.BytesIO(z.read("agreement_stats_diameters.csv")))
+    assert (csv["icc_grade_ci"].fillna("")[0]) == g
+
+
+def test_a_figure_size_is_the_engines_final_size():
+    names = [f"MG1655 + phage variant {i:02d} (long name for test)" for i in range(1, 13)]
+    rng = np.random.default_rng(4)
+    df = pd.DataFrame([{"group": g, "replicate": "plate%d" % p, "diameter_mm": round(float(rng.normal(2, .3)), 3)}
+                       for g in names for p in (1, 2, 3) for _ in range(6)])
+    sel = R1._sel(df, palette_name="okabe", violin_fill="group", height=5.4)
+    a = A.compute(df, sel)
+    fig = A.make_figure(a)
+    png = A.fig_bytes(fig, "png")
+    assert hasattr(fig, "final_size_in") or hasattr(fig, "figure_size_in_final")
+    real = tuple(getattr(fig, "final_size_in", None) or fig.figure_size_in_final)
+    assert A.figure_size_in(fig, png) == pytest.approx(real)
+    assert real[1] > 5.4 + 0.15 and "taller than the Height slider" in A.size_line(real, sel)
+    R1.plt.close(fig)
+
+
+def test_a_difference_to_detect_feeds_the_engine_and_is_hidden_in_grouped_mode():
+    html = R1._html(A)
+    assert 'id="detect"' in html and "Difference to detect (optional, in the unit of the measurement)" in html
+    df = _wide()
+    a = A.compute(df, R1._sel(df, detect=0.3))
+    assert a["omni"]["power"]["detect"] == 0.3
+    with pytest.raises(ps.StatsError) as e:
+        A.compute(df, R1._sel(df, detect=-1))
+    assert "--" not in A.message_of(e.value) and "Difference to detect" in A.message_of(e.value)
+    g = _with_host(df)
+    ga = A.compute(g, R1._sel(g, subgroup="host", detect=0.3))              # not used, and not an error
+    assert ga["mode"] == "grouped" and ga["opts"]["detect"] is None
+    sel = R1._sel(df, detect=0.3)
+    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, A.compute(df, sel), sel, "x.csv", b"")))
+    rep = z.read([n for n in z.namelist() if n.startswith("report_")][0]).decode()
+    assert "difference you named" in rep and not re.search(r"--[a-z]", rep)
+
+
+@pytest.mark.parametrize("phrase", [
+    "Override with `--parametric`.", "`--parametric nonparametric` was chosen by the user.",
+    "`--posthoc dunnett` was chosen by the user", "`--equal-var auto`: Levene p = 0.3",
+    "choose --equal-var no (Welch).", "drop --posthoc dunnett and use --equal-var no (Welch ANOVA + Games-Howell)",
+    "(drop --posthoc dunnett and use --equal-var no)", "Use --unit replicate.",
+    "`--annotate letters` gives a letter display, `--annotate all` every bracket",
+    "--equivalence-margin is not used in grouped mode", "--equal-var no is not used in grouped mode",
+    "--annotate letters is not available in grouped mode", "--detect is not used in grouped mode"])
+def test_n5_every_engine_phrase_naming_an_option_is_mapped(phrase):
+    out = A.app_words(phrase)
+    assert not re.search(r"--[a-z]", out), out
