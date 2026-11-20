@@ -149,6 +149,7 @@ DEFAULTS = {
     "posthoc": "auto",             # auto | dunnett    (Dunnett vs --control; CT-R1 B1)
     "equivalence_margin": None,    # TOST margin in data units (CT-R1 B4)
     "log_y_drop_nonpositive": False,
+    "detect": None,                # planned power: the difference to detect, data units (CT-R2)
     "legend_key": True,            # write <figure>_legend_key.<fmt> + <figure>_legend_text.txt
 }
 
@@ -791,7 +792,7 @@ def plates_needed(d, power=0.80, alpha=0.05, n_max=1000):
     return None
 
 
-def power_summary(groups, power=0.80, alpha=0.05):
+def power_summary(groups, power=0.80, alpha=0.05, detect=None):
     """What this design can detect (CT-R1 B3), from the observed unit-level pooled SD:
     the smallest difference found with 80 % power at the current n per group, and the n per
     group needed for the largest and the smallest observed pairwise difference (two-sided
@@ -816,6 +817,12 @@ def power_summary(groups, power=0.80, alpha=0.05):
     if diffs:
         out.update({"largest_diff": diffs[-1], "n_for_largest": plates_needed(diffs[-1] / sd, power, alpha),
                     "smallest_diff": diffs[0], "n_for_smallest": plates_needed(diffs[0] / sd, power, alpha)})
+    if detect is not None:
+        # CT-R2 item 7: planned power for a difference the USER names (not the observed one, which
+        # is circular); never fewer than MIN_UNITS_ADVISED units
+        nd = plates_needed(float(detect) / sd, power, alpha)
+        out.update({"detect": float(detect),
+                    "n_for_detect": None if nd is None else max(MIN_UNITS_ADVISED, nd)})
     return out
 
 
@@ -996,6 +1003,42 @@ def _n_range(ns, tg, uw):
     return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
 
 
+def sensitivity_check(groups, order, tg, use_param, ctrl):
+    """CT-R2 item 7: 3+ samples on the parametric path -- the omnibus p and the pairwise
+    conclusions (adjusted p < 0.05) under equal variances (ANOVA + Tukey HSD) and without that
+    assumption (Welch ANOVA + Games-Howell), computed directly from the unit values. None when it
+    does not apply; {"text": ...} says why when it cannot be run."""
+    if len(order) < 3 or not use_param or len(tg) < 3:
+        return None
+    if ctrl is not None:
+        return {"text": "not run with Dunnett's test (it has no unequal-variance version here)."}
+    gv = [groups[g] for g in tg]
+    r = _quiet(st.f_oneway, *gv)
+    p_eq = float(r.pvalue) if r is not None else float("nan")
+    p_w = welch_anova_p(gv)
+    if p_w != p_w or p_eq != p_eq:
+        return {"p_equal": p_eq, "p_welch": p_w,
+                "text": "Welch's ANOVA cannot be computed (a sample has zero variance), so the analysis "
+                        "could not be repeated without the equal-variance assumption."}
+    sub = {g: groups[g] for g in tg}
+    t = _quiet(tukey, sub) or {}
+    gh = games_howell(sub)
+    sig_eq = {k for k, v in t.items() if v == v and v < 0.05}
+    sig_w = {k for k, v in gh.items() if v == v and v < 0.05}
+    diffs = (["%s vs %s is significant only with equal variances assumed (Tukey HSD)" % k
+              for k in itertools.combinations(tg, 2) if k in sig_eq and k not in sig_w] +
+             ["%s vs %s is significant only without that assumption (Games-Howell)" % k
+              for k in itertools.combinations(tg, 2) if k in sig_w and k not in sig_eq])
+    if (p_eq < 0.05) != (p_w < 0.05):
+        diffs.insert(0, "the omnibus test is significant only %s"
+                     % ("with equal variances assumed" if p_eq < 0.05 else "without that assumption"))
+    head = ("omnibus %s with equal variances assumed (one-way ANOVA) and %s without (Welch ANOVA); "
+            % (p_text(p_eq), p_text(p_w)))
+    tail = ("conclusions are the same under both (Tukey HSD and Games-Howell, adjusted p < 0.05)."
+            if not diffs else "; ".join(diffs) + ".")
+    return {"p_equal": p_eq, "p_welch": p_w, "differ": diffs, "text": head + tail}
+
+
 class PosthocResult(dict):
     """The {(a, b): adjusted p} dict run_stats() has always returned, plus `.name`: the post-hoc
     test that produced it ("Tukey HSD, adjusted p", "Welch t-test", ...). Figures read the name
@@ -1004,7 +1047,7 @@ class PosthocResult(dict):
 
 
 def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", control=None,
-              equivalence_margin=None):
+              equivalence_margin=None, detect=None):
     """Compute normality, an omnibus test, and pairwise post-hoc p-values on the chosen unit.
 
     Returns (omni, posthoc, unit, have_rep) as always. New keyword arguments (all optional):
@@ -1330,7 +1373,15 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     omni["equivalence_margin"] = margin
     pw = pairwise_table(groups, posthoc, omni, margin) if posthoc else pd.DataFrame()
     omni["pairwise"] = pw.to_dict("records")
-    omni["power"] = power_summary(groups)
+    try:
+        det = float(detect) if detect not in (None, "") else None
+    except (TypeError, ValueError):
+        raise StatsError("--detect must be a number: the difference to detect, in the unit of the "
+                         "measurement (got %r)." % (detect,))
+    if det is not None and not (det > 0 and math.isfinite(det)):
+        raise StatsError("--detect must be greater than 0 (got %r)." % (detect,))
+    omni["power"] = power_summary(groups, detect=det)
+    omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl)
     omni["icc"] = plate_variance_share(df)
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
     posthoc = PosthocResult(posthoc or {})
@@ -2503,6 +2554,9 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
     if ann is None:
         ann = annotation_plan(order, posthoc, o)["note"]
     L.append(fig_txt + ((" " + ann) if ann else ""))
+    sens = (omni.get("sensitivity") or {}).get("text")
+    if sens:
+        L.append("- **Sensitivity:** %s\n" % sens)
     L.append("\n## Design and power\n")
     L.append("- " + power_sentence(omni.get("power"), unit))
     icc = omni.get("icc")
@@ -2530,10 +2584,27 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
 
 
 def power_sentence(pw, unit="replicate"):
-    """One sentence from power_summary() (CT-R1 B3)."""
+    """One sentence from power_summary() (CT-R1 B3); with a user-named difference (--detect) that
+    sentence leads and the observed-effect sentence is one clause (CT-R2 item 7)."""
     uw = _unit_word(unit)
     if not pw or not pw.get("available"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
+    if pw.get("detect") is not None:
+        nd = pw.get("n_for_detect")
+        need = "more than 1,000 %s per sample" % uw if nd is None else "%s per sample" % _plural(nd, _unit_word(unit, 1))
+        s = ("**Power:** to detect a difference of %.3g (the difference you named) with %d %% power "
+             "(two-sided α = %g, two-sample t-test at the observed pooled SD of the %s, %.3g; for a single "
+             "two-sample comparison, without multiplicity adjustment) you need %s (you have %d%s)."
+             % (pw["detect"], round(100 * pw["power"]), pw["alpha"],
+                "plate means" if unit == "replicate" else "plaques", pw["pooled_sd"], need,
+                pw["n_per_group"], "" if pw.get("equal_n", True) else " in the smallest sample"))
+        s += " With the current design a difference of %.3g would be detected" % pw["detectable_diff"]
+        if "largest_diff" in pw:
+            nl = pw["n_for_largest"]
+            s += (" and the largest observed difference (%.3g) would need %s"
+                  % (pw["largest_diff"], "more than 1,000 %s" % uw if nl is None else
+                     _plural(max(MIN_UNITS_ADVISED, nl), _unit_word(unit, 1)) + " per sample"))
+        return s + "."
     s = ("**Power:** (computed from the observed spread; treat as a rough guide) with %d %s per "
          "sample and the observed pooled SD of the %s (%.3g), a difference "
          "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test; for a "
@@ -3294,7 +3365,7 @@ def run(args):
     omni, posthoc, unit, have_rep = run_stats(
         df, order, args["unit"], args["parametric"], equal_var=args.get("equal_var", "auto"),
         posthoc=args.get("posthoc") or "auto", control=args.get("control"),
-        equivalence_margin=args.get("equivalence_margin"))
+        equivalence_margin=args.get("equivalence_margin"), detect=args.get("detect"))
     summ = group_summary(df, order, unit=unit)
     rep = replicate_means(df)
     summ.to_csv(os.path.join(out, f"summary_by_group_{mt}.csv"), index=False)
@@ -3408,6 +3479,10 @@ def build_args():
     p.add_argument("--equivalence-margin", dest="equivalence_margin", type=float,
                    help="add a TOST equivalence test per pair: are the unit means within ± this "
                         "many units (e.g. 0.2 mm)?")
+    p.add_argument("--detect", dest="detect", type=float,
+                   help="planned power: the plates per sample needed to detect this difference (in "
+                        "the unit of the measurement, e.g. 0.2 mm) with 80%% power at the observed "
+                        "pooled SD (two-sided alpha 0.05; never fewer than 3)")
     p.add_argument("--annotate", choices=["auto", "all", "adjacent", "letters", "none"],
                    help="brackets: auto (significant pairs; > 5 samples: only vs the reference), "
                         "all, adjacent, letters (compact letter display) or none")

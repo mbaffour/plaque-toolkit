@@ -399,3 +399,82 @@ def test_N3_plate_bootstrap_of_the_median_is_approximate_below_10_plates(tmp_pat
     # no plates: the plaque bootstrap keeps its name (its coverage is 0.93-0.95)
     assert "95 % CI of the median (2,000 bootstrap resamples of the plaques" in ps.figure_sentence(
         {"center": "median", "error": "ci95"}, False, [4, 4])
+
+
+# =========================================================================== 7. --detect, sensitivity
+@pytest.mark.parametrize("detect", [0.05, 0.2, 0.6, 3.0])
+def test_detect_plates_needed_matches_statsmodels(tmp_path, detect):
+    from statsmodels.stats.power import TTestIndPower
+    g = {"A": [2.0, 2.1, 2.25, 2.05], "B": [2.3, 2.2, 2.45, 2.35], "C": [2.6, 2.7, 2.5, 2.65]}
+    om = ps.run_stats(_units(g), list("ABC"), "auto", "auto", detect=detect)[0]
+    pw = om["power"]
+    sd = math.sqrt(np.mean([np.var(v, ddof=1) for v in g.values()]))      # equal n: pooled SD
+    assert pw["pooled_sd"] == pytest.approx(sd, rel=1e-12)
+    # statsmodels' power of a two-sided two-sample t-test: n is the smallest n with power >= 0.8
+    # (solve_power is unreliable for very large effects, so the power function itself is checked)
+    tt, d = TTestIndPower(), detect / sd
+    n_sm = next(n for n in range(2, 2000) if tt.power(effect_size=d, nobs1=n, alpha=0.05) >= 0.8)
+    assert pw["n_for_detect"] == max(3, n_sm)
+    s = ps.power_sentence(pw, "replicate")
+    assert s.startswith("**Power:** to detect a difference of %.3g (the difference you named) with 80 %% "
+                        "power" % detect)
+    assert "you need %s per sample (you have 4)." % ps._plural(max(3, n_sm), "plate") in s
+    assert "Detecting the largest" not in s and "the largest observed difference" in s
+
+
+def test_detect_from_the_cli_and_bad_values(tmp_path):
+    a = ps.build_args().parse_args(["x.csv", "--detect", "0.2"])
+    assert a.detect == 0.2
+    g = {"A": [2.0, 2.1, 2.25], "B": [2.3, 2.2, 2.45], "C": [2.6, 2.7, 2.5]}
+    res, _ = _run(tmp_path, _units(g), detect=0.2)
+    rep = _report(res)
+    design = rep.split("## Design and power")[1]
+    assert design.lstrip().startswith("- **Power:** to detect a difference of 0.2 (the difference you named)")
+    for bad in (0, -1, "abc"):
+        with pytest.raises(ps.StatsError):
+            ps.run_stats(_units(g), list("ABC"), "auto", "auto", detect=bad)
+
+
+def test_sensitivity_line_equal_vs_unequal_variances(tmp_path):
+    g = {"A": [2.0, 2.1, 2.2, 2.05], "B": [2.3, 2.9, 1.9, 2.6], "C": [2.6, 2.7, 2.65, 2.62]}
+    res, _ = _run(tmp_path, _units(g))
+    sens = res["omni"]["sensitivity"]
+    gv = [np.asarray(v) for v in g.values()]
+    assert sens["p_equal"] == pytest.approx(st.f_oneway(*gv).pvalue, rel=1e-12)
+    assert sens["p_welch"] == pytest.approx(ps.welch_anova_p(gv), rel=1e-12)
+    t = st.tukey_hsd(*gv).pvalue
+    gh = ps.games_howell(g)
+    labels = list(g)
+    want = []
+    for i, j in itertools.combinations(range(3), 2):
+        a, b = labels[i], labels[j]
+        if (t[i, j] < 0.05) and not (gh[(a, b)] < 0.05):
+            want.append("%s vs %s is significant only with equal variances assumed (Tukey HSD)" % (a, b))
+        if (gh[(a, b)] < 0.05) and not (t[i, j] < 0.05):
+            want.append("%s vs %s is significant only without that assumption (Games-Howell)" % (a, b))
+    for w in want:
+        assert w in sens["text"]
+    if not want and (sens["p_equal"] < 0.05) == (sens["p_welch"] < 0.05):
+        assert sens["text"].endswith("conclusions are the same under both (Tukey HSD and Games-Howell, "
+                                     "adjusted p < 0.05).")
+    assert "- **Sensitivity:** omnibus p" in _report(res)
+    # not on the rank path, not with 2 samples
+    assert ps.run_stats(_units(g), list("ABC"), "auto", "nonparametric")[0]["sensitivity"] is None
+    assert ps.run_stats(_units({"A": g["A"], "B": g["B"]}), ["A", "B"], "auto", "auto")[0]["sensitivity"] is None
+
+
+def test_sensitivity_line_names_a_pair_that_differs():
+    # seeded search for 3 x 4 plates where Tukey and Games-Howell disagree on a pair
+    r = np.random.default_rng(0)
+    for _ in range(5000):
+        g = {"A": r.normal(2.0, 0.05, 4), "B": r.normal(2.3, 0.6, 4), "C": r.normal(2.25, 0.05, 4)}
+        t = st.tukey_hsd(*g.values()).pvalue
+        gh = ps.games_howell(g)
+        if (t[0, 2] < 0.05) != (gh[("A", "C")] < 0.05):
+            break
+    else:
+        pytest.fail("no disagreeing case found")
+    om = ps.run_stats(_units(g), list("ABC"), "auto", "parametric")[0]
+    only = "equal variances assumed (Tukey HSD)" if t[0, 2] < 0.05 else "without that assumption (Games-Howell)"
+    assert "A vs C is significant only %s" % (("with " + only) if t[0, 2] < 0.05 else only) in om["sensitivity"]["text"]
+    assert "conclusions are the same" not in om["sensitivity"]["text"]
