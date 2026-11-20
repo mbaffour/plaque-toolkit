@@ -254,8 +254,8 @@ def read_table(path, return_info=False, *, text_columns=None):
     * Labels stay labels: nothing is turned into "missing" except an empty cell (pandas' default
       NA strings -- None, NA, nan, null, N/A ... -- are ordinary names here), and label columns are
       kept as text exactly as typed ('007', '1.0', '0.10').
-    * `#` is not a comment character: only whole lines that START with `#` are skipped, so a
-      sample called 'T7 #2' or a plate called 'plate #1' keeps its row.
+    * `#` is not a comment character: only whole lines that START with `#` BEFORE the header row
+      are skipped (CT-R2 N6), so a sample called '#1', 'T7 #2' or a plate 'plate #1' keeps its row.
     * The delimiter (comma, semicolon, tab, pipe) is detected from the header, and European
       decimal commas ("2,34") are read as numbers. A file that parses to a single column is
       refused with a message that says so.
@@ -286,8 +286,13 @@ def read_table(path, return_info=False, *, text_columns=None):
                 lines = fh.read().splitlines()
         except OSError as e:
             raise StatsError("could not open %s (%s)." % (base, e.strerror or e))
-        kept = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
-        info["comment_lines"] = sum(1 for ln in lines if ln.lstrip().startswith("#"))
+        # CT-R2 N6: a line starting with '#' is a comment only BEFORE the header row (the shipped
+        # validation CSVs have such lines). After the header it is data: samples '#1', '#2' ...
+        head = 0
+        while head < len(lines) and (not lines[head].strip() or lines[head].lstrip().startswith("#")):
+            head += 1
+        info["comment_lines"] = sum(1 for ln in lines[:head] if ln.lstrip().startswith("#"))
+        kept = [ln for ln in lines[head:] if ln.strip()]
         if not kept:
             raise StatsError("%s is empty (no header line)." % os.path.basename(str(path)))
         sep = _sniff_delimiter(kept[0], "\t" if ext in (".tsv", ".txt") else ",")

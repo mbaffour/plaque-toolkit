@@ -159,3 +159,41 @@ def test_unreadable_workbook_is_a_plain_error(tmp_path, name, content):
     with pytest.raises(ps.StatsError):
         ps.read_table(str(tmp_path / "missing.csv"))
 
+
+# =========================================================================== 2. comment lines
+def _hash_csv(tmp_path, names, fname, comments=()):
+    r = np.random.default_rng(5)
+    lines = list(comments) + ["group,replicate,value"]
+    for g, mu in zip(names, (2.0, 2.4, 2.9)):
+        for p in range(3):
+            for v in r.normal(mu, 0.2, 4):
+                lines.append("%s,plate%d,%.4f" % (g, p + 1, v))
+    path = tmp_path / fname
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def test_N6_hash_names_after_the_header_are_data(tmp_path):
+    a = _hash_csv(tmp_path, ["#1", "#2", "#3"], "hash.csv", comments=["# exported by X", "# 2026"])
+    b = _hash_csv(tmp_path, ["s1", "s2", "s3"], "plain.csv")
+    df, info = ps.read_table(a, return_info=True)
+    assert info["rows"] == 36 and info["comment_lines"] == 2
+    assert "2 lines starting with # skipped" in info["note"]
+    assert list(dict.fromkeys(df["group"])) == ["#1", "#2", "#3"]
+    ra, _ = _run(tmp_path / "a", a)
+    rb, _ = _run(tmp_path / "b", b)
+    assert ra["order"] == ["#1", "#2", "#3"]
+    assert ra["omni"]["test"] == rb["omni"]["test"]
+    assert ra["omni"]["p"] == pytest.approx(rb["omni"]["p"], rel=1e-12)
+    pa = [r["p_adj"] for r in ra["omni"]["pairwise"]]
+    pb = [r["p_adj"] for r in rb["omni"]["pairwise"]]
+    assert pa == pytest.approx(pb, rel=1e-12)
+
+
+def test_N6_a_hash_group_row_in_the_middle_is_kept(tmp_path):
+    # as the tester's labels2.csv: a sample literally called '#' between other samples
+    p = tmp_path / "mid.csv"
+    p.write_text("group,replicate,value\nA,p1,1.0\n#,p1,2.0\n#,p2,2.5\nA,p2,1.5\n", encoding="utf-8")
+    df, info = ps.read_table(str(p), return_info=True)
+    assert len(df) == 4 and info["comment_lines"] == 0 and "skipped" not in info["note"]
+    assert sorted(df["group"]) == ["#", "#", "A", "A"]
