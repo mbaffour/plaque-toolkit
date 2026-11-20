@@ -235,3 +235,78 @@ def test_item3_below_8_plates_nothing_changes():
     om = ps.run_stats(_units(g), list(g), "auto", "auto")[0]
     assert om["parametric_used"] and om["choice_note"].startswith("With fewer than 8 plates per sample (here 7)")
 
+
+# =========================================================================== 6. agreement wording
+sys.path.insert(0, os.path.join(ROOT, "plaque_stats", "agreement"))
+import agreement as cli_ag  # noqa: E402
+sys.path.insert(0, ROOT)
+from app import agreement as app_ag  # noqa: E402
+
+
+def _pairs(n, seed=2, offset=0.0, noise=0.08):
+    r = np.random.default_rng(seed)
+    ref = r.uniform(0.6, 2.6, n)
+    return list(ref + offset + r.normal(0, noise, n)), list(ref)
+
+
+def test_N8_icc_graded_on_the_interval_in_both_copies():
+    assert cli_ag.icc_grade_interval(0.709, 0.986) == "moderate to excellent"
+    assert cli_ag.icc_grade_interval(0.95, 0.99) == "excellent"
+    assert cli_ag.icc_grade_interval(float("nan"), 0.9) == ""
+    tool, ref = _pairs(15, noise=0.35)
+    for mod in (cli_ag, app_ag):
+        s = mod.full_stats(tool, ref)
+        sent = mod.report_sentence(s, "mm", "plaque diameters")
+        want = ("ICC(A,1) = %.3f (95%% CI %.3f-%.3f): %s agreement, graded on the interval (Koo & Li 2016)"
+                % (s["icc"], s["icc_lo"], s["icc_hi"], cli_ag.icc_grade_interval(s["icc_lo"], s["icc_hi"])))
+        assert want in sent
+        assert "(%s agreement)" % cli_ag.icc_grade(s["icc"]) not in sent
+
+
+def test_N8_no_grade_without_an_interval_and_no_verdict_below_5_pairs():
+    tool, ref = [1.0, 1.52, 2.1, 0.8], [1.02, 1.5, 2.0, 0.9]
+    s = cli_ag.full_stats(tool, ref)
+    sent = cli_ag.report_sentence(s, "mm", "plaque diameters")
+    assert sent.startswith("With only 4 pairs (too few pairs for a verdict), plaque diameters measured with "
+                           "Plaque Toolkit were compared with Fiji / ImageJ (n = 4): Pearson r = ")
+    for verdict in ("agreed", "appeared to agree", "did NOT", "interchangeably", "correlated",
+                    "excellent", "good agreement", "poor agreement"):
+        assert verdict not in sent
+    assert "n too small for an interval, so no agreement grade" in sent
+    # a poor ICC from 3 pairs: still numbers only
+    s3 = cli_ag.full_stats([1.0, 2.0, 1.5], [1.6, 1.2, 1.9])
+    assert "cannot be used interchangeably" not in cli_ag.report_sentence(s3)
+
+
+def test_N8_proportional_bias_clause_and_small_n_power():
+    tool, ref = _pairs(8)
+    s = cli_ag.full_stats(tool, ref)
+    assert s["ba_slope_p"] >= 0.05
+    sent = cli_ag.report_sentence(s, "mm", "plaque diameters")
+    assert ("No proportional bias was detected (Bland-Altman slope %+.3f, %s; with 8 pairs there is "
+            "little power to detect one)." % (s["ba_slope"], cli_ag._pstr(s["ba_slope_p"]))) in sent
+    assert "did not depend on plaque size" not in sent
+    assert "approximate 95% CI" in sent                          # N11: LoA limits below 10 pairs
+    tool, ref = _pairs(30)
+    s = cli_ag.full_stats(tool, ref)
+    sent = cli_ag.report_sentence(s)
+    assert "No proportional bias was detected (Bland-Altman slope %+.3f, %s)." % (
+        s["ba_slope"], cli_ag._pstr(s["ba_slope_p"])) in sent
+    assert "approximate 95% CI" not in sent and ", 95% CI)" in sent
+
+
+def test_N8_cli_report_grades_the_interval(tmp_path):
+    tool, ref = _pairs(15, noise=0.35)
+    csv = tmp_path / "pairs.csv"
+    pd.DataFrame({"toolkit_mm": tool, "manual_mm": ref}).to_csv(csv, index=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        a = vars(cli_ag.build_args().parse_args([str(csv), "--tool", "toolkit_mm", "--manual",
+                                                  "manual_mm", "--out", str(tmp_path / "o")]))
+        a["formats"] = ["png"]
+        s = cli_ag.run(a)
+    rep = [f for f in os.listdir(tmp_path / "o") if f.endswith(".md")][0]
+    txt = (tmp_path / "o" / rep).read_text(encoding="utf-8")
+    g = cli_ag.icc_grade_interval(s["icc_lo"], s["icc_hi"])
+    assert "; %s, graded on the interval) |" % g in txt
+    stats_csv = [f for f in os.listdir(tmp_path / "o") if f.startswith("agreement_stats")][0]
+    assert pd.read_csv(tmp_path / "o" / stats_csv)["icc_grade_ci"].iloc[0] == g

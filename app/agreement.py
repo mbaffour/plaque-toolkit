@@ -439,6 +439,17 @@ def icc_grade(icc):
             else "good" if icc < 0.90 else "excellent")
 
 
+def icc_grade_interval(lo, hi):
+    """Koo & Li (2016) grade of the 95% CI of ICC(A,1), as Koo & Li advise (CT-R2 N8: the point
+    estimate was graded, "0.949 (95% CI 0.709-0.986) (excellent agreement)" at n = 15): one word
+    when both limits fall in one band, "moderate to excellent" when they span bands, "" when
+    there is no interval."""
+    if not (_finite(lo) and _finite(hi)):
+        return ""
+    a, b = icc_grade(lo), icc_grade(hi)
+    return a if a == b else "%s to %s" % (a, b)
+
+
 # --- Honest wording bands (PT-4) ------------------------------------------- #
 # The adjectives in the "paste-ready" sentence are derived from the statistics they describe
 # (a committed artefact once read "closely agreed ... ICC(A,1) = -0.012 (poor agreement)").
@@ -489,6 +500,7 @@ def icc_interval_note(s, unit="mm"):
 
 
 SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
+VERDICT_MIN_N = 5          # below this no verdict at all: numbers only (CT-R2 N8)
 
 
 def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
@@ -504,32 +516,43 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
     phrase = agreement_phrase(icc)
     what = str(what).strip() or "measurements"
     lead = what[:1].upper() + what[1:]
-    if n < SMALL_N:
-        phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
-                       .replace("agreed", "appeared to agree")
-        lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
-    out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+    verdict = n >= VERDICT_MIN_N
+    if not verdict:
+        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs
+        out = ("With only %d pairs (too few pairs for a verdict), %s measured with %s were compared "
+               "with %s (n = %d)" % (n, what, label_tool, label_manual, n))
+    else:
+        if n < SMALL_N:
+            phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
+                           .replace("agreed", "appeared to agree")
+            lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
+        out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
     # correlation
     if _finite(r):
         p = s.get("pearson_p")
         corr = "Pearson r = %.3f, R² = %.3f" % (r, s.get("r2", r * r))
         if "pearson_p" in s:
             corr += ", " + _pstr(p)
-        out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
+        if verdict:
+            out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
+        else:
+            out += ": %s" % corr
     else:
         out += ": Pearson r could not be computed"
-    # ICC (+ CI) and CCC
+    # ICC (+ CI, graded on the CI) and CCC
     if _finite(icc):
-        if _finite(s.get("icc_lo")) and _finite(s.get("icc_hi")):
-            ci = " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"])
+        grade = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
+        if grade:
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (95%% CI %.3f-%.3f): "
+                    "%s agreement, graded on the interval (Koo & Li 2016)"
+                    % (icc, s["icc_lo"], s["icc_hi"], grade))
         elif "icc_lo" in s and n < ICC_CI_MIN_N:
-            ci = " (n too small for an interval)"
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (n too small for an "
+                    "interval, so no agreement grade)" % icc)
         else:
-            ci = ""
-        out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f%s (%s agreement)" \
-               % (icc, ci, icc_grade(icc))
+            out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f" % icc
         if _finite(s.get("ccc")):
-            out += " and Lin's concordance correlation CCC = %.3f" % s["ccc"]
+            out += ", and Lin's concordance correlation CCC = %.3f" % s["ccc"]
     out += "."
     # Bland-Altman bias
     bits = []
@@ -550,7 +573,9 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
     loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
     extra = []
     if _finite(s.get("loa_ci_halfwidth")):
-        extra.append("each limit ±%.3f %s, 95%% CI" % (s["loa_ci_halfwidth"], unit))
+        # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
+        extra.append("each limit ±%.3f %s, %s95%% CI" % (s["loa_ci_halfwidth"], unit,
+                                                         "approximate " if n < SMALL_N else ""))
     if extra:
         loa += " (%s)" % "; ".join(extra)
     out += " " + loa
@@ -567,9 +592,11 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                     "a proportional bias, so a single bias value does not describe the whole range."
                     % (bs, unit, unit, _pstr(bp)))
         else:
-            out += (" The difference did not depend on plaque size (Bland-Altman slope %+.3f, %s)."
-                    % (bs, _pstr(bp)))
-    if _finite(icc) and icc < 0.5:
+            # CT-R2 N8: a non-significant slope is no evidence of no bias, least of all at small n
+            out += (" No proportional bias was detected (Bland-Altman slope %+.3f, %s%s)."
+                    % (bs, _pstr(bp), "; with %d pairs there is little power to detect one" % n
+                       if n < SMALL_N else ""))
+    if verdict and _finite(icc) and icc < 0.5:
         out += (" These two methods therefore cannot be used interchangeably for "
                 "individual %s; a similar group MEAN does not imply agreement, and any "
                 "per-plaque claim needs a method that does agree." % what)
