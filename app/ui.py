@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QTableView, QSplitter,
     QLineEdit, QGroupBox, QScrollArea, QMessageBox, QSplashScreen, QComboBox,
     QFrame, QProgressBar, QStyle, QMenu, QAbstractItemView, QPlainTextEdit,
-    QDialog, QTextBrowser, QLayout, QSizePolicy)
+    QDialog, QTextBrowser, QLayout, QSizePolicy, QToolButton)
 
 from app import __version__, engine_api, style, batch_measure, validate
 from app.study_tab import StudyTab
@@ -84,6 +84,8 @@ class FlowLayout(QLayout):
         line_h = 0
         right = rect.right() - m.right()
         for it in self._items:
+            if it.isEmpty():                          # a hidden widget takes no room (CT-R2 N10)
+                continue
             sz = it.sizeHint()
             nx = x + sz.width()
             if nx - 1 > right and line_h > 0:          # wrap to next line
@@ -240,6 +242,17 @@ def _icon(sp):
     return app.style().standardIcon(sp)
 
 
+def _clear_status_on_hide(widget):
+    """CT-R2 N14: the status-bar message belongs to the tab that wrote it. A tab that is left
+    (hidden) clears it, so Batch / Compare never show Measure's "41 detected" (and back)."""
+    try:
+        win = widget.window()
+        if win is not None and hasattr(win, "statusBar") and win.isVisible():
+            win.statusBar().clearMessage()
+    except RuntimeError:                       # window already being destroyed
+        pass
+
+
 # --------------------------------------------------------------------------- #
 class MeasureTab(QWidget):
     _SEL_HINT = ("Tip: click a plaque on the image to highlight its row here (and vice-versa). "
@@ -358,12 +371,30 @@ class MeasureTab(QWidget):
         params_box = QGroupBox("Parameters")
         # FlowLayout so the toolbar WRAPS onto more rows on narrow windows instead of overflowing
         pl = FlowLayout(params_box, margin=4, hspacing=10, vspacing=6)
-        pl.addWidget(QLabel("Dish")); pl.addWidget(self.plate)
-        pl.addWidget(self.plate_85); pl.addWidget(self.plate_100)
-        pl.addWidget(QLabel("Engine")); pl.addWidget(self.mode)
-        pl.addWidget(QLabel("Plaque size")); pl.addWidget(self.scale_box)
-        pl.addWidget(self.watershed); pl.addWidget(self.exclude_overlaps)
-        pl.addWidget(self.orient_btn)
+
+        def pair(label, *widgets):
+            # a label and its box wrap TOGETHER (CT-R2 N10: "Plaque size" split from its box)
+            w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+            h.addWidget(QLabel(label))
+            for x in widgets:
+                h.addWidget(x)
+            return w
+        # CT-R2 N10: on a short window the parameter rows collapse into ONE line (the summary
+        # + Open / Re-detect / Save) so the canvas keeps its share; "Parameters ▾" opens them
+        self.params_toggle = QToolButton(); self.params_toggle.setCheckable(True)
+        self.params_toggle.setToolTip("Show or hide the parameter rows (they fold into one line "
+                                      "on its own when the window is short).")
+        self.params_toggle.clicked.connect(self._params_toggled)
+        self.params_summary = QLabel(""); self.params_summary.setObjectName("ModeHelp")
+        self._param_rows = [pair("Dish", self.plate, self.plate_85, self.plate_100),
+                            pair("Engine", self.mode), pair("Plaque size", self.scale_box),
+                            self.watershed, self.exclude_overlaps, self.orient_btn]
+        self._params_collapsed = False
+        self._params_auto = True           # follows the window height until the user clicks
+        pl.addWidget(self.params_toggle)
+        pl.addWidget(self.params_summary)
+        for w in self._param_rows:
+            pl.addWidget(w)
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
 
         # mode helper + progress strip
@@ -474,13 +505,64 @@ class MeasureTab(QWidget):
         split.splitterMoved.connect(lambda *_a: self._sync_min_height())
 
         self._apply_a11y()
+        for sig in (self.mode.currentIndexChanged, self.scale_box.currentIndexChanged,
+                    self.plate.valueChanged, self.watershed.stateChanged):
+            sig.connect(lambda *_a: self._update_params_summary())
+        self._set_params_collapsed(False)
+
+    # CT-R2 N10: below this much height for the tab, the parameter rows fold into one line
+    _COLLAPSE_BELOW = 640
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if self._params_auto:
+            vp = self.parentWidget()
+            avail = vp.height() if vp is not None else self.height()
+            want = avail < self._COLLAPSE_BELOW
+            if want != self._params_collapsed:
+                self._set_params_collapsed(want)
         # The tab's real minimum height depends on its width (the toolbars wrap). Publish it,
         # so the outer scroll area scrolls only when the window is too small for that minimum
         # and otherwise hands the canvas all the height that is left (CT-R1 F11).
         self._sync_min_height()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        _clear_status_on_hide(self)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._show_status()                    # this tab's own message comes back with it
+
+    def _params_toggled(self, _checked=False):
+        self._params_auto = False
+        self._set_params_collapsed(not self._params_collapsed)
+
+    def _set_params_collapsed(self, on):
+        self._params_collapsed = bool(on)
+        for w in self._param_rows:
+            w.setVisible(not on)
+        self.mode_help.setVisible(not on)
+        self._update_params_summary()
+        self.params_summary.setVisible(on)
+        self.params_toggle.setText("Parameters ▾" if on else "▴")
+        self.params_toggle.setChecked(on)
+        self._params_box.setTitle("" if on else "Parameters")
+        # one line means one line: no room for the (empty) title, and the photo's info strip
+        # (its name is in the summary) folds away too
+        self._params_box.setStyleSheet("QGroupBox{margin-top:0px; padding-top:2px;}" if on else "")
+        if self.image_path:
+            self.img_info.setVisible(not on)
+        self._params_box.updateGeometry()
+        QTimer.singleShot(0, self._sync_min_height)
+
+    def _update_params_summary(self):
+        eng = MODES[self.mode.currentIndex()][0].split(" (")[0]
+        size = self.scale_box.currentText() if self.scale_box.isEnabled() else ""
+        name = os.path.basename(self.image_path) if getattr(self, "image_path", None) else ""
+        self.params_summary.setText(" · ".join(x for x in (
+            name, "Dish %g mm" % self.plate.value(), eng, size,
+            "split touching" if self.watershed.isChecked() else "") if x))
 
     def _sync_min_height(self):
         """Publish the tab's real minimum height for its CURRENT width: the wrapped parameter
@@ -975,7 +1057,8 @@ class MeasureTab(QWidget):
             pass
         self.img_info.setText("📷  " + "   ·   ".join(parts))
         self.img_info.setToolTip(os.path.abspath(self.image_path))
-        self.img_info.setVisible(True)
+        self.img_info.setVisible(not self._params_collapsed)
+        self._update_params_summary()
 
     def refresh_table(self, precise=None):
         if self.det is None or self.editor is None:
@@ -1056,8 +1139,9 @@ class MeasureTab(QWidget):
                 why = ("⚠ Dish size is 0: sizes are in pixels. Type the dish diameter in the Dish "
                        "box, or use Set plate or the Ruler to calibrate.")
             else:
-                why = ("⚠ No dish found: sizes are in pixels. Use Set plate or the Ruler to "
-                       "calibrate.")
+                # coordinator B: the same words as the Batch Problem column
+                why = ("⚠ " + batch_measure.NO_DISH_PROBLEM[0].upper() + batch_measure.NO_DISH_PROBLEM[1:]
+                       + ". Or use Set plate or the Ruler to calibrate.")
             if self._dish_msg:      # the user just tried the Dish box / 85 / 100 buttons
                 why += "  The Dish size has no dish outline to rescale on this image."
             flag = (why + "  " + flag) if flag else why
@@ -1453,7 +1537,11 @@ BATCH_COLUMNS = {
                          "sizes are less certain.", "count"),
     "n_core": ("Core only", "Plaques whose halo could not be separated (QC flag CORE?): their "
                             "size is the dark centre's, smaller than the halo.", "count"),
-    "error": ("Problem", "Why this image could not be measured.", None),
+    "n_no_size": ("No size", "Split pieces whose size is not reliable (QC flag NO_SIZE): they "
+                             "count as plaques but stay out of the median / mean. Plaques = "
+                             "Sized + Core only + No size.", "count"),
+    "error": ("Problem", "Why this image could not be measured, or why its sizes are only in "
+                         "pixels (no dish found).", None),
 }
 
 
@@ -1589,7 +1677,7 @@ class CompareTab(QWidget):
         opts = QGridLayout(opts_box); opts.setHorizontalSpacing(14); opts.setVerticalSpacing(8)
         opts.addWidget(QLabel("Dish"), 0, 0); opts.addWidget(self.plate, 0, 1)
         sz = QHBoxLayout(); sz.setContentsMargins(0, 0, 0, 0)
-        sz.addWidget(QLabel("Plaque size")); sz.addWidget(self.scale_box)
+        sz.addWidget(QLabel("Plaque size")); sz.addWidget(self.scale_box); sz.addStretch(1)
         opts.addLayout(sz, 0, 2); opts.addWidget(self.watershed, 0, 3)
         opts.addWidget(self.group, 1, 0, 1, 2)
         opts.addWidget(QLabel("Core fraction"), 1, 2); opts.addWidget(self.core, 1, 3)
@@ -1674,6 +1762,10 @@ class CompareTab(QWidget):
         lay.addWidget(self.results, 1)
 
     # -- layout ------------------------------------------------------------- #
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        _clear_status_on_hide(self)
+
     def sizeHint(self):
         # MainWindow pins a tab's sizeHint as its minimum size. The two tables and the figure
         # panel can all shrink and scroll inside themselves, so do not let their roomy
@@ -1716,10 +1808,12 @@ class CompareTab(QWidget):
         if not directory or not os.path.isdir(directory):
             return stop("Pick a folder", "Choose a folder of phage plate images.")
         if not engine_api.compare_images(directory):
+            sub = batch_measure.subfolder_note(directory)
             return stop("No images found",
                         "No images found in %s.\n\nThe folder must hold the plate photos "
                         "(.tif, .jpg, .png or .heic), one plate per file; the file name is "
-                        "used as the phage label." % directory)
+                        "used as the phage label. Sub-folders are not searched.%s"
+                        % (directory, ("\n\n" + sub) if sub else ""))
         kw = dict(plate_mm=self.plate.value(), scale=self.scale_box.scale(),
                   core=self.core.value(), group_by_prefix=self.group.isChecked(),
                   watershed=self.watershed.isChecked(),
@@ -1759,6 +1853,7 @@ class CompareTab(QWidget):
         if checked is None:
             return
         directory, kw = checked
+        self._run_dir = directory
         self._set_busy(True)
         self.window().statusBar().showMessage("Running turbidity comparison…")
         w = Worker(engine_api.run_compare, directory, **kw)
@@ -1820,7 +1915,9 @@ class CompareTab(QWidget):
         scale = None
         if "PLAQUE_SIZE" in q.columns and len(q):
             scale = str(q["PLAQUE_SIZE"].iloc[0])
-        self.qc.setText(compare_qc_note(q, failed=failed, titer=titer, scale=scale, flags=flags))
+        note = compare_qc_note(q, failed=failed, titer=titer, scale=scale, flags=flags)
+        sub = batch_measure.subfolder_note(getattr(self, "_run_dir", None))   # CT-R2 N11
+        self.qc.setText(note + ("  " + sub if sub else ""))
 
     @staticmethod
     def _plate_frame(q):
@@ -2390,6 +2487,10 @@ class BatchTab(QWidget):
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(10)
         lay.addWidget(inputs); lay.addLayout(runrow); lay.addWidget(self.status); lay.addWidget(card, 1)
 
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        _clear_status_on_hide(self)
+
     # -- drag and drop: drop a folder anywhere on the tab to set the batch folder -- #
     def dragEnterEvent(self, e):
         md = e.mimeData()
@@ -2461,7 +2562,8 @@ class BatchTab(QWidget):
             QMessageBox.warning(self, "No images found",
                                 msg + ".\n\nThe folder must hold the plate photos themselves "
                                 "(.tif, .jpg, .png or .heic), one plate per file; sub-folders "
-                                "are not searched.")
+                                "are not searched." + (("\n\n" + batch_measure.subfolder_note(folder))
+                                                       if batch_measure.unsearched_subfolders(folder) else ""))
             return
         key = self._mode_key()
         watershed, scale = self._applied_options()
@@ -2498,9 +2600,15 @@ class BatchTab(QWidget):
             why = {e.get("image"): e.get("reason") for e in (res.get("errors") or [])}
             df = df.copy()
             df["error"] = [why.get(i) or e for i, e in zip(df["image"], df["error"])]
+        if "error" in df.columns:
+            # CT-R2 N14: the Problem column right after the image name, where it is seen at
+            # 1024 px (it was the 15th column, off-screen); per_plate.csv keeps its order
+            cols = list(df.columns)
+            cols.remove("error")
+            df = df[cols[:1] + ["error"] + cols[1:]]
         self.model.set_dataframe(df)
         self.table.sortByColumn(0, Qt.AscendingOrder)     # by image name, natural order
-        _fit_columns(self.table)
+        _fit_columns(self.table, max_width=300)
         self.last_out = res["out_dir"]; self.open_btn.setEnabled(True)
         n, bad = int(res["n_images"]), len(res.get("errors") or [])
         if n == 0:
@@ -2509,6 +2617,9 @@ class BatchTab(QWidget):
             msg = "%d image%s measured → %s" % (n - bad, "" if n - bad == 1 else "s", res["out_dir"])
             if bad:
                 msg += ("   ⚠ %d could not be measured (see the Problem column)" % bad)
+        sub = batch_measure.subfolder_note(self.folder.text().strip())      # CT-R2 N11
+        if sub:
+            msg += "   " + sub
         self.status.setText(msg); self.window().statusBar().showMessage(msg)
 
     def _err(self, m):

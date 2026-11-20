@@ -621,3 +621,148 @@ def test_n12_only_the_pointer_grabs_the_scale_bar_and_an_empty_detect_area_is_no
     ed._set_tool("select")
     drag(start, (start[0] - 150, start[1] - 150))
     assert (ed._sb_g["x0"], ed._sb_g["y0"]) != before and ed.dirty
+
+
+# =========================================================================== N11 N14
+def test_n11_compare_and_batch_use_one_rule_for_sub_folders(window, qtbot, phage_folder, dialogs, tmp_path):
+    old = phage_folder / "old"
+    old.mkdir()
+    shutil.copy(str(phage_folder / "T4_1.tif"), str(old / "T4_1.tif"))
+    names = [os.path.basename(p) for p in engine_api.compare_images(str(phage_folder))]
+    assert names == [os.path.basename(p) for p in batch_measure.find_images(str(phage_folder))]
+    assert names == ["T4_1.tif", "T4_2.tif", "T7_1.tif"]
+    assert batch_measure.unsearched_subfolders(str(phage_folder)) == ["old"]
+    note = "1 sub-folder was not searched (old): only the images directly in the folder are measured."
+    tab = _compare_tab(window)
+    tab.folder["edit"].setText(str(phage_folder))
+    tab.plate.setValue(90)
+    tab.run()
+    qtbot.waitUntil(lambda: tab.run_btn.isEnabled(), timeout=TIMEOUT)
+    q = pd.read_csv(phage_folder / "out_turbidity" / "qc.csv")
+    assert list(q["PLATE"]) == ["T4_1", "T4_2", "T7_1"]          # no "old__T4_1"
+    assert note in tab.qc.text()
+    b = _batch_tab(window)
+    b.folder.setText(str(phage_folder))
+    b._run()
+    qtbot.waitUntil(lambda: b.run_btn.isEnabled(), timeout=TIMEOUT)
+    assert note in b.status.text()
+
+
+def test_n14_the_status_bar_message_belongs_to_its_tab(window, qtbot, dialogs, tmp_path, neutral_plate_tif):
+    tab = window.measure_tab
+    _open(tab, qtbot, dialogs, _copy(neutral_plate_tif, tmp_path / "m"))
+    msg = window.statusBar().currentMessage()
+    assert "detected" in msg
+    window.tabs.setCurrentIndex(1); qtbot.wait(30)
+    assert window.statusBar().currentMessage() == ""
+    window.tabs.setCurrentIndex(2); qtbot.wait(30)
+    assert window.statusBar().currentMessage() == ""
+    window.tabs.setCurrentIndex(0); qtbot.wait(30)
+    assert window.statusBar().currentMessage() == msg
+
+
+def test_n14_batch_problem_column_is_visible_at_1024(window, qtbot, dialogs, tmp_path, neutral_plate_tif):
+    window.resize(1024, 700)
+    folder = tmp_path / "b"
+    _copy(neutral_plate_tif, folder)
+    (folder / "broken.tif").write_bytes(b"not an image")
+    b = _batch_tab(window)
+    window.tabs.setCurrentIndex(1)
+    b.folder.setText(str(folder))
+    b._run()
+    qtbot.waitUntil(lambda: b.run_btn.isEnabled(), timeout=TIMEOUT)
+    qtbot.wait(50)
+    hdr, rows = _table(b.table)
+    assert hdr[:2] == ["Image", "Problem"]
+    i = hdr.index("Problem")
+    x = b.table.columnViewportPosition(i)
+    assert 0 <= x and x + 60 < b.table.viewport().width()
+    assert rows[0][1].startswith("not a readable image")
+    assert list(pd.read_csv(folder / "out_batch" / "per_plate.csv").columns)[-1] == "error"
+
+
+# =========================================================================== N10
+def _wheel(widget, delta=-120, mods=Qt.NoModifier):
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtWidgets import QApplication
+    vp = widget.viewport()
+    c = QPointF(vp.width() / 2.0, vp.height() / 2.0)
+    ev = QWheelEvent(c, QPointF(vp.mapToGlobal(c.toPoint())), QPoint(0, 0), QPoint(0, delta),
+                     Qt.NoButton, mods, Qt.NoScrollPhase, False)
+    QApplication.sendEvent(vp, ev)
+
+
+def test_n10_small_windows_keep_the_key_row_and_the_wheel_scrolls_the_page(window, qtbot, dialogs, tmp_path):
+    tab = window.measure_tab
+    ed = _open(tab, qtbot, dialogs, _copy(SAMPLE_TIF, tmp_path / "s"), dish=100.0, scale="auto")
+    page = window.tabs.widget(0)
+    window.resize(1320, 880); qtbot.wait(200)
+    assert not tab._params_collapsed and tab.plate.isVisible()
+    window.resize(1024, 700); qtbot.wait(300)
+    # the parameter rows fold into one line, and the legend-key row is on screen
+    assert tab._params_collapsed and tab.params_summary.isVisible() and not tab.plate.isVisible()
+    assert "sample.tif" in tab.params_summary.text() and "Dish 100 mm" in tab.params_summary.text()
+    assert tab.open_btn.isVisible() and tab.save_btn.isVisible()
+    kr = ed.key_cb
+    bottom = kr.mapTo(page.viewport(), kr.rect().bottomLeft()).y()
+    assert page.verticalScrollBar().maximum() == 0 and bottom <= page.viewport().height()
+    window.resize(900, 600); qtbot.wait(300)
+    sb = page.verticalScrollBar()
+    assert sb.maximum() > 0 and ed.view.height() >= 170
+    # wheel over the image scrolls the page (the image does not have the focus) ...
+    window.activateWindow(); tab.open_btn.setFocus()
+    sb.setValue(0)
+    z = ed.view.transform().m11()
+    _wheel(ed.view)
+    assert sb.value() > 0 and ed.view.transform().m11() == pytest.approx(z)
+    # ... and zooms with Ctrl held
+    _wheel(ed.view, delta=120, mods=Qt.ControlModifier)
+    assert ed.view.transform().m11() > z
+    assert "hold Ctrl to zoom" in ed.hint.toolTip()
+    # the user's own choice wins over the window height
+    tab.params_toggle.click()
+    assert not tab._params_collapsed and tab.plate.isVisible()
+    window.resize(880, 590); qtbot.wait(100)
+    assert not tab._params_collapsed
+
+
+# =========================================================================== coordinator B + C
+@pytest.fixture(scope="module")
+def cropped_sample(tmp_path_factory):
+    img = cv2.imread(SAMPLE_TIF)
+    h, w = img.shape[:2]
+    dy, dx = int(round(0.03 * h)), int(round(0.03 * w))
+    d = tmp_path_factory.mktemp("crop")
+    p = str(d / "sample_crop3.png")
+    cv2.imwrite(p, img[dy:h - dy, dx:w - dx])
+    return p
+
+
+def test_b_no_dish_no_millimetres_in_batch_and_measure(cropped_sample, tmp_path, window, qtbot, dialogs):
+    r = batch_measure.batch_measure(os.path.dirname(cropped_sample), plate_mm=100,
+                                    out_dir=str(tmp_path / "o"))
+    row = pd.read_csv(tmp_path / "o" / "per_plate.csv").iloc[0]
+    assert row["n_plaques"] > 0 and pd.isna(row["mm_per_px"])
+    assert pd.isna(row["median_diam_mm"]) and pd.isna(row["mean_diam_mm"])
+    assert row["error"] == "no dish found: sizes in px only (check that the whole dish is in the frame)"
+    assert r["errors"] == []                                   # measured: not a failure
+    b = _batch_tab(window)
+    b._done(r)
+    hdr, rows = _table(b.table)
+    assert rows[0][hdr.index("Median (mm)")] == "" and rows[0][hdr.index("Problem")] == row["error"]
+    _open(window.measure_tab, qtbot, dialogs, cropped_sample, dish=100.0, scale="auto")
+    assert ("No dish found: sizes in px only (check that the whole dish is in the frame)"
+            in window.measure_tab.flag_label.text())
+
+
+def test_c_per_plate_counts_add_up(tmp_path):
+    folder = tmp_path / "s"
+    _copy(SAMPLE_TIF, folder)
+    r = batch_measure.batch_measure(str(folder), plate_mm=100, scale="auto", out_dir=str(tmp_path / "o"))
+    row = pd.read_csv(tmp_path / "o" / "per_plate.csv").iloc[0]
+    cols = list(pd.read_csv(tmp_path / "o" / "per_plate.csv").columns)
+    assert cols.index("n_no_size") == cols.index("n_core") + 1
+    assert (row["n_plaques"], row["n_sized"], row["n_core"], row["n_no_size"]) == (41, 21, 10, 10)
+    assert row["n_plaques"] == row["n_sized"] + row["n_core"] + row["n_no_size"]
+    assert "n_no_size" in appui.BATCH_COLUMNS

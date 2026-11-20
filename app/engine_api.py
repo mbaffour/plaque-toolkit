@@ -492,11 +492,12 @@ def reading_order(plaques):
 
 
 def compare_images(directory):
-    """The images a Compare run would analyse in `directory` -- the turbidity engine's own
-    list (recursive, skipping the toolkit's output folders), so the tab's "no images" check
-    can never disagree with the engine (CT-R1 F2)."""
-    import plaque_turbidity as ptb
-    return ptb.list_images(directory)
+    """The images a Compare run analyses in `directory`: the images directly in it, by the
+    SAME rule as the Batch tab (batch_measure.find_images: sub-folders are not searched,
+    CT-R2 N11), and the list the run itself is given, so the tab's "no images" check can
+    never disagree with the engine (CT-R1 F2)."""
+    from app import batch_measure
+    return batch_measure.find_images(directory)
 
 
 def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, dark=None,
@@ -524,6 +525,7 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
             core_frac=float(core), make_overlays=True,
             dilution=dilution, volume_ul=volume_ul, make_plots=False,
             key_on_figure=bool(key_on_figure), overlay_records=overlays,
+            images=compare_images(directory),
             scale=(pgui.resolve_scale(scale, small) if (scale and not published) else None))
     # Plotting runs here, on the caller's (worker) thread, AFTER the engine lock is released.
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))

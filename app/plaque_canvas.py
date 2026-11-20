@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPolygonItem,
     QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPathItem, QGraphicsPixmapItem, QPushButton,
     QButtonGroup, QLabel, QComboBox, QSpinBox, QMenu, QFileDialog, QMessageBox, QInputDialog,
-    QColorDialog, QLineEdit, QCheckBox)
+    QColorDialog, QLineEdit, QCheckBox, QScrollArea)
 
 
 class FlowLayout(QLayout):
@@ -178,7 +178,8 @@ _BTN_QSS = (
     "font-weight:800;padding:6px 18px;font-size:13px;} "
     "QPushButton#Primary:hover{background:#19c258;} "
     "QPushButton#Primary::menu-indicator{width:0px;} QComboBox{padding:3px 6px;}")
-_HELP = ("Wheel or + / − = zoom · drag = pan · click = select · Shift/Ctrl+drag = box select / "
+_HELP = ("Wheel or + / − = zoom (when the page scrolls, the wheel scrolls it: click the image "
+         "first or hold Ctrl to zoom) · drag = pan · click = select · Shift/Ctrl+drag = box select / "
          "deselect · right-click = erase · Ctrl+Z / Ctrl+Shift+Z = undo / redo · drag the scale "
          "bar (Select / pan tool) to move it.")
 
@@ -249,8 +250,31 @@ class _View(QGraphicsView):
         self._sb_last = None
         self._fitting = False
 
+    def _page(self):
+        """The scroll area the editor's tab sits in (None outside the app)."""
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                return w
+            w = w.parentWidget()
+        return None
+
+    def _page_scrolls(self):
+        """True when the page around the editor (the tab's scroll area) can scroll."""
+        page = self._page()
+        return page is not None and page.verticalScrollBar().maximum() > 0
+
     def wheelEvent(self, e):
-        self.zoom_by(1.2 if e.angleDelta().y() > 0 else 1.0 / 1.2)
+        # CT-R2 N10: on a page that scrolls (a small window) the wheel over the image scrolls
+        # the PAGE, so the rows below the image stay reachable; it zooms when Ctrl is held, when
+        # the image has the focus (click it first), or when the page does not scroll.
+        if (e.modifiers() & Qt.ControlModifier) or self.hasFocus() or not self._page_scrolls():
+            self.zoom_by(1.2 if e.angleDelta().y() > 0 else 1.0 / 1.2)
+        else:
+            # handed to the page's scroll bar explicitly (Qt does not pass a synthesized wheel
+            # event on to the parent, and this way every wheel event behaves the same)
+            QApplication.sendEvent(self._page().verticalScrollBar(), e.clone())
+        e.accept()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

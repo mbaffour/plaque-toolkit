@@ -1168,15 +1168,17 @@ def poisson_ci95(n, alpha=0.05):
 def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
               group_by_prefix=False, dark_path=None, core_frac=1.0, make_overlays=True,
               dilution=None, volume_ul=None, make_plots=True, transfer="auto",
-              key_on_figure=True, overlay_records=None, scale=None):
+              key_on_figure=True, overlay_records=None, scale=None, images=None):
     """Turbidity of every plate in `directory`. ``key_on_figure`` draws the legend key on each
     QC overlay (its stand-alone key and legend text are written beside it either way); ``overlay_records``, a list, receives one
     record per overlay drawn (overlay_record) so a caller can re-draw them (CT-R2 N8).
     ``scale`` (opt-in, CT-R2 N1; the CLI's --multiscale = "auto"): detect with the desktop
     app's Plaque size ("auto" / "standard" / "small"), so the plaques of an image are the ones
     the Measure and Batch tabs find with engine Current; plaques_all.csv then gains QC_FLAG,
-    qc.csv PLAQUE_SIZE and N_SIZED, per_phage.csv N_SIZED. None = this tool's own detection."""
-    images = list_images(directory)
+    qc.csv PLAQUE_SIZE and N_SIZED, per_phage.csv N_SIZED. None = this tool's own detection.
+    ``images`` (CT-R2 N11): the exact list to analyse (the app passes the Batch tab's
+    non-recursive list); None = list_images(directory), recursive, as the CLI always did."""
+    images = list(images) if images is not None else list_images(directory)
     if not images:
         raise SystemExit(f"No images found in {directory}")
     if dilution is not None and float(dilution) < 1:

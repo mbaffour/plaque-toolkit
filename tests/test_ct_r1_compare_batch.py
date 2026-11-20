@@ -318,11 +318,11 @@ def test_batch_csv_has_whole_counts_flag_counts_and_only_applied_options(neutral
     res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="published", watershed=True)
     text = open(os.path.join(res["out_dir"], "per_plate.csv")).read().splitlines()
     assert text[0] == ("image,n_plaques,n_sized,mm_per_px,median_diam_mm,mean_diam_mm,axis_ratio,"
-                       "tilt_flag,n_edge,n_overlap,n_merged,n_split,n_core,error")   # + D8 / D10a
-    bad, good = text[1].split(",", 13), text[2].split(",")
-    assert bad[0] == "bad.png" and bad[1:13] == [""] * 12         # blanks, not "nan"
-    assert bad[13].strip('"').startswith("bad.png: not a readable image")
-    assert bad[13].strip('"').endswith("[%s]" % (folder / "bad.png"))
+                       "tilt_flag,n_edge,n_overlap,n_merged,n_split,n_core,n_no_size,error")   # + D8 / D10a / CT-R2
+    bad, good = text[1].split(",", 14), text[2].split(",")
+    assert bad[0] == "bad.png" and bad[1:14] == [""] * 13         # blanks, not "nan"
+    assert bad[14].strip('"').startswith("bad.png: not a readable image")
+    assert bad[14].strip('"').endswith("[%s]" % (folder / "bad.png"))
     assert good[0] == "P_2.tif" and good[1] == "5" and good[2] == "5"   # "5", not "5.0"
     assert [int(v) for v in good[8:11]] == [0, 0, 0]
     allp = pd.read_csv(os.path.join(res["out_dir"], "all_plaques.csv"))
@@ -752,20 +752,21 @@ def test_batch_table_is_readable(window, qtbot, neutral_plate_tif, tmp_path, dia
     tab._run()
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     hdr, rows = _table(tab.table)
-    assert hdr == ["Image", "Plaques", "Sized", "mm/pixel", "Median (mm)", "Mean (mm)", "Axis ratio",
-                   "Tilted?", "Edge", "Overlap", "Merged?", "Split", "Core only",   # + CT-R1 D8/D10a
-                   "Problem"]
+    # CT-R2 N14: the Problem column right after the image (visible at 1024 px); + No size (C)
+    assert hdr == ["Image", "Problem", "Plaques", "Sized", "mm/pixel", "Median (mm)", "Mean (mm)",
+                   "Axis ratio", "Tilted?", "Edge", "Overlap", "Merged?", "Split", "Core only",
+                   "No size"]
     assert [r[0] for r in rows] == ["bad.png", "Plate_2.tif", "Plate_10.tif"]     # natural, ascending
-    assert rows[0][1:13] == [""] * 12
-    assert rows[0][13].startswith("not a readable image")                          # reason first
-    assert rows[1][1] == "5" and rows[1][2] == "5" and rows[1][7] == "no" and rows[1][8:13] == ["0"] * 5
-    assert rows[1][13] == ""
+    assert rows[0][2:15] == [""] * 13
+    assert rows[0][1].startswith("not a readable image")                           # reason first
+    assert rows[1][2] == "5" and rows[1][3] == "5" and rows[1][8] == "no" and rows[1][9:15] == ["0"] * 6
+    assert rows[1][1] == ""
     per = pd.read_csv(os.path.join(tab.last_out, "per_plate.csv"))
     good = per[per["image"] == "Plate_2.tif"].iloc[0]
-    assert rows[1][3] == "%.4g" % good["mm_per_px"] and len(rows[1][3]) <= 8      # 4 significant digits
-    assert rows[1][4] == "%.4g" % good["median_diam_mm"]
+    assert rows[1][4] == "%.4g" % good["mm_per_px"] and len(rows[1][4]) <= 8      # 4 significant digits
+    assert rows[1][5] == "%.4g" % good["median_diam_mm"]
     assert not [c for r in rows for c in r if c.lower() in ("nan", "none", "<na>") or c.endswith(".0")]
-    tip = tab.model.headerData(9, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.model.headerData(10, Qt.Horizontal, Qt.ToolTipRole)
     assert "n_overlap" in tip and "OVERLAP" in tip
     # every header is shown in full: each column is at least as wide as its header text needs
     hv = tab.table.horizontalHeader()

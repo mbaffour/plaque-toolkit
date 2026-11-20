@@ -63,6 +63,46 @@ def find_images(folder):
     return sorted(out, key=lambda p: natural_key(os.path.basename(p)))
 
 
+def unsearched_subfolders(folder):
+    """Names of the sub-folders of ``folder`` that hold plate images (anywhere inside) but are
+    NOT searched: Batch and Compare both measure the images directly in the folder only
+    (find_images, the ONE rule, CT-R2 N11), and say so when this list is not empty. The
+    toolkit's own output folders are not counted."""
+    out = []
+    if not folder or not os.path.isdir(folder):
+        return out
+    try:
+        import plaque_size_tool as _pst
+        is_out = _pst.is_toolkit_output_dir
+    except Exception:                                # pragma: no cover
+        def is_out(_n):
+            return False
+    for name in sorted(os.listdir(folder), key=natural_key):
+        sub = os.path.join(folder, name)
+        if not os.path.isdir(sub) or name.startswith(".") or is_out(name):
+            continue
+        found = False
+        for r, dirs, files in os.walk(sub):
+            dirs[:] = [d for d in dirs if not is_out(d)]
+            if any(os.path.splitext(f)[1].lower() in IMAGE_EXTS for f in files):
+                found = True
+                break
+        if found:
+            out.append(name)
+    return out
+
+
+def subfolder_note(folder):
+    """'2 sub-folders were not searched (old, rep2): only the images directly in the folder
+    are measured.' or '' (CT-R2 N11)."""
+    subs = unsearched_subfolders(folder)
+    if not subs:
+        return ""
+    return ("%d sub-folder%s %s not searched (%s): only the images directly in the folder are "
+            "measured." % (len(subs), "" if len(subs) == 1 else "s",
+                           "was" if len(subs) == 1 else "were", ", ".join(subs)))
+
+
 def natural_key(text):
     """Sort key that orders embedded numbers by value: Plate_2 < Plate_10 < plate_11."""
     import re
@@ -90,6 +130,10 @@ def friendly_error(exc, path):
     plain words, the full path last. The raw exception text started with a 150-character
     path, so the reason was cut off in the table and the status line (CT-R1 F18)."""
     return "%s: %s  [%s]" % (os.path.basename(path), error_reason(exc, path), path)
+
+
+# coordinator B: the per_plate.csv Problem text of a plate with no dish (and so no mm scale)
+NO_DISH_PROBLEM = "no dish found: sizes in px only (check that the whole dish is in the frame)"
 
 
 def qc_flag_counts(df):
@@ -267,7 +311,12 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             sized = (df[[plaque_qc.size_ok(f) for f in df["QC_FLAG"]]]
                      if len(df) and "QC_FLAG" in df.columns else df)
             n_sized = int(len(sized))
-            if len(sized):
+            # coordinator C: every plaque is in exactly one of n_sized / n_core / n_no_size
+            ok = [plaque_qc.size_ok(f) for f in df["QC_FLAG"]] if "QC_FLAG" in df.columns else []
+            core_out = sum(1 for f, k in zip(df["QC_FLAG"], ok) if not k and plaque_qc.has_flag(f, "CORE?")) \
+                if ok else 0
+            n_no_size = int(sum(1 for k in ok if not k) - core_out)
+            if len(sized) and ppm:
                 diam = sized["DIAMETER_MM"].astype(float)
                 median_diam = _safe_float(diam.median())
                 mean_diam = _safe_float(diam.mean())
@@ -282,6 +331,11 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             tilt_flag = bool(axis_ratio is not None and axis_ratio > 1.03)
 
             n_plaques = len(plaques)                 # what the CSV actually holds
+            problem = None
+            if not ppm:
+                # coordinator B: no dish = no millimetres. The CSV used to say 0.0 mm.
+                problem = (NO_DISH_PROBLEM if not plate else
+                           "Dish size is 0: sizes in px only (type the dish diameter)")
             row = {
                 "image": os.path.basename(path),
                 "n_plaques": n_plaques,
@@ -293,6 +347,9 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 "tilt_flag": tilt_flag,
             }
             row.update(qc_flag_counts(df))           # n_edge / n_overlap / n_merged
+            row["n_no_size"] = n_no_size
+            if problem:
+                row["error"] = problem
             plate_rows.append(row)
 
             # add the IMAGE column and stash for the combined all_plaques.csv
@@ -322,6 +379,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                 "n_merged": None,
                 "n_split": None,
                 "n_core": None,
+                "n_no_size": None,
                 "error": message,
             })
             if progress:
@@ -330,14 +388,16 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
     # ---- assemble + write the combined CSVs ------------------------------ #
     plate_cols = ["image", "n_plaques", "n_sized", "mm_per_px", "median_diam_mm",
                   "mean_diam_mm", "axis_ratio", "tilt_flag",
-                  "n_edge", "n_overlap", "n_merged", "n_split", "n_core"]   # + CT-R1 D8
+                  "n_edge", "n_overlap", "n_merged", "n_split", "n_core",   # + CT-R1 D8
+                  "n_no_size"]                                              # + CT-R2 (C)
     if any("error" in r for r in plate_rows):
         plate_cols = plate_cols + ["error"]
     summary_df = pd.DataFrame(plate_rows, columns=plate_cols)
     # Counts are whole numbers. One failed plate (None) used to turn the whole column into
     # floats, so the CSV and the table read "44.0" and "nan" (CT-R1 F18). The nullable
     # integer type writes 44 and an empty cell.
-    for col in ("n_plaques", "n_sized", "n_edge", "n_overlap", "n_merged", "n_split", "n_core"):
+    for col in ("n_plaques", "n_sized", "n_edge", "n_overlap", "n_merged", "n_split", "n_core",
+                "n_no_size"):
         summary_df[col] = pd.array(summary_df[col].tolist(), dtype="Int64")
 
     if all_frames:
