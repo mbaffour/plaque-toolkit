@@ -272,10 +272,14 @@ read_plaque_table <- function(path, name = basename(path)) {
   lines <- strsplit(txt, "\r\n|\n|\r")[[1]]
   # CT-R2 N7: blank lines and lines whose FIRST field starts with # are skipped, and the # lines are
   # counted in the read note ("24 lines starting with # skipped"), as plaque_stats.py does
-  n_comment <- sum(grepl("^\\s*#", lines))
-  lines <- lines[nzchar(trimws(lines)) & !grepl("^\\s*#", lines)]
+  # (rule change) a # line is a comment ONLY before the header row; after it a first cell starting
+  # with # is DATA (a sample may be called "#1"). Only the comment lines skipped are counted.
+  lines <- lines[nzchar(trimws(lines))]
+  first_data <- which(!grepl("^\\s*#", lines))[1]
+  n_comment <- if (is.na(first_data)) length(lines) else first_data - 1L
+  lines <- if (is.na(first_data)) character(0) else lines[first_data:length(lines)]
   if (n_comment)
-    notes <- c(notes, sprintf("%d line%s starting with # skipped", n_comment, if (n_comment == 1) "" else "s"))
+    notes <- c(notes, sprintf("%d comment line%s before the header skipped", n_comment, if (n_comment == 1) "" else "s"))
   if (!length(lines))
     stop_data("'", name, "' has no data: every line is blank or a # comment.")
   # the delimiter is the one the header line uses most (outside quotes): comma, semicolon or tab
@@ -619,7 +623,11 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   normal <- vapply(groups, function(v) if (length(v) >= 3 && length(v) <= 5000)
     tryCatch(stats::shapiro.test(v)$p.value, error = function(e) NA_real_) else NA_real_, 0)
   lev_p <- levene_p(groups)
-  all_normal <- all(is.na(normal) | normal > 0.05)
+  # CT-R2 (rule change): Bonferroni across the samples whose normality could be tested (m): the data
+  # count as non-normal only if the smallest Shapiro p is below 0.05 / m. One test per sample at 0.05
+  # sent normal data to the rank tests in 14 % (3 samples) to 24 % (5 samples) of runs.
+  m_norm <- sum(!is.na(normal))
+  all_normal <- m_norm == 0 || min(normal, na.rm = TRUE) >= 0.05 / m_norm
   # few replicates -> parametric on the plate means (Shapiro is uninformative and rank tests
   # cannot reach p < 0.05 at 3 vs 3): SuperPlots, Lord 2020; Kenny & Schoen 2021. From 8 per
   # sample on, Shapiro decides: parametric iff no sample rejects normality (a sample that cannot
@@ -628,6 +636,10 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   # as plaque_stats.py.
   use_param <- if (parametric == "auto") { if (min_n < 8) TRUE else all_normal } else parametric == "parametric"
 
+  if (parametric == "auto" && min_n >= 8 && m_norm >= 1)
+    notes <- c(notes, sprintf("Shapiro-Wilk (Bonferroni over %d sample%s) %s normality, so the %s test was used.",
+                              m_norm, if (m_norm == 1) "" else "s", if (all_normal) "does not reject" else "rejects",
+                              if (all_normal) "parametric" else "rank-based"))
   if (unit == "plaque") {
     one <- lev[plates < 2]
     why <- if (requested == "plaque") "The statistical unit was set to 'per plaque'."
@@ -812,21 +824,34 @@ pairs_to_draw <- function(pw, lev, mode = "auto", posthoc = NA_character_) {
                                    stringsAsFactors = FALSE), note = NULL, caption = NULL)
   k <- length(lev)
   if (is.null(pw) || !nrow(pw) || k < 2) return(empty)
+  pw0 <- pw
   pw <- pw[!is.na(pw$p_adj), , drop = FALSE]
   if (!nrow(pw)) return(empty)
   note <- NULL; caption <- NULL
+  if (k > BRACKET_AUTO_MAX_GROUPS && !identical(mode, "all")) {
+    # CT-R2 N2: with more than 5 samples ONE row of stars, one per sample, for its comparison with the
+    # first sample ("ref." above the first); stacked brackets pushed the data into the bottom of the
+    # panel. Wording follows annotation_plan() / the vsref caption of plaque_stats.py.
+    ref <- lev[1]
+    other <- ifelse(pw0$group1 == ref, pw0$group2, pw0$group1)
+    pr <- pw0[pw0$group1 == ref | pw0$group2 == ref, , drop = FALSE]
+    pv <- pr$p_adj[match(lev[-1], other[pw0$group1 == ref | pw0$group2 == ref])]
+    nsig <- sum(!is.na(pv) & pv < 0.05)
+    core <- sprintf(paste0("With %d samples each sample is compared with %s only: the stars above each sample give that ",
+                           "comparison (%d of %d with adjusted p < 0.05; %s itself is marked ref.). Every pair is in the ",
+                           "pairwise table."), k, ref, nsig, length(pv), ref)
+    test <- if (is.na(posthoc)) "adjusted p" else paste0(sub("-adjusted", "", posthoc), ", adjusted p")
+    empty$vsref <- list(ref = ref, labels = c("ref.", p_stars(pv)))
+    empty$note <- paste(core, "Choose 'all pairs' under Comparisons shown to draw every bracket.")
+    empty$caption <- sprintf("Stars above each sample: its comparison with %s (ref.)", ref)
+    empty$sentence <- paste0(core, " Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant (", test, ").")
+    return(empty)
+  }
   if (k == 2) {
     lab <- if (pw$p_adj < 1e-3) "p < 0.001" else paste0("p = ", fmt_p(pw$p_adj))
   } else {
     if (!identical(mode, "all")) {
       pw <- pw[pw$p_adj < 0.05, , drop = FALSE]
-      if (k > BRACKET_AUTO_MAX_GROUPS) {
-        pw <- pw[pw$group1 == lev[1] | pw$group2 == lev[1], , drop = FALSE]
-        caption <- sprintf("Brackets: significant comparisons against %s only%s.", lev[1],
-                           if (is.na(posthoc)) "" else paste0(" (", posthoc, ")"))
-        note <- sprintf("More than %d samples: the brackets show only the significant comparisons against the first sample (%s). Choose 'all pairs' under Comparisons shown to draw every comparison; the Statistics tab lists them all.",
-                        BRACKET_AUTO_MAX_GROUPS, lev[1])
-      }
       if (!nrow(pw)) {
         empty$note <- c(note, "No comparison shown here is significant (p < 0.05), so no bracket is drawn.")
         empty$caption <- caption
@@ -860,6 +885,19 @@ bracket_layout <- function(pairs, top, bottom, scale = 1) {
   pairs$ytip <- pairs$y - step * 0.22
   pairs$ylab <- pairs$y + step * 0.06
   list(pairs = pairs, step = step, top = max(pairs$y) + step * 0.75)
+}
+
+# CT-R2 N2c: left margin (points) that keeps the tilted (45 degrees, right-aligned) sample names inside
+# the figure. A name hangs left of its tick by length * cos(45) (+ half a line); the panel starts about
+# (title + tick labels) from the figure edge, and tick j sits (j - 0.4) slots inside the panel.
+# Lengths are estimated (bold sans ~ 0.52 em per character, calibrated on 8-12 long names) because measuring needs an open graphics
+# device, and the estimate errs on the wide side.
+tilted_left_margin_pt <- function(labels, base_size, fig_w_in) {
+  k <- length(labels); len <- nchar(labels) * base_size * 0.52 / 72
+  off <- base_size * 3.3 / 72 + 0.08
+  slot <- max(1, fig_w_in - off - 0.2) / (k + 0.2)
+  need <- len * cos(pi / 4) + base_size / 72 * 0.5 - (seq_len(k) - 0.4) * slot
+  max(6, (max(need) - off) * 72 + 6)
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -944,7 +982,9 @@ key_entries <- function(sm) {
   do.call(rbind, rows)
 }
 
-text_starter <- function(e) {
+# `annotation`: the sentence that says what the stars / brackets on the figure mean (CT-R2 N2b; only
+# the one-row-of-stars view needs it, the brackets explain themselves)
+text_starter <- function(e, annotation = "") {
   if (!nrow(e)) return("")
   words <- vapply(e$colour, colour_name, "")
   for (w in unique(words)) {                 # same word, different colours -> light/dark
@@ -968,13 +1008,16 @@ text_starter <- function(e) {
       out <- paste0(out, " with ", colour_name(e$edge[i]), " outline")
     out
   }, "")
-  paste0(paste0(e$label, " (", desc, ")", collapse = "; "), ".")
+  paste0(paste0(e$label, " (", desc, ")", collapse = "; "), ".",
+         if (length(annotation) == 1 && !is.na(annotation) && nzchar(annotation)) paste0(" ", annotation) else "")
 }
 
 # CT-R1 F17: where every key row goes. One column up to KEY_ROWS_PER_COL rows, then balanced
 # columns (each as wide as its own longest name); the row pitch grows with the font so rows
 # never print on top of each other. Used by the stand-alone key and the placed key alike.
 KEY_ROWS_PER_COL <- 12
+KEY_BESIDE_MAX_FRAC <- 0.28     # CT-R2 N2a: the key sits beside the plot only while it is this narrow
+KEY_GAP_IN <- 0.1               # inches between the plot and a key placed below
 key_geometry <- function(e, base_size = 14) {
   hdr <- function(s) data.frame(label = s, section = s, kind = "header", colour = NA, edge = NA,
                                 alpha = NA, shape = NA, extra = FALSE, stringsAsFactors = FALSE)
@@ -1069,7 +1112,7 @@ save_pdf <- function(file, plot_for, family, width, height) {
 }
 # the stand-alone key in every format + the text starter. One format that fails does not lose
 # the others; attr "notes" says what happened.
-write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "") {
+write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "", annotation = "") {
   sz <- key_size(e, base_size); kp <- key_plot(e, base_size, family)
   out <- c(png = paste0(base, "_legend_key.png"), svg = paste0(base, "_legend_key.svg"),
            pdf = paste0(base, "_legend_key.pdf"), txt = paste0(base, "_legend_text.txt"))
@@ -1081,7 +1124,7 @@ write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "") {
   pdf_note <- attempt("PDF", save_pdf(out[["pdf"]], function(fam) key_plot(e, base_size, fam), family,
                                       sz[["width"]], sz[["height"]]))
   notes <- c(notes, pdf_note)
-  writeLines(text_starter(e), out[["txt"]])
+  writeLines(text_starter(e, annotation), out[["txt"]])
   out <- unname(out[file.exists(out)])
   attr(out, "notes") <- notes
   out
@@ -1545,8 +1588,9 @@ server <- function(input, output, session) {
   brackets <- reactive({
     d <- dat(); st <- stats(); lk <- look(); lev <- levels(d$group)
     sel <- pairs_to_draw(st$pairwise, lev, input$annotate %||% "auto", st$posthoc)
-    out <- list(pairs = NULL, note = sel$note, caption = sel$caption, top = NA_real_)
-    if (!nrow(sel$pairs)) return(out)
+    out <- list(pairs = NULL, stars = NULL, note = sel$note, caption = sel$caption, sentence = sel$sentence,
+                top = NA_real_)
+    if (!nrow(sel$pairs) && is.null(sel$vsref)) return(out)
     logy <- isTRUE(input$log_y)
     tr <- function(v) if (logy) log10(v[v > 0]) else v
     vals <- tr(d$value)
@@ -1559,10 +1603,19 @@ server <- function(input, output, session) {
         if (length(v)) top <- max(top, fd(v)$ymax, na.rm = TRUE)
       }
     }
+    back <- function(v) if (logy) 10^v else v
+    if (!is.null(sel$vsref)) {              # CT-R2 N2: one row of stars above the samples
+      span <- top - bottom; if (!is.finite(span) || span <= 0) span <- max(abs(top), 1) * 0.1
+      step <- span * 0.085 * max(1, lk$base_size / 14)
+      y <- top + step * 0.9; head <- y + step * 1.3
+      if (!identical(input$show_n, FALSE)) head <- head + (head - bottom) * 0.08 * max(1, lk$base_size / 14)
+      out$stars <- data.frame(x = seq_along(lev), label = sel$vsref$labels, y = back(y), stringsAsFactors = FALSE)
+      out$top <- back(head)
+      return(out)
+    }
     lay <- bracket_layout(sel$pairs, top, bottom, scale = max(1, lk$base_size / 14))
     p <- lay$pairs; head <- lay$top
     if (!identical(input$show_n, FALSE)) head <- head + (head - bottom) * 0.08 * max(1, lk$base_size / 14)
-    back <- function(v) if (logy) 10^v else v
     p$y <- back(p$y); p$ytip <- back(p$ytip); p$ylab <- back(p$ylab)
     out$pairs <- p; out$top <- back(head)
     out
@@ -1642,25 +1695,38 @@ server <- function(input, output, session) {
                         else element_line(linewidth = lk$axis_line_width, color = lk$axis_color),
             axis.ticks = element_line(linewidth = lk$axis_line_width, color = lk$axis_color))
     # CT-R1 F17: long or many sample names are tilted instead of printed on top of each other
+    # CT-R2 N2c: the left margin is sized from the sample names, so the first tilted name is never clipped
     if (sum(nchar(levels(d$group))) * lk$base_size / 14 > 55 || nlevels(d$group) > 8)
       g <- g + theme(axis.text.x = element_text(face = "bold", angle = 45, hjust = 1, vjust = 1),
-                 plot.margin = margin(t = 16, r = 12, b = 6, l = 60))
+                 plot.margin = margin(t = 16, r = 12, b = 6,
+                                      l = tilted_left_margin_pt(levels(d$group), lk$base_size, fig_size()$w)))
     if (length(caption))                 # only when there is something the figure must say
-      g <- g + labs(caption = paste(caption, collapse = "\n")) +
+      # CT-R2 N2: a long caption is wrapped to the figure width instead of running off the right edge
+      g <- g + labs(caption = paste(strwrap(caption, width = max(30, floor(0.6 * fig_size()$w * 72 / (0.7 * lk$base_size * 0.5)))),
+                                    collapse = "\n")) +
         theme(plot.caption = element_text(hjust = 0, size = rel(0.7), colour = "#33413c"),
               plot.caption.position = "plot")
-    if (!is.null(br$pairs))              # room above the data for the brackets and the n row
+    if (!is.null(br$pairs) || !is.null(br$stars))   # room above the data for the brackets / stars and the n row
       g <- g + geom_blank(data = data.frame(group = factor(levels(d$group)[1], levels = levels(d$group)),
                                             value = br$top), aes(group, value))
     if (isTRUE(input$show_n)) {
       ns <- dplyr::count(d, group)
       # CT-R1 F23: the n row follows the base font size (3.3 at the default 14 pt)
       g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = paste0("n = ", n)),
-                         vjust = 1.4, size = 3.3 * (lk$base_size / 14), fontface = "bold", color = "#33413c",
+                         vjust = 1.4, size = 3.3 * (lk$base_size / 14) * min(1, 9.5 / nlevels(d$group)), fontface = "bold", color = "#33413c",
                          family = family, inherit.aes = FALSE) +
         coord_cartesian(clip = "off")
     }
     if (isTRUE(input$log_y)) g <- g + scale_y_log10()
+    if (!is.null(br$stars)) {              # CT-R2 N2b: one row of stars, "ref." above the first sample
+      st_ <- br$stars; is_ref <- st_$label == "ref."
+      g <- g +
+        geom_text(data = st_[!is_ref, ], aes(x = x, y = y, label = label), inherit.aes = FALSE, vjust = 0,
+                  size = ifelse(grepl("^\\*+$", st_$label[!is_ref]), 5.2, 3.88) * (lk$base_size / 14),
+                  family = family, colour = "black") +
+        geom_text(data = st_[is_ref, ], aes(x = x, y = y, label = label), inherit.aes = FALSE, vjust = 0,
+                  size = 3.3 * (lk$base_size / 14), family = family, fontface = "italic", colour = "#5b6a65")
+    }
     if (!is.null(br$pairs)) {
       p <- br$pairs
       seg <- rbind(data.frame(x = p$x1, xend = p$x2, y = p$y, yend = p$y),
@@ -1684,12 +1750,24 @@ server <- function(input, output, session) {
   # CT-R1 F17: where the placed key goes. Beside the plot (top right) when it fits; under the
   # plot when it is too wide for that but short; not placed at all -- with a note -- when it
   # fits neither way, because a key squeezed into the figure is unreadable.
+  # the figure as SAVED (and previewed): the set size, taller by the key when the key sits below
+  fig_out <- reactive({
+    fs <- fig_size(); kp <- key_place()
+    if (identical(kp$where, "below")) fs$h <- fs$h + kp$grow
+    fs
+  })
   key_place <- reactive({
     e <- key(); lk <- look(); fs <- fig_size()
     if (!isTRUE(input$place_key) || !nrow(e)) return(list(where = "none", note = NULL))
     ks <- key_size(e, lk$base_size); kw <- ks[["width"]]; kh <- ks[["height"]]
-    if (kw <= 0.5 * fs$w && kh <= fs$h) return(list(where = "beside", kw = kw, kh = kh, note = NULL))
-    if (kh <= 0.5 * fs$h && kw <= fs$w) return(list(where = "below", kw = kw, kh = kh, note = NULL))
+    # CT-R2 N2a: beside only while the key takes at most 28 % of the width (the Python engine's rule),
+    # else BELOW, and the figure then GROWS by the key's height so the plot keeps the size that was
+    # set. The key never takes room from the plot panel (it used to shrink it to a sliver).
+    if (kw <= KEY_BESIDE_MAX_FRAC * fs$w && kh <= 0.98 * fs$h) return(list(where = "beside", kw = kw, kh = kh, note = NULL))
+    if (kw <= fs$w)
+      return(list(where = "below", kw = kw, kh = kh, grow = kh + KEY_GAP_IN,
+                  note = sprintf("The key is placed below the plot, so the figure is %.1f in tall instead of %.1f in: the plot keeps the size you set.",
+                                 fs$h + kh + KEY_GAP_IN, fs$h)))
     list(where = "none", kw = kw, kh = kh,
          note = sprintf("The key was not placed on the figure: at this font size it needs %.1f x %.1f in and the figure is %.1f x %.1f in. Make the figure wider or taller, lower the base font size, or use the Legend key download (it always holds the full key).",
                         kw, kh, fs$w, fs$h))
@@ -1706,7 +1784,7 @@ server <- function(input, output, session) {
     if (identical(kp$where, "below")) {
       foot <- ggpubr::ggarrange(key_plot(e, lk$base_size, family), NULL, ncol = 2,
                                 widths = c(kp$kw, max(0.1, fs$w - kp$kw)))
-      return(ggpubr::ggarrange(g, foot, ncol = 1, heights = c(max(1, fs$h - kp$kh), kp$kh)))
+      return(ggpubr::ggarrange(g, foot, ncol = 1, heights = c(fs$h, kp$grow)))
     }
     g
   }
@@ -1716,7 +1794,7 @@ server <- function(input, output, session) {
   # scaled to the page -- so what overlaps on screen overlaps in the file and vice versa
   # (it used to be drawn at the page's size, whatever the figure size was).
   output$violin <- renderImage({
-    p <- build_plot(); fs <- fig_size()
+    p <- build_plot(); fs <- fig_out()
     wpx <- session$clientData$output_violin_width
     if (is.null(wpx) || !is.finite(wpx) || wpx <= 0) wpx <- 900
     wpx <- max(200, min(wpx, 1100, 720 * fs$w / fs$h))
@@ -1736,7 +1814,9 @@ server <- function(input, output, session) {
   has_key <- reactive(nrow(tryCatch(key(), error = function(e) NULL) %||% data.frame()) > 0)
   output$has_key <- has_key
   try(outputOptions(output, "has_key", suspendWhenHidden = FALSE), silent = TRUE)
-  output$key_text <- renderText({ s <- text_starter(key()); if (nzchar(s)) s else "(no sample colours to key)" })
+  annotation_text <- reactive(tryCatch(if (isTRUE(input$show_sig)) brackets()$sentence %||% "" else "",
+                                       error = function(e) ""))
+  output$key_text <- renderText({ s <- text_starter(key(), annotation_text()); if (nzchar(s)) s else "(no sample colours to key)" })
 
   # everything the user should know about this figure, in one visible place under it
   # (CT-R1 F2, F7, F12, F13, F21): rows left out, the unit that was tested and why, which
@@ -1819,19 +1899,19 @@ server <- function(input, output, session) {
   output$dl_png <- downloadHandler(
     filename = function() figure_name("png"),
     content = function(f) tryCatch({
-      fs <- fig_size()                       # CT-R1 F16: white under the key, never transparent
+      fs <- fig_out()                        # CT-R1 F16: white under the key, never transparent
       ggsave(f, build_plot(), width = fs$w, height = fs$h, dpi = checked_dpi(), device = "png", bg = "white")
     }, error = failed("PNG")))
   output$dl_svg <- downloadHandler(
     filename = function() figure_name("svg"),
     content = function(f) tryCatch({
-      fs <- fig_size()
+      fs <- fig_out()
       ggsave(f, build_plot(), width = fs$w, height = fs$h, device = svglite::svglite)
     }, error = failed("SVG")))
   output$dl_pdf <- downloadHandler(
     filename = function() figure_name("pdf"),
     content = function(f) tryCatch({
-      fs <- fig_size()
+      fs <- fig_out()
       note <- save_pdf(f, make_plot, look()$family, fs$w, fs$h)
       if (!is.null(note)) notify(note)
     }, error = failed("PDF")))
@@ -1843,7 +1923,7 @@ server <- function(input, output, session) {
       tmp <- tempfile("key"); dir.create(tmp)
       base <- file.path(tmp, sprintf("violin_%s", metric_name()))
       lk <- look()
-      files <- write_key_files(e, base, checked_dpi(), lk$base_size, lk$family)
+      files <- write_key_files(e, base, checked_dpi(), lk$base_size, lk$family, annotation_text())
       for (n in attr(files, "notes")) notify(n)
       # the zip package needs no external program (utils::zip needs a 'zip' on the PATH, which
       # a stock Windows R lacks); fall back to utils::zip where the package is not installed

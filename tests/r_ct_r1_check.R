@@ -494,11 +494,16 @@ chk("R2_N3_parametric_p_unchanged", near(stTp$p, 0.000721407841790418, 1e-12), s
 
 # ---- N7 + N8 + F3: reading as Python does ----------------------------------------------------------
 rN <- read_plaque_table(fx("ct_r2_names2.csv"))
-chk("R2_N7_hash_lines_skipped_and_counted", any(grepl("^24 lines starting with # skipped$", rN$notes)), paste(rN$notes, collapse = "|"))
+chk("R2_N7_no_comment_note_when_no_comments", !any(grepl("comment", rN$notes)), paste(rN$notes, collapse = "|"))
+cm <- tmp("comments_head.csv", c("# validation set", "# exported 2026", "", "# third", "group,replicate,diameter_mm", "A,p1,2.1", "A,p2,2.2", "#B,p1,3.1", "#B,p2,3.3"))
+rC <- read_plaque_table(cm)
+chk("R2_N7_comments_only_before_header_counted", any(grepl("^3 comment lines before the header skipped$", rC$notes)) && nrow(rC$df) == 4 &&
+      "#B" %in% rC$df$group, paste(rC$notes, collapse = "|"))
 dN2 <- tidy_plaque_data(rN$df, "group", "replicate", "diameter_mm", NULL, "")
-chk("R2_N7_NA_is_a_sample_name", identical(levels(dN2$group), c("NA", "007")) && nrow(dN2) == 48, paste(c(levels(dN2$group), nrow(dN2)), collapse = "|"))
+chk("R2_N7_NA_007_hash1_are_sample_names", identical(levels(dN2$group), c("NA", "007", "#1")) && nrow(dN2) == 72, paste(c(levels(dN2$group), nrow(dN2)), collapse = "|"))
 stN2 <- plaque_run_stats(dN2)
-chk("R2_N7_names2_same_test_and_p_as_python", stN2$test == "Welch t-test" && near(stN2$p, 0.012957814949959734, 1e-12), sprintf("%s %.12g", stN2$test, stN2$p))
+# R value; plaque_stats.py gives the same once its comment rule is changed (parity test: names2)
+chk("R2_N7_names2_three_samples_anova", stN2$test == "one-way ANOVA" && near(stN2$p, 0.000119343700620795, 1e-9), sprintf("%s %.12g", stN2$test, stN2$p))
 nm <- tmp("names_words.csv", c("group,replicate,diameter_mm", paste0(rep(c("None", "nan", "null", "NA"), each = 4), ",p", rep(1:2, 8), ",", c(2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.4, 2.7, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.4, 3.7)),
                                    ",p1,2.2"))
 dW <- tidy_plaque_data(read_plaque_table(nm)$df, "group", "replicate", "diameter_mm", NULL, "")
@@ -510,3 +515,54 @@ chk("R2_N8_not_a_number_vs_empty_wording", identical(attr(dU, "info")$notes, "7 
     paste(attr(dU, "info")$notes, collapse = "|"))
 stU <- plaque_run_stats(dU)
 chk("R2_N8_upper_missing_same_p_as_python", stU$test == "one-way ANOVA" && near(stU$p, 0.0013102525378786152, 1e-9), sprintf("%.12g", stU$p))
+
+# ---- rule change: normality gate at 8+ plates is Bonferroni across the tested samples ---------------
+mk8 <- function(seed, k = 3) { set.seed(seed)
+  d <- do.call(rbind, lapply(seq_len(k), function(i) data.frame(group = LETTERS[i], replicate = paste0("p", 1:8),
+         value = if (i == 1) rexp(8) + 2 else rnorm(8, 2, 0.3))))
+  d$group <- factor(d$group, levels = LETTERS[seq_len(k)]); d }
+shap_a <- function(d) shapiro.test(d$value[d$group == "A"])$p.value
+seed_mid <- Filter(function(sd) { p <- shap_a(mk8(sd)); p > 0.0167 && p < 0.05 &&
+                    all(vapply(c("B", "C"), function(g) shapiro.test(mk8(sd)$value[mk8(sd)$group == g])$p.value > 0.05, TRUE)) }, 1:400)[1]
+seed_low <- Filter(function(sd) shap_a(mk8(sd)) < 0.0167, 1:400)[1]
+dm <- mk8(seed_mid); stm <- plaque_run_stats(dm)
+chk("R2_gate_p_between_0.05_over_m_and_0.05_stays_parametric", is.na(seed_mid) == FALSE && isTRUE(stm$parametric_used) && stm$test %in% c("one-way ANOVA", "Welch ANOVA") &&
+      any(grepl("Bonferroni over 3 samples) does not reject normality", stm$notes)), sprintf("seed %s p_A %.4f %s | %s", seed_mid, shap_a(dm), stm$test, paste(stm$notes, collapse = " ")))
+dl <- mk8(seed_low); stl <- plaque_run_stats(dl)
+chk("R2_gate_p_below_0.05_over_m_goes_rank_based", !is.na(seed_low) && !isTRUE(stl$parametric_used) && stl$test == "Kruskal–Wallis" &&
+      any(grepl("rejects normality", stl$notes)), sprintf("seed %s p_A %.4f %s", seed_low, shap_a(dl), stl$test))
+
+# ---- N2: key below GROWS the figure; one row of stars with > 5 samples; left margin from the names --
+m12L <- m12; m12L$group <- paste(m12L$group, "dRecA::kan pBAD33 wide")
+m12L$replicate <- paste0("rep", match(m12L$group, unique(m12L$group)), "-", m12L$replicate)   # a plate row per sample x plate in the key
+m12L$diameter_mm <- m12L$diameter_mm + 0.15 * match(m12L$group, unique(m12L$group))   # all clearly different
+testServer(app, {
+  raw(m12L); do.call(session$setInputs, ui_defaults); session$flushReact()
+  kp <- key_place(); fo <- fig_out(); fs <- fig_size()
+  chk("R2_N2a_key_below_grows_figure_panel_keeps_size", identical(kp$where, "below") && near(fo$h, fs$h + kp$kh + KEY_GAP_IN, 1e-9) &&
+        fo$w == fs$w && fs$h == 5.2, sprintf("%s %.2f -> %.2f", kp$where, fs$h, fo$h))
+  chk("R2_N2a_note_says_figure_is_taller", grepl("figure is [0-9.]+ in tall instead of 5.2 in", kp$note %||% ""), kp$note %||% "")
+  chk("R2_N2a_download_uses_grown_size", identical(fig_out()$h, fo$h))
+  br <- brackets()
+  chk("R2_N2b_many_samples_one_row_of_stars", is.null(br$pairs) && nrow(br$stars) == 12 && br$stars$label[1] == "ref." &&
+        length(unique(br$stars$y)) == 1 && all(br$stars$label[-1] %in% c("ns", "*", "**", "***", "n/a")), paste(br$stars$label, collapse = " "))
+  chk("R2_N2b_caption_and_sentence", identical(br$caption, "Stars above each sample: its comparison with Strain 01 long name dRecA::kan pBAD33 wide (ref.)") &&
+        grepl("^With 12 samples each sample is compared with Strain 01 long name dRecA::kan pBAD33 wide only: the stars above each sample give that comparison \\([0-9]+ of 11 with adjusted p < 0.05; Strain 01 long name dRecA::kan pBAD33 wide itself is marked ref\\.\\)\\. Every pair is in the pairwise table\\. Stars: \\* p < 0.05", br$sentence),
+      br$sentence)
+  chk("R2_N2b_legend_text_carries_annotation_sentence", grepl("compared with Strain 01 long name dRecA", annotation_text()) &&
+        grepl("compared with Strain 01 long name dRecA", output$key_text))
+  chk("R2_N2b_figure_draws_without_brackets", !inherits(try(ggplot2::ggplot_build(build_plot()), silent = TRUE), "try-error"))
+  session$setInputs(annotate = "all"); br <- brackets()
+  chk("R2_N2b_all_pairs_still_gives_brackets", !is.null(br$pairs) && is.null(br$stars) && nrow(br$pairs) == 66)
+  session$setInputs(annotate = "auto")
+})
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  br <- brackets()
+  chk("R2_N2b_three_samples_keep_brackets_and_size", !is.null(br$pairs) && is.null(br$stars) && key_place()$where == "beside" &&
+        identical(fig_out()$h, 5.2))
+})
+chk("R2_N2c_left_margin_grows_with_name_length", tilted_left_margin_pt(rep("x", 9), 14, 8) == 6 &&
+      tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8) > 60 &&
+      tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 28, 8) >
+        tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8))
