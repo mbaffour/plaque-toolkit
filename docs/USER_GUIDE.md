@@ -138,9 +138,11 @@ red), and writes a ready‑to‑paste Methods sentence. New to the statistics? T
 
 ### The other tabs
 - **Batch** — run a whole folder of plates at once → per‑plate CSVs (`out_batch/<name>/`) + a
-  combined `all_plaques.csv`. Its **Small plaques** checkbox matters only for Published: Published
-  runs *without* `-small` unless it is ticked (matching the Measure tab and the CLI), while Current
-  and Sensitive always use the engine's small gates in the app (equal to the CLI's `-small`).
+  combined `all_plaques.csv` and a `per_plate.csv` (plaques counted, plaques sized, median and
+  mean over the sized plaques, and the plate's warnings). Its **Plaque size** choice (Auto /
+  Standard / Small, shared with the Measure and Compare tabs) works as described in
+  [ENGINES.md](ENGINES.md#app-vs-cli-the-plaque-size-choice); Published offers Standard and Small
+  only.
 
   ![Batch tab](atlas_img/batch.png)
 

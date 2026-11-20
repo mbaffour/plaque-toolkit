@@ -129,6 +129,27 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
   value cell is counted as "not a number".
 * **Agreement wording.** The Koo & Li grade is given for the ICC's 95 % interval ("moderate to
   excellent"), not the point estimate; no verdict is printed below 5 pairs.
+* **The app's "Small" is not the command line's `-small`.** The app takes the dish from the
+  standard pass and counts a plaque outlined twice once; `-small` does neither. On the bundled
+  plates (dishes 90 mm large / 55 mm small) the two agree on 11 of 18 plates; they differ on
+  Plate_6 (app 89 plaques / 1.92 mm vs `-small` 96 / 1.87), Plate_8 (27 / 4.08 vs 27 / 3.89),
+  Plate_12 (19 / 3.40 vs 20 / 3.24), Plate_14 (21 / 3.67 vs 21 / 3.52), Plate_17 (0.95 vs
+  0.91 mm), Plate_11 (0.75 vs 0.72 mm), Plate_3 / Plate_4 (one plaque each) and Plate_2 (the app
+  finds a dish, `-small` does not). The tooltip now says so; neither behaviour changed.
+* **No millimetre scale, no millimetres.** When no dish is found, the app's per-plaque files
+  leave the mm columns empty instead of writing 0.0, and the Analyze tab refuses such a plate
+  ("this plate has no millimetre scale"). Before, a tightly cropped photo could enter the
+  statistics as plaques of 0.0 mm. The command-line files are frozen and still write 0.0, so on a
+  plate without a dish the app's Published CSV and `plaque_size_tool.py --published` differ in
+  those cells only.
+* **Agreement sentence.** The verb now follows the lower limit of the ICC's 95 % interval
+  ("agreed closely / well / moderately", "did not agree reliably"), so it can no longer
+  contradict the grade beside it; a significant proportional or systematic bias is named next to
+  the verb; below 5 pairs only the bias, its SD and range are given; the percentage bias is left
+  out when the mean of the two methods is near zero. Intervals are written "a to b". The
+  numbers, including every number for the shipped validation file, are unchanged.
+* **Zero or negative sizes** in a size column now raise a warning (they stay in the analysis;
+  the omnibus CSV's `n_warnings` goes up by one). No test or p-value changes.
 * **QC flags.** A round plaque that is only large is flagged `LARGE?`; `MERGED?` is for a shape
   far from round (low solidity or an elongated outline). `EDGE` is measured against the lawn
   edge (0.93 of the dish radius), so it now fires for plaques at the rim. New flags `NESTED`
@@ -304,6 +325,46 @@ fixed, the rest partly) and reported 81 new ones; the entries below are the fixe
   tester's synthetic plates and perturbations, kept so that any future change to detection or
   sizing is scored on scenes it was not tuned on. Its absolute numbers are pessimistic compared
   with the real Fiji pairs and are for comparing rules, not for quoting accuracy.
+
+### Third test round (same branch): what it changed
+
+Three testers followed the same data across tools instead of sitting in one tab. One plate gave
+the same count, sized set, median and mean on all 14 routes (Measure, both saved CSVs, three
+Batch files, Compare, Analyze through every import, the command line and the three summary
+tools); one data set gave the same test, unit and numbers to 6 digits through the command line,
+the desktop Analyze tab, the Python web app and the R app; the three agreement front-ends matched
+an independent calculation. All five second-round blockers were confirmed fixed. The fixes for
+what they found:
+
+* **Plates without a scale** (see "Numbers that change"); Measure's `run_metadata.json` records
+  the plate warnings and the sized counts for the plaques on screen; a Dish-size change marks the
+  plate unsaved; the no-dish warning is one sentence on every tab.
+* **Legend key on a plate figure** is placed beside the image (below or to the right), never over
+  plaques, on the Measure figure, Batch overlays and turbidity overlays.
+* **Validate** names the plaque size it scored with, counts scored and failed plates, and says
+  plainly when a label file's photo is missing (the bundled `validation/ground_truth` labels name
+  photos that are not in the repository).
+* **`compile_excel.py`** reads a relative `--root` from the current folder and works when only
+  one mode's files exist.
+* **Agreement, one engine for three front-ends.** The reader (comma, semicolon, tab, decimal
+  commas, dropped rows reported), the column-role guess (a pair of one quantity; file order when
+  no name gives a hint, so the bias sign cannot flip between front-ends) and every word of the
+  sentence now live in the shared engine. Web app: "Convert area" and "Compare anyway" reset with
+  each file and column pair, "Convert area" on columns that are not areas is gated like a mixed
+  pair, a blocked download explains itself, and each figure has an "open full size" link. Desktop:
+  a blank line inside a pasted column keeps its place as a missing value instead of shifting the
+  pairs; 3 against 2 values gets the unequal-counts message.
+* **Statistics front-ends.** The web app offers a value column with a few non-numeric cells again
+  (before, a dirty diameter column made it silently analyse the area column) and reports the
+  cells it dropped; the Sensitivity line appears in every report and screen, also when a sample
+  has a single plate; the web screen shows why its test was chosen; the desktop Analyze tab gets
+  an optional **Difference to detect** field; a table without a plate column is explained instead
+  of being treated as one plate per sample; p-values too small to resolve are explained; one
+  default figure size (8 × 5.2 in) for the command line, desktop and web app, and the web app
+  states the size of the file it serves. The desktop's "hide values ≤ 0" box is gone: size
+  columns with such values are refused on loading, so it could never act.
+* On a small window the Measure tab folds its results column behind a "Results" button so the
+  image keeps a usable height.
 
 ### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
 

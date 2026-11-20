@@ -208,10 +208,24 @@ to **pixel-only** output and warn.
 - The Precise classifier gate (`--clf`) is **off by default on the CLI** and on in in-process runs
   (see §4).
 
-### App vs CLI (the `-small` gates)
+### App vs CLI (the **Plaque size** choice)
 
-In the desktop app, **Current and Sensitive always run with the engine's `-small` gates** — so
-"Current" in the app equals the CLI's `plaque_size_tool.py -small`, not the bare CLI default — while
-**Published runs without `-small`** unless the Batch tab's **Small plaques** box is ticked (the
-Measure tab and the CLI never add `-small` to Published). Say which you used when you report a
-run: the app's `run_metadata.json` and the CLI's provenance record both store the flag.
+The Measure, Batch and Compare tabs share one **Plaque size** choice for Current and Sensitive
+(the default lives in one place, `DEFAULT_PLAQUE_SIZE` in `app/engine_api.py`):
+
+* **Standard** — the engine's standard pass; equals the bare CLI default.
+* **Small** — the small-plaque pass, but with the dish (and so the mm scale) taken from the
+  standard pass and a plaque outlined twice (core and halo) counted once. It is therefore *not*
+  identical to `plaque_size_tool.py -small`: on the bundled plates they agree on 11 of 18 plates
+  and differ on the rest by double outlines (Plate_6: 89 vs 96 plaques) or by the dish (Plate_8:
+  sizes about 4.7 % apart). See CHANGELOG → "Numbers that change".
+* **Auto** — both passes merged (the standard outline where the standard pass finds the plaque,
+  touching halos split, the rest from the small pass); the CLI equivalent is `--multiscale`,
+  which gives exactly the app's result. Plaques whose size is not reliable (`CORE?`, `NO_SIZE`)
+  are counted but left out of every size summary. Treat Auto sizes as provisional: see
+  CHANGELOG → "Known limits of Auto".
+
+**Published** offers only Standard (its default) and Small, and its Small is the CLI's
+`--published -small`. Precise has its own fixed detection and ignores the choice. Say which
+engine and plaque size you used when you report a run: the app's `run_metadata.json` records
+both (`plaque_size`), and the CLI's provenance record stores its flags.
