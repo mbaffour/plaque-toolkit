@@ -126,10 +126,27 @@ def large_plaque_warning(diams_px, mm_per_px=None):
             % (STANDARD_HALO_MAX_PX, where, max(d))]
 
 
-def plate_warnings(diams_px, mm_per_px=None):
-    """Per-plate warnings about the plaque sizes (the app's flag line, the CLI's stdout and
-    run_metadata.json): today the large-plaque limit of the standard pass (Part 3)."""
-    return large_plaque_warning(diams_px, mm_per_px)
+def few_sized_warning(flag_strings):
+    """[warning] when fewer than half of the counted plaques are sized (CT-R2 detection N3:
+    a quarter to a third of haloed plates was left out of sizing, not at random), else []."""
+    flags = list(flag_strings)
+    n = len(flags)
+    n_ok = sum(1 for f in flags if size_ok(f))
+    if n == 0 or 2 * n_ok >= n:
+        return []
+    why = left_out_phrase(size_left_out_counts(flags))
+    return ["%s: the size summary may not represent the plate%s."
+            % (sizes_from_phrase(n_ok, n), (" (left out: %s)" % why) if why else "")]
+
+
+def plate_warnings(diams_px, mm_per_px=None, flag_strings=None):
+    """Per-plate warnings about the plaque sizes, for the app's flag line, the CLI's stdout and
+    run_metadata.json: the large-plaque limit of the standard pass (Part 3) and, when QC flags
+    are given, fewer than half of the plaques sized (Part 4). One call for every front end."""
+    out = large_plaque_warning(diams_px, mm_per_px)
+    if flag_strings is not None:
+        out += few_sized_warning(flag_strings)
+    return out
 
 
 def size_left_out_counts(flag_strings):

@@ -972,7 +972,13 @@ def _process_one(image_path, plate_size, run_images, args):
             import plaque_qc
             if len(green_df_copy):
                 _dpx = [2.0 * float(np.sqrt(float(a) / np.pi)) for a in green_df_copy['AREA_PXL']]
-                _plate_warn = plaque_qc.plate_warnings(_dpx, last_calibration.get('mm_per_px'))
+                _flags = (green_df_copy['QC_FLAG'].tolist() if 'QC_FLAG' in green_df_copy.columns
+                          else None)
+                _plate_warn = plaque_qc.plate_warnings(_dpx, last_calibration.get('mm_per_px'), _flags)
+                # Part 4: "sizes from N of M plaques" -- a warning under half, else a note
+                if _flags is not None and not plaque_qc.few_sized_warning(_flags):
+                    for _l in plaque_qc.size_summary_lines(_flags):
+                        print("  " + _l)
             for _w in _plate_warn:
                 print("  WARNING: " + _w)
         except Exception:
@@ -1072,7 +1078,8 @@ def _merge_small_pass(image, orig_image, high_contrast, plate_size, plate_df, gr
 
 def _multiscale_flags(green_df, plaques, plate, image_size, orig_image):
     """--multiscale: QC_FLAG / QC_REASON on every row (CT-R2 detection N1), from the app's own
-    flagging of the same plaque dicts, and the "sizes from N of M plaques" line. A zero-plaque
+    flagging of the same plaque dicts (the "sizes from N of M plaques" line is printed with the
+    plate's warnings). A zero-plaque
     plate still gets the two (empty) columns. If flagging fails, the rows still say which sizes
     are not used (CORE? / NO_SIZE from the Auto resolution), so no summary sizes them again."""
     import plaque_qc
@@ -1094,8 +1101,6 @@ def _multiscale_flags(green_df, plaques, plate, image_size, orig_image):
                 "QC flags could not be computed (%s)" % exc) for d in plaques]
     green_df['QC_FLAG'] = [f for f, _ in res]
     green_df['QC_REASON'] = [w for _, w in res]
-    for line in plaque_qc.size_summary_lines(green_df['QC_FLAG'].tolist()):
-        print("  " + line)
     return green_df
 
 

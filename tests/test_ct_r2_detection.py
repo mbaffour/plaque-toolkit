@@ -315,3 +315,20 @@ def test_p3_cli_warns_in_every_mode_without_touching_the_csv(tmp_path, mixed_pla
     d = pd.read_csv(tmp_path / "d" / "data-green-mixed_plate.csv")
     assert list(d.columns) == ["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2", "DIAMETER_MM",
                                "MEAN_GRAY", "TURBIDITY_REL"]
+
+
+# --------------------------------------------------------------------------- #
+#  Part 4: whatever rule is adopted, a plate with fewer than half its plaques sized says so
+# --------------------------------------------------------------------------- #
+def test_p4_few_sized_warning():
+    import plaque_qc
+    assert plaque_qc.few_sized_warning(["OK", "CORE?"]) == []            # exactly half: no
+    w = plaque_qc.few_sized_warning(["OK", "CORE?", "SPLIT|NO_SIZE", "EDGE|CORE?"])
+    assert w == ["sizes from 1 of 4 plaques: the size summary may not represent the plate (left out: "
+                 "2 outlined at the dark centre only and 1 split pieces whose size is not reliable)."]
+    assert plaque_qc.few_sized_warning([]) == []
+    # plate_warnings carries it next to the large-plaque warning, for every front end
+    assert plaque_qc.plate_warnings([20.0], None, ["CORE?", "CORE?", "OK"]) == \
+        plaque_qc.few_sized_warning(["CORE?", "CORE?", "OK"])
+    assert plaque_qc.plate_warnings([20.0], None, None) == []
+
