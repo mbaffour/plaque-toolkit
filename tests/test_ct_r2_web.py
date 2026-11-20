@@ -102,6 +102,7 @@ def test_n1_download_gate_and_compared_line():
     assert not B.downloads_blocked("DIAMETER_MM", "fiji_diam", False)
     assert B.compared_text("DIAMETER_MM", "fiji_diam", False, "mm") == "Compared: diameter (mm) vs diameter (mm)"
     assert B.compared_text("AREA_MM2", "fiji_area", False, "mm²") == "Compared: area (mm²) vs area (mm²)"
+    assert B.compared_text("AREA_MM2", "fiji_diam", False, "mm²") == "Compared: area (mm²) vs diameter (mm)"
     assert "converted from area" in B.compared_text("AREA_MM2", "fiji_area", True, "mm")
     assert "one column looks like an area and the other like a diameter: agreement between different " \
            "quantities is meaningless" in B.MIXED_WARNING

@@ -316,8 +316,12 @@ def quantity_text(name, convert, unit):
     kind = column_kind(name)
     if convert:
         return "diameter (%s, converted from area)" % DIAM_UNIT
-    return "%s (%s)" % ({"diam": "diameter", "area": "area"}.get(kind, "measurement"),
-                        (unit or "").strip() or "no unit")
+    u = (unit or "").strip() or "no unit"
+    if kind == "diam" and u == AREA_UNIT:          # the one Unit box follows an area column
+        u = DIAM_UNIT
+    elif kind == "area" and u == DIAM_UNIT:
+        u = AREA_UNIT
+    return "%s (%s)" % ({"diam": "diameter", "area": "area"}.get(kind, "measurement"), u)
 
 
 def compared_text(tool, manual, convert, unit):
