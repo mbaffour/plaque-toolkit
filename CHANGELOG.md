@@ -217,15 +217,23 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **With `--center median`** the error bar is IQR or a bootstrap 95 % interval of the median
   (seeded, resampling plates); median with SD or SEM is refused with a plain message.
 * **Figures.** The n label reads "n = 70 plaques / N = 3 plates". With more than 5 samples the
-  automatic brackets show only the significant comparisons against the first sample (the report
-  says so, and how many pairs are in the table); tick labels tilt when they would collide; titles
-  wrap; keys longer than 12 rows wrap into columns; log axes get plain-number ticks and a sane
-  lower limit, and refuse values ≤ 0 unless told to drop them (the count is then stated).
+  automatic annotation is one row of stars above each sample for its comparison with the first
+  sample (marked "ref."; the caption and the report say so, and how many pairs are in the
+  table) instead of a stack of brackets; `--annotate all` / `adjacent` keep bracket lines. Tick
+  labels tilt when they would collide; titles and captions wrap; log axes get plain-number
+  ticks and a sane lower limit, and refuse values ≤ 0 unless told to drop them (the count is
+  then stated). A key with many rows goes below the plot in several columns and the saved
+  figure grows taller than the chosen height, so the plot keeps its size.
   **The default figure changed**: plate points take their colours from the chosen palette
   (Okabe-Ito by default) instead of a fixed plate palette, and when colours run out the marker
-  shape changes so no two plates look alike.
+  shape changes so no two plates look alike. When a palette has fewer colours than samples the
+  repeats get a hatch (violins) or another marker (points) and the report says so. The shipped
+  3-sample example renders byte-identically before and after the many-sample changes.
+* The power sentence never advises fewer than 3 plates per sample and is marked as a rough
+  guide.
 * **Legend key.** Fixed colour words for every shipped palette; the text starter ends with what
-  the violins, points, bar and whisker are; `make_figure.py` still runs without the key module.
+  the violins, points, bar and whisker are, what the brackets, stars or letters mean and the
+  star thresholds with the test's name; `make_figure.py` still runs without the key module.
 * Errors the engine raises for bad input are `StatsError` (a `ValueError`), so an app that
   embeds the engine can show them instead of exiting.
 
