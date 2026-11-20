@@ -190,29 +190,56 @@ def match_and_score(gt_pts, det_pts, match_frac=0.5, min_radius_px=4.0):
 # --------------------------------------------------------------------------- #
 #  Per-plate scoring against a label file
 # --------------------------------------------------------------------------- #
-def _resolve_image_path(label_json_path, meta):
-    """Find the plate image: prefer meta['image_path'] (abs); fall back to a sibling file named
-    meta['image'] next to the JSON; finally any sibling with a matching stem + known extension."""
+def _resolve_image_path(label_json_path, meta, search_dir=None):
+    """Find the plate image: prefer meta['image_path'] (abs); fall back to a file named
+    meta['image'] next to the JSON, then in ``search_dir`` (the folder the user chose, CT-R3);
+    finally any file there with a matching stem + known extension."""
     img = meta.get("image_path")
     if img and os.path.exists(img):
         return img
-    base_dir = os.path.dirname(os.path.abspath(label_json_path))
+    dirs = [os.path.dirname(os.path.abspath(label_json_path))]
+    if search_dir and os.path.isdir(search_dir) and os.path.abspath(search_dir) not in dirs:
+        dirs.append(os.path.abspath(search_dir))
     name = meta.get("image")
-    if name:
-        cand = os.path.join(base_dir, name)
-        if os.path.exists(cand):
-            return cand
-        stem = os.path.splitext(name)[0]
-        for ext in IMAGE_EXTS:
-            cand = os.path.join(base_dir, stem + ext)
+    for base_dir in dirs:
+        if name:
+            cand = os.path.join(base_dir, name)
             if os.path.exists(cand):
                 return cand
-    # last resort: original image_path basename next to the json
-    if img:
-        cand = os.path.join(base_dir, os.path.basename(img))
-        if os.path.exists(cand):
-            return cand
+            stem = os.path.splitext(name)[0]
+            for ext in IMAGE_EXTS:
+                cand = os.path.join(base_dir, stem + ext)
+                if os.path.exists(cand):
+                    return cand
+        # last resort: original image_path basename there
+        if img:
+            cand = os.path.join(base_dir, os.path.basename(img))
+            if os.path.exists(cand):
+                return cand
     return img  # may be None / nonexistent; caller will error informatively
+
+
+# CT-R3 F6: the engine a row was scored with, plaque size included ("Current, Auto")
+_ENGINE_WORD = {"published": "Published", "current": "Current", "sensitive": "Sensitive",
+                "precise": "Precise"}
+_SIZE_WORD = {"auto": "Auto", "standard": "Standard", "small": "Small"}
+
+
+def plaque_size_of(mode, det=None):
+    """The plaque size a mode is scored with: the detection's own ``scale`` when known, else
+    what the mode runs (Current / Sensitive: engine_api.DEFAULT_PLAQUE_SIZE; Published:
+    standard; Precise: None, it has its own fixed detection)."""
+    if mode == "precise":
+        return None
+    if det is not None and det.get("scale"):
+        return det["scale"]
+    return "standard" if mode == "published" else _engine().DEFAULT_PLAQUE_SIZE
+
+
+def engine_label(mode, plaque_size=None):
+    """'Current, Auto' / 'Published, Standard' / 'Precise'."""
+    name = _ENGINE_WORD.get(mode, str(mode))
+    return name if not plaque_size else "%s, %s" % (name, _SIZE_WORD.get(plaque_size, plaque_size))
 
 
 def _plate_mm_from_meta(meta):
@@ -256,7 +283,7 @@ def _gt_points_from_labels(plaques):
     return pts
 
 
-def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=None):
+def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=None, search_dir=None):
     """Score one ground-truth label file against the engine running in `mode`.
 
     Loads the JSON (schema plaque-groundtruth-v1), builds gt points from its plaques, runs the
@@ -275,11 +302,14 @@ def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=N
         raise ValueError("%d of %d labelled plaques have no x_px/y_px coordinates; re-export the "
                          "labels from the Measure tab" % (len(gt_plaques) - len(gt_pts), len(gt_plaques)))
 
-    image_path = _resolve_image_path(label_json_path, meta)
+    image_path = _resolve_image_path(label_json_path, meta, search_dir)
     if not image_path or not os.path.exists(image_path):
+        # CT-R3: say it plainly (the bundled validation/ground_truth labels name photos that
+        # are not in the repository)
+        named = meta.get("image") or os.path.basename(str(meta.get("image_path") or "")) or "?"
         raise FileNotFoundError(
-            "could not locate the plate image for %s (meta.image_path=%r, meta.image=%r)"
-            % (os.path.basename(label_json_path), meta.get("image_path"), meta.get("image")))
+            "the image named in this label file (%s) was not found next to it or in the chosen "
+            "folder; put the photo there and run again" % named)
 
     plate_mm = _plate_mm_from_meta(meta)
     if plate_mm is None:
@@ -305,7 +335,9 @@ def score_label_file(label_json_path, mode="precise", match_frac=0.5, progress=N
     det_pts = _plaque_points(det.get("plaques", []), ppm)
 
     metrics = match_and_score(gt_pts, det_pts, match_frac=match_frac)
-    out = {"image": os.path.basename(image_path), "mode": mode, "n_gt": len(gt_pts)}
+    size = plaque_size_of(mode, det)
+    out = {"image": os.path.basename(image_path), "mode": mode,
+           "engine": engine_label(mode, size), "plaque_size": size or "", "n_gt": len(gt_pts)}
     out.update(metrics)
     return out
 
@@ -368,28 +400,34 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
     files, skipped = collect_label_files(label_paths)
     if isinstance(modes, str):
         modes = [m.strip() for m in modes.split(",") if m.strip()]
+    # the folder the user chose: a label file's image is also looked for there (CT-R3)
+    search_dir = (os.fspath(label_paths) if isinstance(label_paths, (str, os.PathLike))
+                  and os.path.isdir(os.fspath(label_paths)) else None)
 
     rows = []
     errors = []
     for f in files:
         for mode in modes:
             try:
-                res = score_label_file(f, mode=mode, match_frac=match_frac, progress=progress)
+                res = score_label_file(f, mode=mode, match_frac=match_frac, progress=progress,
+                                       search_dir=search_dir)
                 res["label_file"] = os.path.basename(f)
                 res["error"] = ""
                 rows.append(res)
             except Exception as e:  # one bad plate/mode shouldn't sink the batch
                 msg = "%s: %s" % (type(e).__name__, e)
                 errors.append({"label_file": os.path.basename(f), "mode": mode, "error": msg})
+                size = plaque_size_of(mode)
                 rows.append({
                     "label_file": os.path.basename(f), "image": "", "mode": mode,
+                    "engine": engine_label(mode, size), "plaque_size": size or "",
                     "n_gt": None, "n_det": None, "tp": None, "fp": None, "fn": None,
                     "precision": None, "recall": None, "f1": None,
                     "size_mae_mm": None, "size_bias_mm": None, "size_pearson": None,
                     "error": msg,
                 })
 
-    per_plate_cols = ["label_file", "image", "mode", "n_gt", "n_det", "tp", "fp", "fn",
+    per_plate_cols = ["label_file", "image", "mode", "engine", "plaque_size", "n_gt", "n_det", "tp", "fp", "fn",
                       "precision", "recall", "f1", "size_mae_mm", "size_bias_mm",
                       "size_pearson", "error"]
     per_plate_df = pd.DataFrame(rows, columns=per_plate_cols)
@@ -408,8 +446,9 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
         mean_mae = float(mae_series.mean()) if len(mae_series) else None
         if len(sub) == 0:                     # nothing scored: no row of zeros (CT-R1 DA-F22)
             precision = recall = f1 = None
+        size = plaque_size_of(mode)
         mode_rows.append({
-            "mode": mode,
+            "mode": mode, "engine": engine_label(mode, size), "plaque_size": size or "",
             "n_plates": int(len(sub)),
             "tp": int(tp), "fp": int(fp), "fn": int(fn),
             "precision": precision, "recall": recall, "f1": f1,
@@ -417,8 +456,8 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
         })
     per_mode_df = pd.DataFrame(
         mode_rows,
-        columns=["mode", "n_plates", "tp", "fp", "fn", "precision", "recall", "f1",
-                 "mean_size_mae_mm"])
+        columns=["mode", "engine", "plaque_size", "n_plates", "tp", "fp", "fn", "precision",
+                 "recall", "f1", "mean_size_mae_mm"])
 
     if not files:
         per_mode_df = per_mode_df.iloc[0:0]
@@ -427,11 +466,45 @@ def validate(label_paths, modes=("precise", "current"), match_frac=0.5, progress
             "n_failed": len(errors), "modes": list(modes)}
 
 
+def plate_failures(res):
+    """(n plates that failed for every engine, n that failed for some engines only)."""
+    pp = res["per_plate_df"]
+    if pp is None or not len(pp):
+        return 0, 0
+    bad = pp["error"].astype(str) != ""
+    every = some = 0
+    for _f, g in bad.groupby(pp["label_file"]):
+        if g.all():
+            every += 1
+        elif g.any():
+            some += 1
+    return every, some
+
+
+def any_scored(res):
+    """True when at least one (plate, engine) pair was scored."""
+    pp = res.get("per_plate_df")
+    return pp is not None and bool(len(pp)) and bool((pp["error"].astype(str) == "").any())
+
+
 def summary_status(res):
-    """'Scored N plates x M engines; K failed (see the last column)' (+ skipped JSON)."""
-    msg = "Scored %d plate%s x %d engine%s; %d failed (see the last column)." % (
-        res["n_label_files"], "" if res["n_label_files"] == 1 else "s",
-        len(res["modes"]), "" if len(res["modes"]) == 1 else "s", res["n_failed"])
+    """CT-R3: counts PLATES, not plate x engine pairs: 'Scored 2 of 4 plates x 2 engines; 2
+    plates failed (see the last column).', 'No plate could be scored: ...' (+ skipped JSON).
+    A plate that failed for some engines only is a failed plate, and said so."""
+    n = res["n_label_files"]
+    m = len(res["modes"])
+    every, some = plate_failures(res)
+    failed = every + some
+    eng = "%d engine%s" % (m, "" if m == 1 else "s")
+    if n and not any_scored(res):
+        msg = "No plate could be scored: %s failed (see the last column)." % (
+            "the plate" if n == 1 else "all %d plates" % n)
+    elif not failed:
+        msg = "Scored %d plate%s x %s." % (n, "" if n == 1 else "s", eng)
+    else:
+        msg = "Scored %d of %d plates x %s; %d plate%s failed%s (see the last column)." % (
+            n - failed, n, eng, failed, "" if failed == 1 else "s",
+            (" (%d of them for some engines only)" % some) if some else "")
     if res.get("skipped"):
         k = len(res["skipped"])
         msg += (" Skipped 1 JSON file that is not a plaque label file." if k == 1 else
@@ -449,10 +522,12 @@ def report_sentence(res, engine_names=None, version=None):
             continue
         ok = per_plate[(per_plate["mode"] == row["mode"]) & (per_plate["error"] == "")]
         n_plaques = int(pd.to_numeric(ok["n_gt"], errors="coerce").fillna(0).sum())
-        out.append("Against %d hand-corrected plate%s (%d plaques), the %s engine of Plaque Toolkit%s "
+        size = row.get("plaque_size") if hasattr(row, "get") else None
+        out.append("Against %d hand-corrected plate%s (%d plaques), the %s engine%s of Plaque Toolkit%s "
                    "detected plaques with precision %.3f, recall %.3f and F1 %.3f."
                    % (int(row["n_plates"]), "" if int(row["n_plates"]) == 1 else "s", n_plaques,
                       engine_names.get(row["mode"], row["mode"]),
+                      (" (plaque size %s)" % _SIZE_WORD.get(size, size)) if size else "",
                       (" " + str(version)) if version else "", row["precision"], row["recall"], row["f1"]))
     return " ".join(out)
 

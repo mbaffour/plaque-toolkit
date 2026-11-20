@@ -2808,13 +2808,17 @@ class ValidateTab(QWidget):
         self._res = res
         self.mode_model.set_dataframe(res["per_mode_df"])
         self.plate_model.set_dataframe(res["per_plate_df"])
-        self.status.setText(validate.summary_status(res) + " Higher F1 = closer to your gold "
-                            "standard; see the Validation guide (Help menu) for how to report it.")
+        scored = validate.any_scored(res)
+        self.status.setText(validate.summary_status(res) + (
+            " Higher F1 = closer to your gold standard; see the Validation guide (Help menu) for "
+            "how to report it." if scored else ""))
         names = {k: l for l, k, _h in MODES}
         self.sentence.setText(validate.report_sentence(res, names, __version__))
-        self.save_btn.setEnabled(res["n_label_files"] > 0)
+        # CT-R3: nothing to save when no plate could be scored
+        self.save_btn.setEnabled(res["n_label_files"] > 0 and scored)
         self.sent_copy.setEnabled(bool(self.sentence.text()))
-        self.window().statusBar().showMessage("Validation done.")
+        self.window().statusBar().showMessage("Validation done." if scored else
+                                              "Validation: no plate could be scored.")
 
     def _copy_sentence(self):
         QApplication.clipboard().setText(self.sentence.text())

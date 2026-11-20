@@ -492,3 +492,99 @@ def test_f5_batch_and_turbidity_overlays_keep_the_key_off_the_plate(tmp_path):
     np.testing.assert_array_equal(with_key[:H, :W], no_key)
     patch = pgui.key_image_for(orig.shape, ptb.overlay_key(recs[0]))
     np.testing.assert_array_equal(_beside(with_key, orig.shape, patch), patch)
+
+
+# =========================================================================== F6 + Validate status
+import math as _math   # noqa: E402
+
+_PLAQUES = [(380, 380), (520, 400), (430, 540), (560, 550), (350, 500)]
+
+
+def _label(path, img_name, img_path):
+    mmpp = 90.0 / 760.0
+    recs = [{"index": i + 1, "x_px": float(x), "y_px": float(y), "r_px": 26.0,
+             "area_px": _math.pi * 26 ** 2, "diam_mm": round(52 * mmpp, 3), "source": "auto",
+             "kind": "plaque"} for i, (x, y) in enumerate(_PLAQUES)]
+    meta = {"image": img_name, "image_path": img_path, "mm_per_px": mmpp, "dish_diam_px": 760,
+            "schema": "plaque-groundtruth-v1"}
+    with open(str(path), "w") as fh:
+        json.dump({"meta": meta, "plaques": recs}, fh)
+
+
+def test_f6_validate_names_the_plaque_size_and_says_plainly_when_the_image_is_missing(neutral_plate_tif, tmp_path):
+    from app import validate as V
+    d = tmp_path / "labels"; d.mkdir()
+    shutil.copy(neutral_plate_tif, str(d / "plate0.tif"))
+    # the label names an image path from another computer: found by name in the folder
+    _label(d / "labels_plate0.json", "plate0.tif", r"C:\Users\x\Downloads\plate0.tif")
+    _label(d / "labels_gone.json", "IMG_3907.jpeg", r"C:\Users\x\Downloads\IMG_3907.jpeg")
+    res = V.validate(str(d), modes=("current", "published"))
+    pp = res["per_plate_df"]
+    assert list(pp.columns[:5]) == ["label_file", "image", "mode", "engine", "plaque_size"]
+    ok = pp[pp["error"] == ""]
+    assert list(ok["engine"]) == ["Current, Auto", "Published, Standard"]
+    assert list(ok["plaque_size"]) == ["auto", "standard"]
+    gone = pp[pp["label_file"] == "labels_gone.json"]
+    assert set(gone["error"]) == {
+        "FileNotFoundError: the image named in this label file (IMG_3907.jpeg) was not found next "
+        "to it or in the chosen folder; put the photo there and run again"}
+    assert list(gone["engine"]) == ["Current, Auto", "Published, Standard"]
+    # a label file elsewhere: its image is also looked for in the chosen folder
+    other = tmp_path / "elsewhere"; other.mkdir()
+    _label(other / "labels_plate0.json", "plate0.tif", "/nowhere/plate0.tif")
+    r = V.score_label_file(str(other / "labels_plate0.json"), mode="current", search_dir=str(d))
+    assert r["image"] == "plate0.tif" and r["engine"] == "Current, Auto"
+    # the bundled validation/ground_truth labels name photos that are not in the repository
+    gt = os.path.join(ROOT, "validation", "ground_truth")
+    res = V.validate(gt, modes=("current",))
+    assert res["n_label_files"] == 2
+    assert V.summary_status(res).startswith("No plate could be scored: all 2 plates failed")
+    assert all("was not found next to it or in the chosen folder" in e
+               for e in res["per_plate_df"]["error"])
+
+
+def test_f6_validate_status_counts_plates_and_save_follows(neutral_plate_tif, tmp_path, monkeypatch, qtbot):
+    from app import validate as V
+    d = tmp_path / "labels"; d.mkdir()
+    for i in range(2):
+        shutil.copy(neutral_plate_tif, str(d / ("plate%d.tif" % i)))
+        _label(d / ("labels_plate%d.json" % i), "plate%d.tif" % i, str(d / ("plate%d.tif" % i)))
+    for i in range(2):
+        _label(d / ("labels_gone%d.json" % i), "IMG_39%02d.jpeg" % i, r"C:\x\IMG_39%02d.jpeg" % i)
+    res = V.validate(str(d), modes=("current", "published"))
+    assert V.summary_status(res) == ("Scored 2 of 4 plates x 2 engines; 2 plates failed (see the "
+                                     "last column).")
+    pm = res["per_mode_df"]
+    assert list(pm["engine"]) == ["Current, Auto", "Published, Standard"]
+    sent = V.report_sentence(res, {"current": "Current (corrected)", "published": "Published (validated)"}, "9.9")
+    assert "the Current (corrected) engine (plaque size Auto) of Plaque Toolkit 9.9" in sent
+    assert "the Published (validated) engine (plaque size Standard) of Plaque Toolkit 9.9" in sent
+    # one engine fails on one plate: that plate is a failed plate, and said so
+    real = V.score_label_file
+
+    def flaky(f, mode="precise", **k):
+        if mode == "published" and f.endswith("labels_plate1.json"):
+            raise RuntimeError("engine fell over")
+        return real(f, mode=mode, **k)
+    monkeypatch.setattr(V, "score_label_file", flaky)
+    res2 = V.validate(str(d), modes=("current", "published"))
+    assert V.summary_status(res2) == ("Scored 1 of 4 plates x 2 engines; 3 plates failed (1 of them "
+                                      "for some engines only) (see the last column).")
+    # the saved CSVs carry the engine column
+    from app import ui as appui
+    from PySide6.QtCore import QThreadPool
+    from PySide6.QtWidgets import QMainWindow
+    win = QMainWindow(); tab = appui.ValidateTab(QThreadPool()); win.setCentralWidget(tab)
+    qtbot.addWidget(win)
+    tab._done(res)
+    assert tab.status.text().startswith("Scored 2 of 4 plates x 2 engines; 2 plates failed")
+    assert tab.save_btn.isEnabled()
+    out = tab._save(str(tmp_path / "res.csv"))
+    assert list(pd.read_csv(out[0])["engine"]) == ["Current, Auto", "Published, Standard"]
+    assert "Current, Auto" in set(pd.read_csv(out[1])["engine"])
+    # every plate fails: said plainly, nothing to save
+    monkeypatch.setattr(V, "score_label_file", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("x")))
+    res3 = V.validate(str(d), modes=("current", "published"))
+    tab._done(res3)
+    assert tab.status.text() == "No plate could be scored: all 4 plates failed (see the last column)."
+    assert not tab.save_btn.isEnabled() and tab.sentence.text() == ""
