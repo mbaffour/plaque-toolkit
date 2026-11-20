@@ -336,7 +336,7 @@ def test_n1_qc_note_never_passes_a_plate_with_no_plaques():
     assert "QC passed" not in note
     assert ("⚠ 0 plaques: T4_10. If this plate has plaques, run again with Plaque size Small "
             "(plaques under ~2.5 mm) or Auto (both scales), and check the Dish size.") in note
-    assert ("Sizes and turbidity from 2 of 4 plaques (1 outlined at the dark centre only and 1 "
+    assert ("Sizes and turbidity from 2 of 4 plaques (1 plaque outlined at the dark centre only and 1 "
             "split piece whose size is not reliable are counted, and in the titer, but left out "
             "of the summaries and plots).") in note
 
@@ -750,7 +750,7 @@ def test_b_no_dish_no_millimetres_in_batch_and_measure(cropped_sample, tmp_path,
     row = pd.read_csv(tmp_path / "o" / "per_plate.csv").iloc[0]
     assert row["n_plaques"] > 0 and pd.isna(row["mm_per_px"])
     assert pd.isna(row["median_diam_mm"]) and pd.isna(row["mean_diam_mm"])
-    assert row["error"] == plaque_qc.NO_DISH_WARNING
+    assert row["error"] == plaque_qc.no_dish_sentence()      # CT-R3 F8: its reason said once
     assert r["errors"] == []                                   # measured: not a failure
     b = _batch_tab(window)
     b._done(r)
@@ -758,7 +758,8 @@ def test_b_no_dish_no_millimetres_in_batch_and_measure(cropped_sample, tmp_path,
     assert rows[0][hdr.index("Median (mm)")] == "" and rows[0][hdr.index("Problem")] == row["error"]
     _open(window.measure_tab, qtbot, dialogs, cropped_sample, dish=100.0, scale="auto")
     flag = window.measure_tab.flag_label.text()
-    assert flag.count(plaque_qc.NO_DISH_WARNING) == 1       # said once
+    assert flag.count(plaque_qc.no_dish_sentence()) == 1    # said once
+    assert flag.count("No dish found") == 1                  # CT-R3 F8: and only once
 
 
 def test_c_per_plate_counts_add_up(tmp_path):

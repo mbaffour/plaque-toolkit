@@ -123,6 +123,14 @@ def _open(tab, qtbot, dialogs, path, mode="current", dish=100.0, scale="auto"):
     return tab.editor
 
 
+def _tab(win, prefix):
+    for i in range(win.tabs.count()):
+        if win.tabs.tabText(i).strip().startswith(prefix):
+            w = win.tabs.widget(i)
+            return w.widget() if hasattr(w, "widget") and callable(w.widget) else w
+    raise KeyError(prefix)
+
+
 def make_crop3(folder):
     """The tester's sample_crop3.png: sample.tif with int(3 %) cut from every side (the dish
     rim is lost, so there is no mm scale)."""
@@ -263,3 +271,113 @@ def test_f1_analyze_mixed_all_plaques_export_all_and_import_assign(window, qtbot
     assert st.err.text() == ("data_sample_crop3.csv: no millimetre sizes in this file (it was "
                              "measured without a scale). Set the dish or use the Ruler on the "
                              "Measure tab and save it again. Skipped.")
+
+
+# =========================================================================== F3 F4 F8
+@pytest.fixture
+def sample_editor(window, qtbot, dialogs, tmp_path):
+    img = os.path.join(str(tmp_path / "s"), "sample.tif")
+    os.makedirs(os.path.dirname(img)); shutil.copy(SAMPLE_TIF, img)
+    ed = _open(window.measure_tab, qtbot, dialogs, img)
+    return window.measure_tab, ed
+
+
+def _meta(ed):
+    return json.load(open(os.path.join(ed.out_dir, "run_metadata.json")))["images"][0]
+
+
+def test_f3_measure_run_metadata_records_the_size_record_of_the_current_plaques(sample_editor):
+    tab, ed = sample_editor
+    ed._open_folder = lambda *_a, **_k: None
+    tab.save()
+    m = _meta(ed)
+    assert (m["n_plaques"], m["n_sized"], m["n_core"], m["n_no_size"]) == (41, 21, 10, 10)
+    assert m["plate_warnings"] == []
+    # erase sized plaques until fewer than half are sized: the CURRENT plaques decide
+    while True:
+        flags = list(ed.table()["QC_FLAG"])
+        if 2 * sum(plaque_qc.size_ok(f) for f in flags) < len(flags):
+            break
+        i = next(i for i, f in enumerate(flags) if plaque_qc.size_ok(f))
+        ed._erase_at(QPointF(*ed.plaques[i]["center"]))
+    flags = list(ed.table()["QC_FLAG"])
+    want = engine_api.plate_warnings(ed.plaques, ed.ppm, flags=flags)
+    assert want and want[0].startswith("sizes from 19 of 39 plaques")
+    for action in (tab.save, ed.export_all):
+        action()
+        m = _meta(ed)
+        assert m["plate_warnings"] == want                       # not the detection-time []
+        assert (m["n_plaques"], m["n_sized"], m["n_core"], m["n_no_size"]) == (39, 19, 10, 10)
+        assert m["n_sized"] + m["n_core"] + m["n_no_size"] == m["n_plaques"]
+    # Batch counts with the same helper
+    assert engine_api.size_counts(flags) == {"n_sized": 19, "n_core": 10, "n_no_size": 10}
+
+
+def test_f4_a_dish_change_after_save_marks_the_plate_unsaved_and_open_asks(sample_editor, dialogs, tmp_path):
+    tab, ed = sample_editor
+    tab.save()
+    assert not ed.dirty
+    tab._quick_dish(100.0)                       # the same value again: nothing changed
+    assert not ed.dirty
+    tab.plate.setValue(90.0)
+    assert ed.dirty and "unsaved edits" in ed.hint.text()
+    other = os.path.join(str(tmp_path), "other.tif"); shutil.copy(SAMPLE_TIF, other)
+    dialogs.open_path = other
+    dialogs.question = QMessageBox.Cancel
+    n_q = len([k for k, *_ in dialogs.seen if k == "question"])
+    tab.open_btn.click()
+    qs = [t for k, _ti, t in dialogs.seen if k == "question"]
+    assert len(qs) == n_q + 1 and "a Dish size change" in qs[-1]
+    assert tab.editor is ed and os.path.basename(tab.image_path) == "sample.tif"   # kept
+    tab.save()
+    assert not ed.dirty
+
+
+NO_DISH = ("No dish found (no round contour larger than 100,000 px): sizes are in pixels only; make "
+           "sure the whole dish is in the frame (or set the plate by hand in the app).")
+
+
+def test_f8_no_dish_is_one_sentence_the_same_on_measure_batch_and_compare(crop3_editor, tmp_path):
+    tab, ed = crop3_editor
+    assert plaque_qc.no_dish_sentence(ed.det["dish_reason"]) == NO_DISH == plaque_qc.no_dish_sentence()
+    flag = tab.flag_label.text()
+    assert flag.count("No dish found") == 1 and ("⚠ " + NO_DISH) in flag
+    folder = tmp_path / "b"
+    make_crop3(folder)
+    res = batch_measure.batch_measure(str(folder), plate_mm=100, mode="current", scale="auto")
+    assert res["summary_df"].iloc[0]["error"] == NO_DISH
+    q = pd.DataFrame({"PLATE": ["sample_crop3"], "DISH_FOUND": [False], "N_PLAQUES": [41]})
+    note = appui.compare_qc_note(q)
+    assert ("⚠ sample_crop3: " + NO_DISH) in note and note.count("No dish found") == 1
+
+
+def test_f8_left_out_wording_is_grammatical_for_one_and_for_many(sample_editor, window):
+    assert plaque_qc.left_out_said({"core": 1, "no_size": 0}, "left out of the sizes") == \
+        "1 plaque outlined at the dark centre only was left out of the sizes"
+    assert plaque_qc.left_out_said({"core": 9, "no_size": 1}, "left out of the sizes") == (
+        "9 plaques outlined at the dark centre only and 1 split piece whose size is not reliable "
+        "were left out of the sizes")
+    assert plaque_qc.left_out_said({"core": 0, "no_size": 1}, "counted", present=True) == \
+        "1 split piece whose size is not reliable is counted"
+    # Measure flag line
+    tab, ed = sample_editor
+    assert ("Sizes from 21 of 41 plaques (10 plaques outlined at the dark centre only and 10 split "
+            "pieces whose size is not reliable are counted but left out of the size summary).") \
+        in tab.flag_label.text()
+    # Compare QC note
+    q = pd.DataFrame({"PLATE": ["p"], "DISH_FOUND": [True], "N_PLAQUES": [3]})
+    assert ("Sizes and turbidity from 2 of 3 plaques (1 plaque outlined at the dark centre only is "
+            "counted, and in the titer, but left out of the summaries and plots).") in \
+        appui.compare_qc_note(q, flags=["OK", "OK", "CORE?"])
+    # Analyze, Add current plate (a measurement with one CORE? plaque)
+    st = window.study_tab
+    st._samples.append({"group": "T4", "subgroup": ""})
+    st._refresh_tree(); st._select_sample(0)
+    tab.editor = None                      # the table alone, as test_ct_r1_detection d10a does
+    tab.model.set_dataframe(pd.DataFrame({"INDEX": [1, 2, 3], "DIAMETER_MM": [5.1, 5.3, 2.4],
+                                          "AREA_MM2": [20.4, 22.1, 4.5],
+                                          "QC_FLAG": ["OK", "OK", "CORE?"]}))
+    st.add_cur_btn.click()
+    assert window.statusBar().currentMessage() == (
+        "Added a plate to 'T4' (2 plaques; 1 plaque outlined at the dark centre only was left out "
+        "of the sizes).")

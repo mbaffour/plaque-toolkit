@@ -643,8 +643,17 @@ class PlaqueCanvas(QWidget):
                     published=self._pub(), precise=bool(self._det_flag("precise")),
                     key=bool(self.key_on_figure))
 
+    def _detection_now(self, st, flags):
+        """export_state's detection record + the plate's size record NOW (CT-R3 F3: Measure's
+        run_metadata.json had no plate_warnings and no n_sized / n_core / n_no_size), from the
+        QC flags of the table the file holds."""
+        det = dict(st["detection"])
+        det.update(engine_api.plate_size_record(self._plaques, self.ppm, list(flags)))
+        return det
+
     def save(self):
         st = self.export_state()
+        st["detection"] = self._detection_now(st, self.table()["QC_FLAG"])
         res = pgui.save_results(
             self._plaques, self.orig_bgr, self.image_path, self.out_dir, self.ppm, self.lawn_gray,
             labels=self.label_mode, write_key=True,
@@ -1039,6 +1048,7 @@ class PlaqueCanvas(QWidget):
                               "rescale — use Set plate or the Ruler")
             return False
         mm = float(mm)
+        before = float(self.plate_mm or 0.0) if self.ppm else 0.0
         # CT-R2 N6: a Dish-box change is its own undo step, so undoing a plaque edit never
         # changes the calibration silently. Typing "85" fires twice ("8", "85"): consecutive
         # Dish changes with nothing in between are ONE step, named from its first value.
@@ -1062,6 +1072,10 @@ class PlaqueCanvas(QWidget):
         # calibration ("set plate", so the result still counts as edited)
         self._calib_source = "set plate" if self._calib_source == "set plate" else "dish"
         self._sync_det()
+        # CT-R3 F4: a Dish change after Save marks the plate unsaved, as the Ruler does, so
+        # Open / Re-detect / Orient ask first (re-applying the same value changes nothing)
+        if abs((mm if mm > 0 else 0.0) - before) > 1e-9:
+            self._mark_dirty()
         self._retag(); self._refresh_key()
         self._layout_cache = None
         self._draw_plate(); self._draw_scalebar(); self._render()
@@ -1690,7 +1704,7 @@ class PlaqueCanvas(QWidget):
                 plate_mm=st["plate_mm"], edited=st["edited"], edits=st["edits"],
                 source_image=st["source_image"], orientation=st["orientation"],
                 extra_settings={"mm_per_px": self.ppm, "labels": self.label_mode},
-                detection=st["detection"])
+                detection=self._detection_now(st, df["QC_FLAG"]))
         except Exception:                           # noqa: BLE001 -- never block an export
             pass
         fig_path = os.path.join(self.out_dir, f"figure_{name}.png")

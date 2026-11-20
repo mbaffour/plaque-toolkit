@@ -775,7 +775,7 @@ class MeasureTab(QWidget):
         ans = QMessageBox.question(
             self, "Unsaved edits",
             "You have unsaved edits on this plate (plaques added or removed, a hand "
-            "calibration or a scale-bar change).\n\n%s replaces them with a fresh detection. "
+            "calibration, a Dish size change or a scale-bar change).\n\n%s replaces them with a fresh detection. "
             "Save results or Export all first if you want to keep them.\n\n"
             "Discard the edits and continue?" % action,
             QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
@@ -1081,8 +1081,8 @@ class MeasureTab(QWidget):
         # (the no-dish sentence is said once, below, from the CURRENT calibration: a plate set
         # by hand or a Ruler scale must not keep "pixels only" from detection time)
         extras = ["⚠ " + w for w in (det.get("dish_warnings") or []) if w != plaque_qc.NO_DISH_WARNING]
-        if not plate and det.get("dish_reason"):
-            extras.append("⚠ No dish found: " + det["dish_reason"] + ".")
+        # CT-R3 F8: the reason ("no round contour ...") is said once, inside the no-dish
+        # sentence below (it was a second "No dish found" sentence here)
         # CT-R1 detection D8: how Auto found each plaque's edge. CT-R2 N5/N9: counted from the
         # plaques NOW on the plate (hand-added and Detect-area ones included), in the words of
         # the SOURCE column
@@ -1134,10 +1134,9 @@ class MeasureTab(QWidget):
             out = plaque_qc.size_left_out_counts(flags)
             if out["core"] or out["no_size"]:
                 stats_df = stats_df[[plaque_qc.size_ok(f) for f in flags]]
-                n_out = out["core"] + out["no_size"]
-                size_msg = ("Sizes from %d of %d plaques (%s %s counted but left out of the "
-                            "size summary)." % (len(stats_df), n, plaque_qc.left_out_phrase(out),
-                                                "is" if n_out == 1 else "are"))
+                # CT-R3 F8: "1 plaque outlined at the dark centre only is counted ..."
+                size_msg = ("Sizes from %d of %d plaques (%s)." % (len(stats_df), n, plaque_qc.left_out_said(
+                    out, "counted but left out of the size summary", present=True)))
                 flag = (flag + "  " + size_msg) if flag else size_msg
         # CT-R2: the plate's size warnings, from the plaques NOW on screen (engine_api's one call)
         pw = engine_api.plate_warnings(self.editor.plaques, cal,
@@ -1155,8 +1154,9 @@ class MeasureTab(QWidget):
                 why = ("⚠ Dish size is 0: sizes are in pixels. Type the dish diameter in the Dish "
                        "box, or use Set plate or the Ruler to calibrate.")
             else:
-                # coordinator B: the same words as the Batch Problem column (plaque_qc's)
-                why = "⚠ " + plaque_qc.NO_DISH_WARNING
+                # coordinator B / CT-R3 F8: ONE sentence, the same as the Batch Problem column
+                # and the Compare QC note (plaque_qc.no_dish_sentence), its reason said once
+                why = "⚠ " + plaque_qc.no_dish_sentence(det.get("dish_reason"))
             if self._dish_msg:      # the user just tried the Dish box / 85 / 100 buttons
                 why += "  The Dish size has no dish outline to rescale on this image."
             flag = (why + "  " + flag) if flag else why
@@ -1598,7 +1598,10 @@ def compare_qc_note(q, failed=(), titer=False, scale=None, flags=None):
     rel = [p for p, a in zip(plates, absolute) if not a]
     uneven = [p for p, v in zip(plates, cv) if v == v and v > 0.15]
     if nod:
-        parts.append("⚠ no dish found (sizes and turbidity unreliable): %s." % ", ".join(nod))
+        # CT-R3 F8: the same no-dish sentence as the Measure flag line and the Batch Problem
+        # column (plaque_qc.no_dish_sentence), naming the plates
+        import plaque_qc
+        parts.append("⚠ %s: %s" % (", ".join(nod), plaque_qc.no_dish_sentence()))
     if zero:
         if scale in _SIZE_TRY:
             parts.append("⚠ 0 plaques: %s. If %s plaques, run again with Plaque size %s, "
@@ -1612,11 +1615,10 @@ def compare_qc_note(q, failed=(), titer=False, scale=None, flags=None):
         out = plaque_qc.size_left_out_counts(list(flags))
         n_sized = sum(1 for f in flags if plaque_qc.size_ok(f))
         if n_sized < len(flags):
-            phrase = plaque_qc.left_out_phrase(out)
+            said = plaque_qc.left_out_said(       # CT-R3 F8: "1 plaque ... is counted"
+                out, "counted, and in the titer, but left out of the summaries and plots", present=True)
             parts.append("Sizes and turbidity from %d of %d plaques%s." % (
-                n_sized, len(flags),
-                (" (%s %s counted, and in the titer, but left out of the summaries and plots)"
-                 % (phrase, "is" if (len(flags) - n_sized) == 1 else "are")) if phrase else ""))
+                n_sized, len(flags), (" (%s)" % said) if said else ""))
     if bad:
         parts.append("⚠ polarity fail (plaques darker than the lawn; check that the plates were "
                      "back-lit): %s." % ", ".join(bad))

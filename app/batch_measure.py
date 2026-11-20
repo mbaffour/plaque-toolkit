@@ -133,9 +133,10 @@ def friendly_error(exc, path):
 
 
 # coordinator B: the per_plate.csv Problem text of a plate with no dish (and so no mm scale):
-# plaque_qc's own sentence, so Batch, Measure and the command line say the same thing
+# plaque_qc's own sentence, so Batch, Measure and Compare say the same thing (CT-R3 F8: with
+# its reason once, plaque_qc.no_dish_sentence)
 import plaque_qc as _qc                                     # noqa: E402 (light: math only)
-NO_DISH_PROBLEM = _qc.NO_DISH_WARNING
+NO_DISH_PROBLEM = _qc.no_dish_sentence()
 
 
 def qc_flag_counts(df):
@@ -316,10 +317,9 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                      if len(df) and "QC_FLAG" in df.columns else df)
             n_sized = int(len(sized))
             # coordinator C: every plaque is in exactly one of n_sized / n_core / n_no_size
-            ok = [plaque_qc.size_ok(f) for f in df["QC_FLAG"]] if "QC_FLAG" in df.columns else []
-            core_out = sum(1 for f, k in zip(df["QC_FLAG"], ok) if not k and plaque_qc.has_flag(f, "CORE?")) \
-                if ok else 0
-            n_no_size = int(sum(1 for k in ok if not k) - core_out)
+            # (engine_api.size_counts: the one count, Measure's run_metadata.json uses it too)
+            n_no_size = (engine_api.size_counts(df["QC_FLAG"])["n_no_size"]
+                         if "QC_FLAG" in df.columns else 0)
             if len(sized) and ppm:
                 diam = sized["DIAMETER_MM"].astype(float)
                 median_diam = _safe_float(diam.median())
@@ -338,7 +338,7 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             problem = None
             if not ppm:
                 # coordinator B: no dish = no millimetres. The CSV used to say 0.0 mm.
-                problem = (NO_DISH_PROBLEM if not plate else
+                problem = (_qc.no_dish_sentence(det.get("dish_reason")) if not plate else
                            "Dish size is 0: sizes in px only (type the dish diameter)")
             row = {
                 "image": os.path.basename(path),

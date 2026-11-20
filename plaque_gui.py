@@ -1274,7 +1274,10 @@ def write_run_metadata(out_dir, tool, image_path, csv_path, n_rows, plaques, pxl
            "csv": os.path.basename(csv_path)}
     if edits:
         rec["edits"] = dict(edits)
-    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings", "sources"):
+    # CT-R3 F3: plate_warnings and n_sized / n_core / n_no_size of the plaques NOW on the plate
+    # (the app passes them in ``detection``: app/engine_api.plate_size_record)
+    for k in ("dish_source", "dish_reason", "n_outside_dish", "dish_warnings", "sources",
+              "plate_warnings", "n_sized", "n_core", "n_no_size"):
         if det_info.get(k) is not None:
             rec[k] = det_info[k]
     return provenance.write_metadata(out_dir, tool, label, settings, [rec])

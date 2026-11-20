@@ -160,15 +160,17 @@ def _sum_counts(accounts):
 
 
 def _left_out_text(accounts):
-    """'; 26 outlined at the dark centre only and 1 split piece … were left out' over the
-    plates actually added (CT-R2 F9), or ''."""
+    """'; 26 plaques outlined at the dark centre only and 1 split piece … were left out of the
+    sizes' over the plates actually added (CT-R2 F9), or ''. CT-R3 F8: the verb agrees with the
+    number ('1 plaque outlined at the dark centre only was left out', not '1 … were')."""
     import plaque_qc
     accounts = list(accounts)
     n = sum(a.get("n", 0) for a in accounts)
     if not n:
         return ""
-    phrase = plaque_qc.left_out_phrase(_sum_counts(accounts)) or "%d flagged plaques" % n
-    return "; %s were left out of the sizes" % phrase
+    said = plaque_qc.left_out_said(_sum_counts(accounts), "left out of the sizes")
+    return "; %s" % (said or "%d flagged plaque%s %s left out of the sizes"
+                     % (n, "" if n == 1 else "s", "was" if n == 1 else "were"))
 
 
 _NO_QC_NOTE = ("%s %s no QC_FLAG column: every row was used; plaques outlined at the dark centre "
