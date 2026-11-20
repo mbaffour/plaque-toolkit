@@ -1537,6 +1537,12 @@ def _fit_xticklabels(fig, ax):
     except Exception:                                    # noqa: BLE001
         return False
     if w > 0.92 * gap:
+        texts = [t.get_text() for t in labs]
+        if max(len(x) for x in texts) > 18:      # long names: two lines, then rotate (CT-R1 S1)
+            import textwrap
+            texts = ["\n".join(textwrap.wrap(x, 16, break_long_words=False)) or x for x in texts]
+            ax.set_xticklabels(texts, fontweight="bold")
+            labs = [t for t in ax.get_xticklabels() if t.get_text()]
         for t in labs:
             t.set_rotation(30); t.set_ha("right"); t.set_rotation_mode("anchor")
         return True
@@ -1568,8 +1574,59 @@ def _caption(fig, bits):
                     color="#5b6a65", style="italic")
 
 
+def _tight(fig, caption=None):
+    """tight_layout that keeps the strip under the axes for a key placed below them (and the
+    caption line)."""
+    kb = float(getattr(fig, "_key_below_in", 0.0) or 0.0)
+    H = fig.get_size_inches()[1]
+    if kb > 0:
+        fig.tight_layout(rect=(0, kb / H, 1, 1))
+    else:
+        fig.tight_layout(rect=(0, 0.04, 1, 1) if caption is not None else None)
+
+
 def _layout(fig, caption):
-    fig.tight_layout(rect=(0, 0.04, 1, 1) if caption is not None else None)
+    _tight(fig, caption)
+
+
+KEY_RIGHT_MAX_FRAC = 0.28      # the embedded key stays at the right only while this narrow
+
+
+def _place_key(fig, ax, key, **kw):
+    """Put the figure's key ON the figure (CT-R1 follow-up S1). At the right of the axes, in one
+    column, while it takes at most 28 % of the figure width and fits its height; otherwise BELOW
+    the axes in as many columns as fit the figure width, and the figure grows by the key's height
+    so the axes keep their size (the saved figure is then taller than --height). Entries are the
+    key's, so the standalone key still matches entry for entry."""
+    fig._key_below_in = 0.0
+    if not key or not key.get("entries"):
+        return None
+    W, H = fig.get_size_inches()
+    leg = _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), ncol=1, **kw)
+    r = _renderer(fig)
+    bb = leg.get_window_extent(r)
+    w1, h1 = bb.width / fig.dpi, bb.height / fig.dpi
+    if w1 <= KEY_RIGHT_MAX_FRAC * W and h1 <= 0.98 * H:
+        return leg
+    leg.remove()
+    nrows = len(_lk.rows(key)[0])
+    ncol = max(1, min(nrows, int((0.97 * W) // max(w1 * 0.9, 0.3))))
+    while True:
+        leg = _lk.embed(ax, key, loc="lower center", bbox_to_anchor=(0.5, 0.0),
+                        bbox_transform=fig.transFigure, ncol=ncol, **kw)
+        bb = leg.get_window_extent(r)
+        if bb.width / fig.dpi <= 0.98 * W or ncol == 1:
+            break
+        leg.remove(); ncol -= 1
+    leg.set_in_layout(False)
+    cap_in = 0.20                                  # room for the caption line under the key
+    hk = bb.height / fig.dpi
+    fig.set_size_inches(W, H + hk + cap_in + 0.06)
+    Hn = H + hk + cap_in + 0.06
+    leg.set_bbox_to_anchor((0.5, cap_in / Hn), transform=fig.transFigure)
+    fig._key_below_in = hk + cap_in + 0.06
+    fig.key_placement = "below"
+    return leg
 
 
 def _n_label_plan(fig, labels_full, labels_short, slot_in):
@@ -1852,9 +1909,10 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
     key = violin_key(order, gcol, rcol, reps, neutral, rm is not None, opts)
     key["note"] = figure_sentence(opts, rm is not None, n_units)
     _lk.attach(fig, key)
-    if opts.get("legend", True):                 # "Place key on figure": the SAME key, outside right
-        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0), handletextpad=0.3,
-                  borderaxespad=0.2)
+    fig.key_placement = "off"
+    if opts.get("legend", True):                 # "Place key on figure": the SAME key
+        fig.key_placement = "right"
+        _place_key(fig, ax, key, handletextpad=0.3, borderaxespad=0.2)
 
     caption_bits = [log_note]
     if opts.get("show_value", True) and not show_val:
@@ -1863,9 +1921,9 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
         b0 = min(b for b in bottoms if b > 0)     # left the autoscaled bottom decades too low
         ax.set_ylim(b0 / 10 ** (0.05 * max(0.2, math.log10(max(tops.values()) / b0))), None)
     _wrap_title(fig, ax, opts)
-    fig.tight_layout()                           # first pass: the axes get their real size
+    _tight(fig)                                  # first pass: the axes get their real size
     if _fit_xticklabels(fig, ax):
-        fig.tight_layout()
+        _tight(fig)
     aw, ah = _axes_in(fig, ax)
 
     # ---- everything above the data is laid out in INCHES and converted to data units at the
@@ -2253,7 +2311,8 @@ def power_sentence(pw, unit="replicate"):
     uw = _unit_word(unit)
     if not pw or not pw.get("available"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
-    s = ("**Power:** with %d %s per sample and the observed pooled SD of the %s (%.3g), a difference "
+    s = ("**Power** (computed from the observed spread; treat as a rough guide): with %d %s per "
+         "sample and the observed pooled SD of the %s (%.3g), a difference "
          "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
          % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
             pw["pooled_sd"], pw["detectable_diff"], round(100 * pw["power"]), pw["alpha"]))
@@ -2261,13 +2320,25 @@ def power_sentence(pw, unit="replicate"):
         s = s.replace("with %d %s per sample" % (pw["n_per_group"], uw),
                       "with %d %s per sample (the smallest sample)" % (pw["n_per_group"], uw))
 
-    def need(n):
-        return ("more than 1,000 %s" % uw) if n is None else _plural(n, _unit_word(unit, 1))
+    # CT-R1 follow-up S4: never recommend fewer than 3 plates from an observed effect
+    floor = MIN_UNITS_ADVISED
+
+    def need(n, what, d):
+        if n is None:
+            return "detecting the %s observed difference (%.3g) needs more than 1,000 %s per sample" % (what, d, uw)
+        if n < floor:
+            return ("for the %s observed difference (%.3g) the minimum of %d %s per sample is enough"
+                    % (what, d, floor, uw))
+        return "detecting the %s observed difference (%.3g) needs %s per sample" % (
+            what, d, _plural(n, _unit_word(unit, 1)))
     if "largest_diff" in pw:
-        s += (" Detecting the largest observed difference (%.3g) needs %s per sample; the smallest "
-              "(%.3g) needs %s." % (pw["largest_diff"], need(pw["n_for_largest"]),
-                                   pw["smallest_diff"], need(pw["n_for_smallest"])))
+        a = need(pw["n_for_largest"], "largest", pw["largest_diff"])
+        b = need(pw["n_for_smallest"], "smallest", pw["smallest_diff"])
+        s += " %s%s; %s." % (a[0].upper(), a[1:], b)
     return s
+
+
+MIN_UNITS_ADVISED = 3          # plates per sample: the floor any power advice recommends
 
 
 def _md(df):
@@ -2677,13 +2748,15 @@ def _plot_grouped(df, group_order, sub_order, control, opts, metric_name, comp):
     key = grouped_key(sub_order, control, scol, pm is not None, opts.get("_sublabel") or "subgroup")
     key["note"] = figure_sentence(opts, pm is not None, n_units)
     _lk.attach(fig, key)
+    fig.key_placement = "off"
     if opts.get("legend", True):                 # "Place key on figure"
-        _lk.embed(ax, key, loc="upper left", bbox_to_anchor=(1.005, 1.0))
+        fig.key_placement = "right"
+        _place_key(fig, ax, key)
     caption_bits = [log_note]
     _wrap_title(fig, ax, opts)
-    fig.tight_layout()
+    _tight(fig)
     if _fit_xticklabels(fig, ax):
-        fig.tight_layout()
+        _tight(fig)
     aw, ah = _axes_in(fig, ax)
 
     # ---- headroom laid out in inches (CT-R1 SM-F13: log axis; brackets never touch n labels)

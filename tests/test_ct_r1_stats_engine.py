@@ -648,3 +648,16 @@ def test_C_caption_keeps_the_lowercase_n():
     cap = [t.get_text() for t in fig.texts]
     assert "Bar values are in the summary table · n = plaques, N = plates." in cap
     plt.close(fig)
+
+
+
+# =========================================================================== follow-up S1..S5
+def test_S4_power_sentence_never_advises_fewer_than_3_plates():
+    pw = {"available": True, "pooled_sd": 0.1, "n_per_group": 3, "power": 0.8, "alpha": 0.05,
+          "equal_n": True, "detectable_diff": 0.3, "largest_diff": 1.37, "n_for_largest": 2,
+          "smallest_diff": 0.2, "n_for_smallest": 7}
+    s = ps.power_sentence(pw)
+    assert "needs 2 plates" not in s
+    assert "For the largest observed difference (1.37) the minimum of 3 plates per sample is enough" in s
+    assert "detecting the smallest observed difference (0.2) needs 7 plates per sample" in s
+    assert s.count("(computed from the observed spread; treat as a rough guide)") == 1
