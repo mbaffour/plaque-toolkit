@@ -393,6 +393,7 @@ _FLAG_WORDS = [
     ("--annotate adjacent", "Brackets: Adjacent"), ("--annotate", "the Brackets control"),
     ("--posthoc", "the Compare control"), ("--control", "Compare: vs a sample"),
     ("--unit replicate", "plates as the unit"), ("--unit plaque", "plaques as the unit"),
+    ("--detect", "Difference to detect"),                                   # CT-R3
 ]
 
 
@@ -681,12 +682,22 @@ class StudyTab(QWidget):
         self.cmp_to_sel.setToolTip("All pairs (Tukey / Games-Howell / Dunn), or each sample vs one "
                                    "reference sample (Dunnett's test).")
         self.cmp_to_sel.currentIndexChanged.connect(self._on_cmp_changed)
+        # CT-R3: ONE optional field feeding the engine's planned power (`detect`), as the web app has;
+        # hidden in grouped mode (no power calculation there)
+        self.detect_cap = QLabel("Difference to detect:"); self.detect_cap.setObjectName("FieldLabel")
+        self.detect_in = QLineEdit(); self.detect_in.setPlaceholderText("optional, e.g. 0.2")
+        self.detect_in.setMaximumWidth(120)
+        self.detect_in.setToolTip("Optional: a difference you want to be able to detect, in the unit of the "
+                                  "measurement (e.g. 0.2 mm). The Report then says how many plates per "
+                                  "sample that needs (80 % power).")
+        self.detect_in.editingFinished.connect(self._reanalyse_if_ready)
         self.analyse_btn = QPushButton("  Analyze  "); self.analyse_btn.setObjectName("Primary")
         self._bind(self.analyse_btn, self._analyse)
         # CT-R2 F16: the row wraps in a narrow window (the Analyze button used to be off screen)
         v.addWidget(_flow([_pair(QLabel("Metric:"), self.metric_sel), _pair(self.ctrl_cap, self.control_sel),
                            _pair(QLabel("Test:"), self.param_sel), _pair(self.var_cap, self.var_sel),
-                           _pair(self.cmp_to_cap, self.cmp_to_sel), self.analyse_btn], hspace=14))
+                           _pair(self.cmp_to_cap, self.cmp_to_sel), _pair(self.detect_cap, self.detect_in),
+                           self.analyse_btn], hspace=14))
 
         # CT-R1 F19: errors of the last action (cleared by every action) ...
         self.err = _MsgLabel(""); self.err.setWordWrap(True); self.err.setVisible(False)
@@ -1633,7 +1644,24 @@ class StudyTab(QWidget):
         return {"parametric": self.param_sel.currentData(),
                 "equal_var": self.var_sel.currentData(),
                 "posthoc": "dunnett" if ctrl else "auto",
-                "control": ctrl}
+                "control": ctrl, "detect": self._detect_value()}
+
+    DETECT_BAD = ("Difference to detect must be a number greater than 0, in the unit of the measurement "
+                  "(e.g. 0.2 for 0.2 mm). Leave it empty for no planned-power sentence.")
+
+    def _detect_value(self):
+        """CT-R3: the 'Difference to detect' field -> the engine's `detect` (None when empty).
+        Anything else than a positive number is refused with a plain message (ValueError)."""
+        txt = self.detect_in.text().strip().replace(",", ".") if hasattr(self, "detect_in") else ""
+        if not txt:
+            return None
+        try:
+            v = float(txt)
+        except ValueError:
+            raise ValueError(self.DETECT_BAD)
+        if not (v > 0 and np.isfinite(v)):
+            raise ValueError(self.DETECT_BAD)
+        return v
 
     def _on_cmp_changed(self, *_):
         """CT-R2 F11: remember WHICH sample is the reference, so a rename keeps it."""
@@ -1784,6 +1812,10 @@ class StudyTab(QWidget):
                 i = combo.findData(val) if val is not None else -1
                 if i >= 0:
                     combo.blockSignals(True); combo.setCurrentIndex(i); combo.blockSignals(False)
+            if "detect" in sc:                                   # CT-R3: the detect field too
+                self.detect_in.blockSignals(True)
+                self.detect_in.setText("" if sc["detect"] is None else "%g" % sc["detect"])
+                self.detect_in.blockSignals(False)
             if "control" in sc:
                 i = self.cmp_to_sel.findData(sc["control"]) if sc["control"] else 0
                 self.cmp_to_sel.blockSignals(True)
@@ -1823,7 +1855,7 @@ class StudyTab(QWidget):
         sc = self._stat_choices()
         omni, posthoc, unit, have_rep = ps.run_stats(
             df, order, "auto", sc["parametric"], equal_var=sc["equal_var"], posthoc=sc["posthoc"],
-            control=sc["control"])
+            control=sc["control"], detect=sc.get("detect"))
         summ = ps.group_summary(df, order, unit=unit)
         rep = ps.replicate_means(df)
         pairwise = pd.DataFrame(omni.get("pairwise") or [])
@@ -1952,6 +1984,9 @@ class StudyTab(QWidget):
         L.append("Test choice: %s, followed by %s. %s %s" % (
             omni.get("test"), omni.get("posthoc") or "no post-hoc test",
             omni.get("choice_note") or "", omni.get("variance_rule") or ""))
+        sens = ps.sensitivity_text(omni)                  # CT-R3 F2: as in the ZIP's report
+        if sens:
+            L.append("Sensitivity: " + sens)
         ft = self._figure_text()
         if ft:
             L += ["", "Figure: " + ft]
@@ -2336,7 +2371,8 @@ class StudyTab(QWidget):
         i = self.cmp_to_sel.findData(cur_ref) if cur_ref is not None else 0
         self.cmp_to_sel.setCurrentIndex(i if i >= 0 else 0)
         self.cmp_to_sel.blockSignals(False)
-        for w in (self.var_cap, self.var_sel, self.cmp_to_cap, self.cmp_to_sel):
+        for w in (self.var_cap, self.var_sel, self.cmp_to_cap, self.cmp_to_sel, self.detect_cap,
+                  self.detect_in):
             w.setVisible(not has_sub)
         if hasattr(self, "annot_sel"):
             self._sync_controls()
@@ -2529,7 +2565,7 @@ class StudyTab(QWidget):
             else:
                 sc = pl.get("stat_choices") or self._stat_choices()
                 args.update({"subgroup": None, "equal_var": sc["equal_var"], "posthoc": sc["posthoc"],
-                             "control": sc["control"]})
+                             "control": sc["control"], "detect": sc.get("detect")})
             res = ps.run(args)
             # the figure files: the screen's own figure, at the chosen size and Export DPI (F20)
             base = os.path.join(out, ("grouped_%s" if kind == "grouped" else "violin_%s") % ps._safe(res["metric"]))

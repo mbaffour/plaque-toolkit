@@ -264,14 +264,16 @@ def _pick(cands, pool, default=None):
 
 
 def value_choices(df, exclude=()):
-    """WIDE: the numeric columns that are not labels; LONG: the metric names. CT-R2 N14: the
-    columns chosen as Group or Replicate are never offered as the value (a numeric sample
-    name or plate number is a label here, not a measurement)."""
+    """WIDE: the MOSTLY numeric columns that are not labels; LONG: the metric names. CT-R2 N14:
+    the columns chosen as Group or Replicate are never offered as the value (a numeric sample
+    name or plate number is a label here, not a measurement). CT-R3 F1: a column is offered when
+    at least half of its non-empty cells are numbers (ps.value_columns); the cells that are not
+    are dropped and counted in the notes, as the command line does."""
     lay = layout_of(df)
     if lay["long"]:
         return lay["metrics"]
     skip = {str(x) for x in exclude if x}
-    return [str(c) for c in ps.numeric_columns(df) if str(c) not in skip]
+    return [str(c) for c in ps.value_columns(df) if str(c) not in skip]
 
 
 def picker_defaults(df):
@@ -282,7 +284,9 @@ def picker_defaults(df):
     if layout_of(df)["long"]:
         value = vals[0] if vals else None
     else:
-        value = _pick(["diameter_mm", "value"], vals, vals[0] if vals else None)
+        # CT-R3 F1: a diameter column is the default whenever there is one
+        diam = next((v for v in vals if "diam" in v.lower()), None)
+        value = _pick(["diameter_mm", "value"], vals, diam or (vals[0] if vals else None))
     return {"group": group, "replicate": rep, "value": value}
 
 
@@ -446,6 +450,7 @@ def compute(df, sel, info=None):
     else:
         d, metric = ps.normalize(df, sel["group"], sel["value"], rep, "metric")
     notes = ps.data_notes(d)
+    rows_read = int(d.attrs.get("rows_read", len(df)))      # before any filtering below (CT-R3 F1)
     present = list(dict.fromkeys(d["group"]))
     order = ps.resolve_order([g for g in sel["order"] if g in present], present, "Samples")
     gone = [g for g in present if g not in order]
@@ -477,7 +482,7 @@ def compute(df, sel, info=None):
         notes.append(log_note[0].upper() + log_note[1:] + ".")
     base = dict(d=d, metric=metric, order=order, opts=opts, palette_hint=hint, notes=notes,
                 parse_note=(info or {}).get("note", ""), layout="LONG" if lay["long"] else "WIDE",
-                rows_read=int(d.attrs.get("rows_read", len(df))))
+                rows_read=rows_read)
     if grouped:
         summ, comp, unit, ginfo = ps.grouped_stats(d, order, sub_order, control, sel["parametric"],
                                                     unit=sel["unit"], return_info=True)
@@ -571,11 +576,41 @@ def status_line(a):
     return app_words(head + " " + a["fig_sentence"])
 
 
+def test_choice_line(a):
+    """CT-R3: the engine's test-choice / normality-gate sentence ON SCREEN (it was only in the
+    ZIP's report), in the app's words; the same words as the report's 'Test choice' line."""
+    if a.get("mode") != "single":
+        return ""
+    o = a["omni"]
+    return app_words(re.sub(r"\s+", " ", "Test choice: %s, followed by %s. %s %s" % (
+        o.get("test"), o.get("posthoc") or "no post-hoc test", o.get("choice_note") or "",
+        o.get("variance_rule") or "")).strip())
+
+
+def sensitivity_line(a):
+    """CT-R3 F2: the engine's Sensitivity line (omnibus p with and without equal variances, and
+    which pairwise conclusions differ), in the app's words; '' when it does not apply."""
+    if a.get("mode") != "single":
+        return ""
+    t = ps.sensitivity_text(a["omni"])
+    return app_words("Sensitivity: " + t) if t else ""
+
+
+def detail_lines(a):
+    """The short lines under the status line: test choice, then sensitivity."""
+    return [x for x in (test_choice_line(a), sensitivity_line(a)) if x]
+
+
 def summary_lines(a):
     """Parse line + data notes + engine warnings, for the message box above the results."""
     lines = []
     if a.get("parse_note"):
-        lines.append("File: %s %s layout. %d rows used." % (a["parse_note"], a["layout"], len(a["d"])))
+        # CT-R3 F1: never "635 rows used" when rows were dropped: say how many of how many
+        used, read = len(a["d"]), int(a.get("rows_read") or len(a["d"]))
+        lines.append("File: %s %s layout. %s" % (
+            a["parse_note"], a["layout"],
+            "%d rows used." % used if used >= read else
+            "%d of %d rows used (the notes below say why the others are not)." % (used, read)))
     lines += ["Note: " + app_words(n) for n in a.get("notes", [])]
     lines += ["⚠ " + w for w in a.get("warnings", [])]
     if a.get("palette_hint"):
@@ -779,6 +814,8 @@ app_ui = ui.page_sidebar(
                      ui.output_ui("fig_preview"),
                      ui.div(ui.output_text("size_text"), class_="ct-status", id="size_line"),
                      ui.div(ui.output_text("status"), class_="ct-status"),
+                     # CT-R3: the test choice (normality gate) and the Sensitivity line, on screen
+                     ui.div(ui.output_text("detail"), class_="ct-status ct-msg", id="detail_line"),
                      ui.div(ui.download_button("dl_png", "PNG"),
                             ui.download_button("dl_svg", "SVG (editable)"),
                             ui.download_button("dl_pdf", "PDF (editable)"),
@@ -1066,6 +1103,10 @@ def server(input, output, session):
     def status():
         return status_line(analysis())
 
+    @render.text
+    def detail():
+        return "\n".join(detail_lines(analysis()))
+
     @render.data_frame
     def summary_group():
         a = analysis()
@@ -1111,6 +1152,8 @@ def server(input, output, session):
                 o["test"], ps.p_text(o["p"]), a["unit"], o["parametric_used"], o.get("min_n", 0))
             if o.get("posthoc"):
                 msg += "\nPairwise: %s" % o["posthoc"]
+            for ln in detail_lines(a):                     # CT-R3: gate sentence + sensitivity
+                msg += "\n\n" + ln
         for w in a.get("warnings", []):
             msg += "\n\n⚠ " + w
         return app_words(msg)

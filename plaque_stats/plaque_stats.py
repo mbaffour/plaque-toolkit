@@ -242,6 +242,49 @@ def numeric_columns(df, exclude=()):
     return out
 
 
+def value_columns(df, exclude=()):
+    """CT-R3 F1: the columns an app may OFFER as the value: every column that is MOSTLY numeric,
+    i.e. at least half of its non-empty cells parse as numbers (decimal commas included). A
+    diameter column with a few "NA" / "2.5mm" cells used to vanish from the web app's picker, which
+    then analysed the area column instead. The cells that are not numbers are dropped and counted
+    by normalize() ("31 rows dropped: no numeric diameter_mm value (20 not a number, 11 empty)").
+    numeric_columns() stays strict: it is the command line's automatic pick when --value is not
+    given, where a mostly-numeric column must not be chosen silently."""
+    out = []
+    for c in df.columns:
+        if c in exclude or pd.api.types.is_bool_dtype(df[c]):
+            continue
+        if pd.api.types.is_numeric_dtype(df[c]):
+            if df[c].notna().any():
+                out.append(c)
+            continue
+        num, nbad, _ = _numbers(df[c])
+        n_num = int(num.notna().sum())
+        if n_num and n_num >= nbad:            # at least half of the non-empty cells are numbers
+            out.append(c)
+    return out
+
+
+def _is_size_name(name):
+    """CT-R3 F8: a plaque SIZE measure, by its column / metric name (case-insensitive): the name
+    contains diam, area, radius, mm or um. The same rule is in app.R."""
+    n = str(name or "").lower()
+    return any(k in n for k in ("diam", "area", "radius", "mm", "um"))
+
+
+def size_warning(values, name):
+    """CT-R3 F8: the one warning for zero / negative values of a size measure (they stay in the
+    analysis; no number changes). None when it does not apply."""
+    if not _is_size_name(name):
+        return None
+    v = np.asarray(values, float)
+    n = int(np.sum(v[np.isfinite(v)] <= 0))
+    if not n:
+        return None
+    return ("%s zero or negative: a plaque size cannot be; check the column (they are included in "
+            "this analysis)." % ("1 value is" if n == 1 else "%d values are" % n))
+
+
 def _sniff_delimiter(header, default):
     """The delimiter of a text table, from its header line (outside quotes)."""
     counts, inq = {d: 0 for d in _DELIM_NAMES}, False
@@ -1027,23 +1070,30 @@ def _n_range(ns, tg, uw):
     return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
 
 
-def sensitivity_check(groups, order, tg, use_param, ctrl):
+def sensitivity_check(groups, order, tg, use_param, ctrl, uw="unit"):
     """CT-R2 item 7: 3+ samples on the parametric path -- the omnibus p and the pairwise
     conclusions (adjusted p < 0.05) under equal variances (ANOVA + Tukey HSD) and without that
     assumption (Welch ANOVA + Games-Howell), computed directly from the unit values. None when it
-    does not apply; {"text": ...} says why when it cannot be run."""
-    if len(order) < 3 or not use_param or len(tg) < 3:
+    does not apply; {"text": ...} says why when it cannot be run.
+    CT-R3 F2: when a sample cannot be tested (one plate) the line is computed on the samples that
+    can (2 or more) and says which were left out; it used to be silently absent then."""
+    if len(order) < 3 or not use_param or len(tg) < 2:
         return None
     if ctrl is not None:
         return {"text": "not run with Dunnett's test (it has no unequal-variance version here)."}
+    out_ = [g for g in order if g not in tg]
+    lead = ""
+    if out_:
+        lead = ("on the %d samples that can be tested (%s; %s cannot: fewer than 2 %ss), "
+                % (len(tg), ", ".join(map(str, tg)), _and_list(list(map(str, out_))), uw))
     gv = [groups[g] for g in tg]
     r = _quiet(st.f_oneway, *gv)
     p_eq = float(r.pvalue) if r is not None else float("nan")
     p_w = welch_anova_p(gv)
     if p_w != p_w or p_eq != p_eq:
         return {"p_equal": p_eq, "p_welch": p_w,
-                "text": "Welch's ANOVA cannot be computed (a sample has zero variance), so the analysis "
-                        "could not be repeated without the equal-variance assumption."}
+                "text": lead + ("Welch's ANOVA cannot be computed (a sample has zero variance), so the "
+                                "analysis could not be repeated without the equal-variance assumption.")}
     sub = {g: groups[g] for g in tg}
     t = _quiet(tukey, sub) or {}
     gh = games_howell(sub)
@@ -1056,11 +1106,17 @@ def sensitivity_check(groups, order, tg, use_param, ctrl):
     if (p_eq < 0.05) != (p_w < 0.05):
         diffs.insert(0, "the omnibus test is significant only %s"
                      % ("with equal variances assumed" if p_eq < 0.05 else "without that assumption"))
-    head = ("omnibus %s with equal variances assumed (one-way ANOVA) and %s without (Welch ANOVA); "
+    head = (lead + "omnibus %s with equal variances assumed (one-way ANOVA) and %s without (Welch ANOVA); "
             % (p_text(p_eq), p_text(p_w)))
     tail = ("conclusions are the same under both (Tukey HSD and Games-Howell, adjusted p < 0.05)."
             if not diffs else "; ".join(diffs) + ".")
     return {"p_equal": p_eq, "p_welch": p_w, "differ": diffs, "text": head + tail}
+
+
+def sensitivity_text(omni):
+    """The Sensitivity line of a run_stats() result ('' when it does not apply): the ONE text every
+    front-end shows (CT-R3 F2: report, screen and ZIP of the command line, web app and desktop)."""
+    return str(((omni or {}).get("sensitivity") or {}).get("text") or "")
 
 
 class PosthocResult(dict):
@@ -1407,7 +1463,7 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     if det is not None and not (det > 0 and math.isfinite(det)):
         raise StatsError("--detect must be greater than 0 (got %r)." % (detect,))
     omni["power"] = power_summary(groups, detect=det)
-    omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl)
+    omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl, uw)
     omni["icc"] = plate_variance_share(df)
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
     posthoc = PosthocResult(posthoc or {})
@@ -2702,6 +2758,11 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
                for k, v in eff.items() if v is not None and v == v]
     if eff_txt:
         L.append("- **Effect size:** %s\n" % "; ".join(eff_txt))
+    # CT-R3 F2: the Sensitivity line belongs to the comparison (it sat in the Figure section, which
+    # the desktop's ZIP rewrites with its own caption, so the desktop report lost it)
+    sens = sensitivity_text(omni)
+    if sens:
+        L.append("- **Sensitivity:** %s\n" % sens)
     for w in omni.get("warnings", []):
         L.append("- ⚠️ **%s**\n" % w)
     pw = omni.get("pairwise") or []
@@ -2749,9 +2810,6 @@ def write_report(path, metric, summ, rep_summ, omni, posthoc, unit, have_rep, ar
     if ann is None:
         ann = annotation_plan(order, posthoc, o)["note"]
     L.append(fig_txt + ((" " + ann) if ann else ""))
-    sens = (omni.get("sensitivity") or {}).get("text")
-    if sens:
-        L.append("- **Sensitivity:** %s\n" % sens)
     L.append("\n## Design and power\n")
     L.append("- " + power_sentence(omni.get("power"), unit))
     icc = omni.get("icc")
