@@ -566,10 +566,12 @@ spread_check <- function(groups, unit_word = "plates") {
   ratio <- if (sds[ib] > 0) sds[ia] / sds[ib] else if (sds[ia] > 0) Inf else NA_real_
   rtxt <- if (is.finite(ratio)) formatC(ratio, format = "f", digits = 1) else "Inf"
   note <- NULL
-  if (min(lengths(groups)) < SPREAD_MIN_N)
+  # CT-R2 N9: only the samples that can be tested count (a 1-plate sample used to give "With 1 plates")
+  if (min(n) < SPREAD_MIN_N)
     note <- sprintf(paste0("ANOVA and Tukey assume the groups have similar spread. With %d %s per group this cannot ",
                            "be checked reliably (largest/smallest SD ratio here: %s). If you expect the groups to ",
-                           "differ in spread, choose Variances: unequal (Welch)."), min(lengths(groups)), unit_word, rtxt)
+                           "differ in spread, choose Variances: unequal (Welch)."), min(n),
+                    if (min(n) == 1) sub("s$", "", unit_word) else unit_word, rtxt)
   warning <- NULL; p_adj <- NA_real_
   if (!is.na(ratio) && ia != ib) {
     Fv <- if (is.finite(ratio)) ratio^2 else Inf
@@ -597,7 +599,7 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
   have_rep <- !is.null(rm)
   requested <- unit
   if (unit == "auto") unit <- if (have_rep) "replicate" else "plaque"
-  warns <- character(0)
+  warns <- character(0); notes <- character(0)
   # CT-R1 F2: the unit REPORTED is the unit TESTED. plaque_stats.py keeps the label
   # "replicate" when --unit replicate is forced on a file without a plate column although it
   # then tests plaques; here that case is called what it is.
@@ -656,7 +658,9 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       out$p <- if (length(a) >= 2 && length(b) >= 2)
         tryCatch(stats::t.test(a, b)$p.value, error = function(e) NA_real_) else NA_real_
     } else {
-      mw <- mann_whitney(a, b)
+      # CT-R2 N3: rank the plate means rounded to 12 significant digits. Python's pandas means and R's
+      # differ in the last bits, which broke mathematical ties (and so KW / Dunn / MWU p-values).
+      mw <- mann_whitney(signif(a, 12), signif(b, 12))
       out$test <- "Mann–Whitney U"; out$p <- mw$p
       if (!is.na(mw$method))
         out$method_note <- paste0("Mann-Whitney p: ", mw$method, " (exact when the smaller group has 8 or ",
@@ -682,25 +686,37 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
       unequal <- if (equal_var == "no") TRUE else if (equal_var == "yes") FALSE
                  else !is.na(lev_p) && lev_p < 0.05 && min_n >= 2
       if (unequal) {
-        out$test <- "Welch ANOVA"; out$p <- welch_anova_p(gt); out$posthoc <- "Games-Howell"
-        padj <- games_howell_p(groups)
-        warns <- c(warns, if (equal_var == "no")
-          "Variances were set to 'unequal': Welch's ANOVA and Games-Howell (no equal-variance assumption) were used."
-          else sprintf("Levene p = %.3f: group variances differ, so Welch's ANOVA and Games-Howell (no equal-variance assumption) were used.", lev_p))
-      } else {
+        pw_welch <- welch_anova_p(gt)
+        if (is.na(pw_welch)) {
+          # CT-R2 N1: a sample with zero variance leaves Welch's ANOVA undefined; it used to print
+          # "p = n/a" beside significant Games-Howell pairs. Same fallback and note as plaque_stats.py
+          # (CT-R1 SM-F11): classic ANOVA + Tukey, then the spread check below.
+          unequal <- FALSE
+          notes <- c(notes, paste("Welch's ANOVA could not be computed (a sample has zero variance);",
+                                  "classic ANOVA + Tukey HSD were used instead."))
+        } else {
+          out$test <- "Welch ANOVA"; out$p <- pw_welch; out$posthoc <- "Games-Howell"
+          padj <- games_howell_p(groups)
+          # CT-R2 N6: the user's own choice is a note, only Levene's finding is a warning
+          if (equal_var == "no")
+            notes <- c(notes, "Variances were set to 'unequal': Welch's ANOVA and Games-Howell (no equal-variance assumption) were used.")
+          else warns <- c(warns, sprintf("Levene %s: group variances differ, so Welch's ANOVA and Games-Howell (no equal-variance assumption) were used.", p_eq(lev_p)))
+        }
+      }
+      if (!unequal) {
         out$test <- "one-way ANOVA"; out$p <- anova_p(gt); out$posthoc <- "Tukey HSD"
         padj <- tukey_p(groups)
         if (equal_var == "yes" && !is.na(lev_p) && lev_p < 0.05)
-          warns <- c(warns, sprintf("Levene p = %.3f suggests the group variances differ, but Variances was set to 'equal', so the classic ANOVA and Tukey HSD were used.", lev_p))
+          warns <- c(warns, sprintf("Levene %s suggests the group variances differ, but Variances was set to 'equal', so the classic ANOVA and Tukey HSD were used.", p_eq(lev_p)))
         sp <- spread_check(groups, if (unit == "replicate") "plates" else "plaques")
         out$spread_note <- sp$note; out$spread_p_adj <- sp$p_adj
         if (!is.null(sp$warning)) warns <- c(warns, sp$warning)   # advises only; Levene still picks the test
       }
     } else {
       out$test <- "Kruskal–Wallis"; out$posthoc <- "Dunn (Holm-adjusted)"
-      gv <- gt
+      gv <- lapply(gt, signif, digits = 12)           # CT-R2 N3: see Mann-Whitney above
       out$p <- tryCatch(stats::kruskal.test(gv)$p.value, error = function(e) NA_real_)
-      padj <- dunn_holm_p(gt)
+      padj <- dunn_holm_p(gv)
     }
     if (is.nan(out$p)) out$p <- NA_real_
   } else {
@@ -724,6 +740,7 @@ plaque_run_stats <- function(d, unit = "auto", parametric = "auto", equal_var = 
     stringsAsFactors = FALSE)
   out$unit_stats$sem <- out$unit_stats$sd / sqrt(out$unit_stats$n)
   out$warnings <- warns
+  out$notes <- notes
   out
 }
 
@@ -735,6 +752,7 @@ omnibus_text <- function(st) {
   if (!is.na(st$posthoc)) msg <- paste0(msg, "\nPairwise: ", st$posthoc)
   if (!is.null(st$method_note)) msg <- paste0(msg, "\n", st$method_note)
   if (!is.null(st$spread_note)) msg <- paste0(msg, "\n\nNOTE: ", st$spread_note)
+  if (length(st$notes)) msg <- paste0(msg, "\n\nNOTES:\n- ", paste(st$notes, collapse = "\n- "))
   if (length(st$warnings)) msg <- paste0(msg, "\n\nWARNINGS:\n- ", paste(st$warnings, collapse = "\n- "))
   msg
 }
@@ -1721,7 +1739,7 @@ server <- function(input, output, session) {
   # comparisons are drawn, values a log axis cannot show, a key that does not fit
   figure_notes <- reactive({
     d <- dat(); st <- stats(); sm <- style()
-    out <- c(attr(d, "info")$notes, st$warnings)
+    out <- c(attr(d, "info")$notes, st$notes, st$warnings)
     if (isTRUE(input$show_sig)) out <- c(out, brackets()$note)
     ld <- log_dropped()
     if (!is.null(ld)) out <- c(out, paste(ld$caption, "The statistics still use every value; untick 'Log y-axis' to see them all."))
@@ -1846,7 +1864,7 @@ server <- function(input, output, session) {
               pairwise_table())
       section(sprintf("Tested values per sample (unit: %s)", st$unit), st$unit_stats)
       section("Group summary (per plaque)", as.data.frame(summ_group_full()))
-      if (length(st$warnings)) writeLines(paste0("# NOTE: ", st$warnings), con)
+      if (length(c(st$notes, st$warnings))) writeLines(paste0("# NOTE: ", c(st$notes, st$warnings)), con)
     }, error = failed("statistics CSV")))
   output$dl_sumg <- downloadHandler("summary_by_group.csv",
     content = function(f) write_csv(summ_group_full(), f))

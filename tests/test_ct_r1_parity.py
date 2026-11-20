@@ -51,11 +51,16 @@ FIXTURES = {
     "unequalvar_3x8": os.path.join(FX, "ct_r1_parity_unequalvar_3x8.csv"),
     "skewed_3x10": os.path.join(FX, "ct_r1_parity_skewed_3x10.csv"),
     "skewed_2x9": os.path.join(FX, "ct_r1_parity_skewed_2x9.csv"),
+    # CT-R2: a sample with zero variance (Welch undefined -> classic ANOVA + Tukey) and tied plate means
+    # (R and pandas differ in the last bits of a mean; the rank tests must see the same ties)
+    "zerovar": os.path.join(FX, "ct_r2_zerovar.csv"),
+    "ties": os.path.join(FX, "ct_r2_ties.csv"),
 }
 # Expected family under parametric=auto, equal_var=auto (guards against both sides drifting together)
 EXPECT_AUTO = {"example_wide_3x3": "anova", "B_unequal": "welch_anova", "D_two_12v14": "welch_t",
                "E_oneplate_group": "anova", "equalvar_3x8": "anova", "unequalvar_3x8": "welch_anova",
-               "skewed_3x10": "kruskal", "skewed_2x9": "mannwhitney"}
+               "skewed_3x10": "kruskal", "skewed_2x9": "mannwhitney",
+               "zerovar": "anova", "ties": "anova"}
 COMBOS = list(itertools.product(("auto", "parametric", "nonparametric"), ("auto", "yes", "no")))
 
 FAMILY = {"one-way anova": "anova", "welch anova": "welch_anova", "kruskal-wallis": "kruskal",

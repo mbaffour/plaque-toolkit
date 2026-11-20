@@ -467,3 +467,26 @@ chk("F1_variances_select", grepl('id="equal_var"', raw_ui) && grepl("Welch ANOVA
 chk("F6_annotate_select", grepl('id="annotate"', raw_ui) && grepl("all pairs", raw_ui))
 bat <- readLines(file.path("..", "plaque_stats", "Run R App.bat"), warn = FALSE)
 chk("F24_bat_install_line_has_jsonlite", any(grepl("install.packages", bat) & grepl("jsonlite", bat)))
+
+# =================================================================================================
+# CT-R2 (round 2) -- checks named R2_*. Python numbers below were produced by plaque_stats.py.
+# =================================================================================================
+# ---- N1: a sample with zero variance: Welch is undefined -> classic ANOVA + Tukey, as Python -------
+stZ <- plaque_run_stats(tidy(fx("ct_r2_zerovar.csv")))
+chk("R2_N1_zerovar_falls_back_to_anova_tukey", stZ$test == "one-way ANOVA" && stZ$posthoc == "Tukey HSD" &&
+      near(stZ$p, 3.321225932616643e-10, 1e-14) && !is.na(stZ$p), paste(stZ$test, stZ$p))
+chk("R2_N1_zerovar_pairwise_p", near(unname(pw_p(stZ)), c(1.3558213241005035e-07, 2.2230062235450987e-10, 3.0756279285615307e-06), 3e-9),
+    paste(sprintf("%.6g", pw_p(stZ)), collapse = " "))
+chk("R2_N1_zerovar_note_and_spread_warning", any(grepl("^Welch's ANOVA could not be computed \\(a sample has zero variance\\); classic ANOVA \\+ Tukey HSD were used instead\\.$", stZ$notes)) &&
+      any(grepl("SD ratio Inf, adjusted p < 0.001", stZ$warnings)), paste(stZ$notes, stZ$warnings, collapse = " | "))
+stZn <- plaque_run_stats(tidy(fx("ct_r2_zerovar.csv")), equal_var = "no")
+chk("R2_N1_zerovar_forced_unequal_also_falls_back", stZn$test == "one-way ANOVA" && near(stZn$p, stZ$p, 1e-14))
+chk("R2_N1_omnibus_text_has_p", grepl("one-way ANOVA: p < 0.001", omnibus_text(stZ)) && grepl("NOTES:", omnibus_text(stZ)))
+
+# ---- N3: ties: rank the plate means rounded to 12 digits, as the pandas means are -----------------
+stT <- plaque_run_stats(tidy(fx("ct_r2_ties.csv")), parametric = "nonparametric")
+chk("R2_N3_ties_kruskal_p", stT$test == "Kruskal–Wallis" && near(stT$p, 0.0020555124291379706, 1e-12), sprintf("%.12g", stT$p))
+chk("R2_N3_ties_dunn_p", near(unname(pw_p(stT)), c(0.001695575267088922, 0.03978406477923671, 0.26296416821519575), 1e-9),
+    paste(sprintf("%.10g", pw_p(stT)), collapse = " "))
+stTp <- plaque_run_stats(tidy(fx("ct_r2_ties.csv")))
+chk("R2_N3_parametric_p_unchanged", near(stTp$p, 0.000721407841790418, 1e-12), sprintf("%.12g", stTp$p))
