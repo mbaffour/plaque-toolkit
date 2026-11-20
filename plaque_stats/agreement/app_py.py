@@ -20,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from shiny import App, ui, render, reactive, req
+from shiny.types import SilentException
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -318,8 +319,17 @@ def stats_rows(s, u):
 
 def labels(opts):
     """Figure-safe text: a `$` or `\\` in a label or title never raises a mathtext error (F22)."""
+    import re
     st = _lk.safe_text if _lk is not None else (lambda x: x)
-    return {k: st(opts[k]) if opts.get(k) else opts.get(k) for k in ("label_tool", "label_manual", "title")}
+
+    def one(x):
+        x = st(x)
+        # an odd `$` would pair with one in the OTHER label once the engine joins them into the
+        # Bland-Altman axis label ("tool - reference"): escape it so each label prints as typed
+        if (x.count("$") - x.count(r"\$")) % 2:
+            x = re.sub(r"(?<!\\)\$", r"\\$", x)
+        return x
+    return {k: one(opts[k]) if opts.get(k) else opts.get(k) for k in ("label_tool", "label_manual", "title")}
 
 
 def zip_bytes(df, tool, manual, opts, src_name=None, src_bytes=None):
@@ -538,8 +548,10 @@ def server(input, output, session):
                 return {"error": "the file needs two numeric columns (found: %s)."
                                  % (", ".join(numeric_cols(df)) or "none")}
             return {"wait": True}
-        except (ValueError, ZeroDivisionError, SystemExit) as e:
-            return {"error": str(e)}
+        except SilentException:
+            raise
+        except (Exception, SystemExit) as e:                      # noqa: BLE001 -- never a dead session
+            return {"error": str(e) or e.__class__.__name__}
 
     def stats():
         r = result()

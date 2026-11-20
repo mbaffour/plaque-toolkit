@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from shiny import App, ui, render, reactive, req
+from shiny.types import SilentException
 
 import plaque_stats as ps          # the shared engine (same code as the CLI)
 import legend_key                  # the figure's legend key (image + text starter), shared helper
@@ -131,7 +132,9 @@ watch the p-value flip from “significant” to “not” when you count plates
 # a browser (tests/test_ct_r1_web.py) and the reactive code below only wires inputs to it.
 NONE = "(none)"
 NO_REPLICATE = "__no_replicate__"     # CT-R1 F5: a name no column has, so "(none)" really is none
-STAT_ERRORS = (ps.StatsError, ValueError, KeyError, TypeError, SystemExit)
+# every refusal or failure of an analysis becomes a message, never a dead session (CT-R1 F1);
+# Shiny's own SilentException (from req) is re-raised before these are caught
+STAT_ERRORS = (Exception, SystemExit)
 
 
 class Stale(Exception):
@@ -307,6 +310,17 @@ def compute(df, sel, info=None):
     rep = replicate_arg(sel["replicate"])
     sg = sel.get("subgroup")
     grouped = bool(sg and sg != NONE)
+    mcol = ps._resolve_col([str(c) for c in df.columns], "metric")
+    if not lay["long"] and mcol is not None:
+        # CT-R1 F2: a metric column with several levels next to a WIDE value column would pool
+        # different measurements (diameter + area ...) into one sample
+        mets = group_levels(df, mcol)
+        if len(mets) > 1:
+            raise ps.StatsError(
+                "this file has a %r column with %d metrics (%s) but no 'value' column, so %r would "
+                "pool them into one sample. Rename the number column to 'value' (LONG layout: then "
+                "pick the metric), or keep one metric per file." % (mcol, len(mets), ", ".join(mets),
+                                                                   sel["value"]))
     if not sel.get("order"):
         raise ps.StatsError("No sample is selected under “Samples (in this order)”. Pick at least one.")
     if grouped:
@@ -745,6 +759,8 @@ def server(input, output, session):
             return {"ok": compute(df, sel, info.get()), "sel": sel}
         except Stale:
             return {"wait": True}
+        except SilentException:
+            raise
         except STAT_ERRORS as e:
             return {"error": message_of(e)}
 
@@ -788,6 +804,8 @@ def server(input, output, session):
     def fig_preview():
         try:
             png = figure_png()["png"]
+        except SilentException:
+            raise
         except STAT_ERRORS as e:                          # a refusal made while drawing
             return ui.div("Cannot draw the figure: " + message_of(e), class_="alert alert-warning")
         src = "data:image/png;base64," + base64.b64encode(png).decode("ascii")

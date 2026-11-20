@@ -312,6 +312,14 @@ def test_a_f2_uppercase_long_file_is_long_and_not_pooled(tmp_path):
             ps.normalize(df, "GROUP", "VALUE", "REPLICATE", "metric")
 
 
+def test_a_f2_metric_column_without_value_is_refused_not_pooled(tmp_path):
+    w = _wide()
+    long_ = w.melt(id_vars=["group", "replicate"], var_name="metric", value_name="measurement")
+    df, inf = _read(tmp_path, "meas.csv", long_)
+    with pytest.raises(ps.StatsError, match="would pool them"):
+        A.compute(df, _sel(df), inf)
+
+
 def test_a_f3_per_plate_without_plates_is_refused(tmp_path):
     df, inf = _read(tmp_path, "noplate.csv", _wide().drop(columns=["replicate"]))
     with pytest.raises(ps.StatsError) as ei:
@@ -453,8 +461,9 @@ def test_a_f23_zip_matches_screen(tmp_path, grouped):
     c = _json.loads(txt)
     assert c["data"] == "mydata.csv" and c["groups"] == a["order"]
     rep = [n for n in names if "report" in n and n.endswith(".md")][0]
-    head = z.read(rep).decode().splitlines()[:3]
-    assert any("Plaque Toolkit" in h_ or "plaque_stats v" in h_ for h_ in head)
+    head = "\n".join(z.read(rep).decode().splitlines()[:4])
+    import re as _re
+    assert _re.search(r"20\d\d-\d\d-\d\d \d\d:\d\d", head) and "Plaque Toolkit" in head, head
     if grouped:
         assert "grouped_table_diameter_mm.png" in names and "control_comparisons_table_diameter_mm.png" in names
     else:
@@ -558,6 +567,12 @@ def test_b_f16_f22_f23_zip_is_the_screen(tmp_path):
     fig = B.make_fig(s, "both", "mm", sf["label_tool"], sf["label_manual"], sf["title"])
     assert len(B.png_bytes(fig)) > 1000
     plt.close(fig)
+    # one `$` in each label: the joined Bland-Altman axis label must not become mathtext
+    sf = B.labels({"label_tool": "Tool $x", "label_manual": "Ref $y", "title": None})
+    fig = B.make_fig(s, "bland", "mm", sf["label_tool"], sf["label_manual"], None)
+    B.png_bytes(fig)
+    assert fig.axes[0].yaxis.label.get_text() == "Tool \\$x - Ref \\$y (mm)"
+    plt.close(fig)
 
 
 def test_b_browser_preview_equals_download_area_and_failed_upload(browser_page, tmp_path):
@@ -572,9 +587,12 @@ def test_b_browser_preview_equals_download_area_and_failed_upload(browser_page, 
     d = pd.DataFrame({"plaque_id": range(1, 21), "area_tool_mm2": np.linspace(1, 3, 20) + 0.01 * np.sin(range(20)),
                       "area_fiji_mm2": np.linspace(1.1, 3.05, 20)})
     page.set_input_files("#file", _write(tmp_path, "areas.csv", d)); _idle(page, 3)
-    assert page.input_value("#unit") == "mm²" and page.input_value("#what") == "plaque area"
+    # the label update is a second server round trip: wait for it (a loaded machine is slow)
+    page.wait_for_function("() => document.getElementById('unit').value === 'mm²'", timeout=30000)
+    assert page.input_value("#what") == "plaque area"
     page.set_checked("#convert_area", True); _idle(page, 2)
-    assert page.input_value("#unit") == "mm" and page.is_disabled("#unit")
+    page.wait_for_function("() => document.getElementById('unit').value === 'mm' && "
+                           "document.getElementById('unit').disabled", timeout=30000)
     page.set_input_files("#file", _write(tmp_path, "bad.csv", text="only\n1\n2\n")); _idle(page, 2)
     assert "Could not use bad.csv" in page.inner_text("#messages")
     assert page.query_selector("#fig img") is None
