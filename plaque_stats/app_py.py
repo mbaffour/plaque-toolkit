@@ -218,16 +218,29 @@ def message_of(e, path=None, name=None):
     return app_words(m)
 
 
+_PANDAS_TEXT = re.compile(r"tokenizing|C error|Expected \d+ fields|ParserError|codec can't|UnicodeDecodeError",
+                          re.I)
+
+
 def read_upload(path, name=None):
     """(DataFrame, parse info) with the engine's reader: delimiter sniffed (comma, semicolon,
     tab), decimal commas, labels kept as typed; a file that parses to ONE column is refused
     (CT-R1 F4). Raises StatsError with a plain message."""
+    name = name or os.path.basename(str(path))
+    not_csv = ("could not read %s: this does not look like a CSV table (is it an Excel or binary file "
+               "saved with a .csv name?)" % name)
     try:
         return ps.read_table(path, return_info=True)
-    except ps.StatsError:
+    except ps.StatsError as e:
+        # the engine's own plain message is shown as it is, unless it carries raw pandas text
+        if _PANDAS_TEXT.search(getattr(e, "message", "") or str(e)):
+            raise ps.StatsError(not_csv)
         raise
-    except Exception as e:                                  # noqa: BLE001 -- e.g. a broken .xlsx
-        raise ps.StatsError("could not read %s: %s" % (name or os.path.basename(str(path)), e))
+    except Exception:                                       # noqa: BLE001 -- never raw pandas text
+        # CT-R2 N12: an Excel / binary file saved as .csv used to show "Error tokenizing data..."
+        if str(name).lower().endswith((".xlsx", ".xls")):
+            raise ps.StatsError("could not read %s as a spreadsheet (is it really an Excel file?)." % name)
+        raise ps.StatsError(not_csv)
 
 
 def layout_of(df):
@@ -249,19 +262,22 @@ def _pick(cands, pool, default=None):
     return default
 
 
-def value_choices(df):
-    """WIDE: the numeric columns that are not labels; LONG: the metric names."""
+def value_choices(df, exclude=()):
+    """WIDE: the numeric columns that are not labels; LONG: the metric names. CT-R2 N14: the
+    columns chosen as Group or Replicate are never offered as the value (a numeric sample
+    name or plate number is a label here, not a measurement)."""
     lay = layout_of(df)
     if lay["long"]:
         return lay["metrics"]
-    return [str(c) for c in ps.numeric_columns(df)]
+    skip = {str(x) for x in exclude if x}
+    return [str(c) for c in ps.numeric_columns(df) if str(c) not in skip]
 
 
 def picker_defaults(df):
     cols = [str(c) for c in df.columns]
-    vals = value_choices(df)
     group = _pick(["group", "sample", "phage", "strain", "condition"], cols, cols[0] if cols else None)
     rep = _pick(["replicate", "plate"], cols, NONE)
+    vals = value_choices(df, (group, rep))
     if layout_of(df)["long"]:
         value = vals[0] if vals else None
     else:
@@ -293,7 +309,12 @@ def check_selection(df, sel):
                             "measurement column such as diameter_mm." % ", ".join(cols))
     if not sel.get("group") or sel["group"] not in cols:
         raise Stale()
-    if sel.get("value") not in value_choices(df):
+    skip = (sel["group"], sel.get("replicate"))
+    if not value_choices(df, skip):
+        raise ps.StatsError("every numeric column is also chosen as Group or Replicate (columns: %s), "
+                            "so there is no measurement left to analyse. Pick other Group / Replicate "
+                            "columns, or add a measurement column such as diameter_mm." % ", ".join(cols))
+    if sel.get("value") not in value_choices(df, skip):
         raise Stale()
     for k in ("replicate", "subgroup"):
         v = sel.get(k)
@@ -317,6 +338,14 @@ def palette_choice(name, custom, needed):
     clean_palette (hex with or without #, commas, semicolons or spaces) and a bad entry is
     named in a StatsError (CT-R1 F13). `hint` says when the custom box is being ignored."""
     custom = (custom or "").strip()
+    if custom and not [x for x in re.split(r"[,;\s]+", custom) if x]:
+        # CT-R2 N10: ",,," holds no colour: it is "no custom palette", and it must not stand in
+        # for one (the engine's cleaner returns its default list, which switched coloured violins on)
+        note = ("The custom palette box holds no colours (only separators), so it is ignored; "
+                "type hex codes such as #0072B2, #D55E00.")
+        if name and name in ps.PALETTES:
+            return list(ps.PALETTES[name]), ""
+        return None, note
     if name and name in ps.PALETTES:
         hint = ("The custom palette is not used while a colour theme is chosen; set the theme "
                 "to “(custom below)” to use it." if custom else "")
@@ -324,6 +353,12 @@ def palette_choice(name, custom, needed):
     if custom:
         return ps.clean_palette(custom, needed=needed), ""
     return None, ""
+
+
+def literal_text(x):
+    """CT-R2 N7: a Title / axis label is drawn exactly as typed: every `$` is escaped, so a
+    `$...$` pair is never turned into mathtext (and a lone `$` never raises)."""
+    return x if x is None else re.sub(r"\$", r"\\$", str(x))
 
 
 def build_opts(sel, n_colours):
@@ -337,7 +372,7 @@ def build_opts(sel, n_colours):
                 log_y_drop_nonpositive=bool(sel["log_y"] and sel["log_drop"]),
                 width=float(sel["width"]), height=float(sel["height"]),
                 legend=bool(sel["place_key"]),
-                title=sel["title"] or None, ylabel=sel["ylabel"] or None)
+                title=literal_text(sel["title"]) or None, ylabel=literal_text(sel["ylabel"]) or None)
     pal, hint = palette_choice(sel["palette_name"], sel["palette_custom"], n_colours)
     if pal is not None:
         opts["palette"] = pal
@@ -427,10 +462,13 @@ def compute(df, sel, info=None):
         opts, hint = build_opts(sel, len(order))
         opts["order"] = order
         ctl = sel.get("compare")
+        if ctl and ctl != "all" and ctl not in order:
+            # CT-R2 N14: a control that is no longer among the samples is not an error: back to all
+            # pairs, and say so
+            notes.append("Compare to was “%s”, which is not among the selected samples, so all pairs "
+                         "are compared." % ctl)
+            ctl = None
         opts["posthoc"], opts["control"] = ("dunnett", ctl) if (ctl and ctl != "all") else ("auto", None)
-        if opts["control"] is not None and opts["control"] not in order:
-            raise ps.StatsError("The control %r of “Compare to” is not among the selected samples."
-                                % opts["control"])
     o = ps._plot_opts(opts)                       # centre / error / palette refusals, before any test
     _mask, log_note = ps._log_guard(d["value"].values, o)
     if log_note:
@@ -480,6 +518,36 @@ def fig_bytes(fig, fmt, dpi=300):
 def file_base(a):
     """Figure file name stem, the same in single downloads and in the ZIP (CT-R1 F23)."""
     return ("grouped_%s" if a["mode"] == "grouped" else "violin_%s") % ps._safe(a["metric"])
+
+
+def figure_size_in(fig, png, dpi=300):
+    """(width, height) in inches of the figure as saved: the engine's final size when it exposes
+    one (fig.final_size_in / fig.figure_size_in_final), else the PNG's pixels / dpi (CT-R2 N6)."""
+    for name in ("final_size_in", "figure_size_in_final"):
+        v = getattr(fig, name, None)
+        try:
+            v = v() if callable(v) else v
+            if v is not None and len(v) == 2 and float(v[0]) > 0 and float(v[1]) > 0:
+                return float(v[0]), float(v[1])
+        except Exception:                                   # noqa: BLE001 -- fall through
+            pass
+    import struct
+    w, h = struct.unpack(">II", png[16:24])
+    return w / float(dpi), h / float(dpi)
+
+
+def size_line(size, sel):
+    """CT-R2 N6: the size the figure really has, and why when it is not the slider size."""
+    w, h = size
+    sw, sh = float(sel["width"]), float(sel["height"])
+    line = "figure: %.1f x %.1f in" % (w, h)
+    why = []
+    if h > sh + 0.15:
+        why.append("the key is below the plot, so it is taller than the Height slider" if sel["place_key"]
+                   else "it is taller than the Height slider (long labels or notes need room)")
+    if w > sw + 0.15:
+        why.append("it is wider than the Width slider (long labels need room)")
+    return line + (": " + "; ".join(why) if why else "")
 
 
 def status_line(a):
@@ -532,9 +600,12 @@ def table_image(df, base, title, formats=("png", "svg", "pdf")):
         plt.close(fig)
 
 
-def report_words(txt, equal_var):
+def report_words(txt, equal_var, src_name=None):
     """CT-R2 N5/N13: a text file of the engine's output in the app's words, with the same
-    'set Variances' advice the screen gives (a line at a time)."""
+    'set Variances' advice the screen gives (a line at a time). CT-R2 N14: the report names the
+    uploaded file where the engine can only say "in-memory table"."""
+    if src_name:
+        txt = txt.replace("in-memory table", src_name)
     out = []
     for ln in txt.split("\n"):
         out.append(with_advice([ln], equal_var)[0] if SPREAD_ADVICE in ln else app_words(ln))
@@ -579,7 +650,7 @@ def zip_bytes(df, a, sel, src_name=None, src_bytes=None):
             for fn in sorted(os.listdir(outdir)):
                 if fn.endswith((".md", ".txt")):          # the report in the app's words (N5/N13)
                     with open(os.path.join(outdir, fn), encoding="utf-8") as fh:
-                        z.writestr(fn, report_words(fh.read(), sel.get("equal_var")))
+                        z.writestr(fn, report_words(fh.read(), sel.get("equal_var"), src_name))
                 else:
                     z.write(os.path.join(outdir, fn), fn)
             if src_bytes is not None:                 # the input data itself (F23)
@@ -622,6 +693,16 @@ a.shiny-download-link.ct-off { pointer-events: none; opacity: .45; }
 """
 JS = """
 /* CT-R1 F24: downloads are disabled until there is an analysis to download */
+/* CT-R2 N14: "Load example data" empties the file box (it kept the old file's name) */
+Shiny.addCustomMessageHandler('ct_clear_file', function(m) {
+  var f = document.getElementById(m.id); if (!f) return;
+  f.value = '';
+  var g = f.closest('.input-group'); var t = g && g.querySelector('input[type=text]'); if (t) t.value = '';
+  var pr = document.getElementById(m.id + '_progress');
+  if (pr) { pr.style.visibility = 'hidden'; var b = pr.querySelector('.progress-bar');
+            if (b) { b.style.width = '0%'; b.textContent = ''; } }
+  Shiny.setInputValue(m.id, null);
+});
 Shiny.addCustomMessageHandler('ct_downloads', function(ok) {
   document.querySelectorAll('a.shiny-download-link').forEach(function(a) {
     a.classList.toggle('ct-off', !ok); a.setAttribute('aria-disabled', ok ? 'false' : 'true');
@@ -637,6 +718,8 @@ app_ui = ui.page_sidebar(
         ui.input_action_button("load_example", "Load example data", class_="btn-sm"),
         ui.hr(),
         ui.output_ui("col_pickers"),
+        ui.output_ui("value_picker"),             # CT-R2 N14: follows Group / Replicate
+        ui.output_ui("subgroup_picker"),
         ui.output_ui("order_picker"),
         ui.output_ui("control_picker"),
         ui.hr(),
@@ -690,6 +773,7 @@ app_ui = ui.page_sidebar(
     ui.navset_tab(
         ui.nav_panel("Plot",
                      ui.output_ui("fig_preview"),
+                     ui.div(ui.output_text("size_text"), class_="ct-status", id="size_line"),
                      ui.div(ui.output_text("status"), class_="ct-status"),
                      ui.div(ui.download_button("dl_png", "PNG"),
                             ui.download_button("dl_svg", "SVG (editable)"),
@@ -732,9 +816,11 @@ def server(input, output, session):
     info = reactive.value(None)           # its parse info
     load_error = reactive.value("")       # CT-R1 F19: a failed upload stays visible
     source = reactive.value((None, None))  # (file name, bytes) for the ZIP
+    compare_note = reactive.value("")     # CT-R2 N14: "Compare to" fell back to all pairs
+    seen = {}                             # the frame the value picker last started from
 
     def _set_data(df, inf, name, data):
-        raw.set(df); info.set(inf); source.set((name, data)); load_error.set("")
+        raw.set(df); info.set(inf); source.set((name, data)); load_error.set(""); compare_note.set("")
 
     @reactive.effect
     @reactive.event(input.file)
@@ -755,7 +841,8 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.load_example)
-    def _load_example():
+    async def _load_example():
+        await session.send_custom_message("ct_clear_file", {"id": "file"})
         try:
             p = _example_wide_path()
             df, inf = read_upload(p)
@@ -780,20 +867,38 @@ def server(input, output, session):
             return ui.p("Upload a file or click “Load example data”.")
         cols = [str(c) for c in df.columns]
         dflt = picker_defaults(df)
+        return ui.TagList(
+            ui.input_select("group", "Group column", {c: c for c in cols}, selected=dflt["group"]),
+            ui.input_select("replicate", "Replicate (plate) column",
+                            {NONE: NONE, **{c: c for c in cols}}, selected=dflt["replicate"]))
+
+    @render.ui
+    def value_picker():
+        # CT-R2 N14: a separate output so that choosing Group / Replicate refreshes the value
+        # choices without rebuilding the Group and Replicate selects themselves
+        df = raw.get()
+        if df is None:
+            return ui.HTML("")
         lay = layout_of(df)
-        vals = value_choices(df)
-        items = [ui.input_select("group", "Group column", {c: c for c in cols}, selected=dflt["group"]),
-                 ui.input_select("replicate", "Replicate (plate) column",
-                                 {NONE: NONE, **{c: c for c in cols}}, selected=dflt["replicate"])]
+        vals = value_choices(df, (_in("group"), _in("replicate")))
+        with reactive.isolate():
+            cur = _in("value") if seen.get("df") is df else None   # a new file starts from the defaults
+        seen["df"] = df
+        dflt = picker_defaults(df)["value"]
+        pick = cur if cur in vals else (dflt if dflt in vals else (vals[0] if vals else None))
         if lay["long"]:
-            items.append(ui.input_select("value", "Metric to plot (LONG file: column %s)" % lay["metric_col"],
-                                         {m: m for m in vals}, selected=dflt["value"]))
-        else:
-            items.append(ui.input_select("value", "Value column", {c: c for c in vals},
-                                         selected=dflt["value"]))
-        items.append(ui.input_select("subgroup", "Subgroup — 2nd factor (optional, e.g. host)",
-                                     {NONE: NONE, **{c: c for c in cols}}, selected=NONE))
-        return ui.TagList(*items)
+            return ui.input_select("value", "Metric to plot (LONG file: column %s)" % lay["metric_col"],
+                                   {m: m for m in vals}, selected=pick)
+        return ui.input_select("value", "Value column", {c: c for c in vals}, selected=pick)
+
+    @render.ui
+    def subgroup_picker():
+        df = raw.get()
+        if df is None:
+            return ui.HTML("")
+        cols = [str(c) for c in df.columns]
+        return ui.input_select("subgroup", "Subgroup — 2nd factor (optional, e.g. host)",
+                               {NONE: NONE, **{c: c for c in cols}}, selected=NONE)
 
     @render.ui
     def order_picker():
@@ -812,10 +917,35 @@ def server(input, output, session):
         df = raw.get()
         g = _in("group")
         lv = group_levels(df, g) if (df is not None and g) else []
+        picked = _in("order")                       # CT-R2 N14: only the samples still selected
+        if picked is not None:
+            lv = [x for x in lv if x in picked]
         with reactive.isolate():
             cur = _in("compare", "all")
         ch = {"all": "all pairs", **{x: "each sample vs %s (Dunnett)" % x for x in lv}}
         return ui.input_select("compare", "Compare to", ch, selected=cur if cur in ch else "all")
+
+    @reactive.effect
+    def _compare_fallback():
+        """CT-R2 N14: removing the Compare-to control from the samples puts Compare to back on
+        'all pairs' and says so (the note stays until the user picks another control)."""
+        order = _in("order")
+        if order is None:
+            return
+        with reactive.isolate():
+            cur = _in("compare", "all")
+        df, g = raw.get(), _in("group")
+        levels = group_levels(df, g) if (df is not None and g) else []
+        if cur and cur != "all" and cur in levels and cur not in order:   # removed by the user
+            compare_note.set("Compare to was “%s”, which is no longer among the samples, so it is back "
+                             "on “all pairs”." % cur)
+            ui.update_select("compare", selected="all")
+
+    @reactive.effect
+    @reactive.event(input.compare)
+    def _compare_changed():
+        if input.compare() != "all":
+            compare_note.set("")
 
     @render.ui
     def control_picker():
@@ -875,8 +1005,9 @@ def server(input, output, session):
         a = analysis()
         fig = make_figure(a)
         try:
-            return {"png": fig_bytes(fig, "png"), "key": legend_key.from_figure(fig),
-                    "note": getattr(fig, "annotation_note", "")}
+            png = fig_bytes(fig, "png")
+            return {"png": png, "key": legend_key.from_figure(fig),
+                    "note": getattr(fig, "annotation_note", ""), "size": figure_size_in(fig, png)}
         finally:
             plt.close(fig)
 
@@ -891,6 +1022,8 @@ def server(input, output, session):
         out = []
         if load_error.get():
             out.append(ui.div(load_error.get(), class_="alert alert-danger ct-msg"))
+        if compare_note.get():
+            out.append(ui.div(compare_note.get(), class_="alert alert-info ct-msg small"))
         if "error" in r:
             out.append(ui.div("Cannot analyse with these settings: " + r["error"],
                               class_="alert alert-warning ct-msg"))
@@ -910,6 +1043,12 @@ def server(input, output, session):
             return ui.div("Cannot draw the figure: " + message_of(e), class_="alert alert-warning")
         src = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
         return ui.img(src=src, alt="figure preview (the same image as the PNG download)")
+
+    @render.text
+    def size_text():
+        r = result()
+        req("ok" in r)
+        return size_line(figure_png()["size"], r["sel"])
 
     @render.text
     def status():

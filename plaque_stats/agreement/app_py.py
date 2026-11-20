@@ -590,6 +590,16 @@ Shiny.addCustomMessageHandler('ct_downloads', function(ok) {
     a.classList.toggle('ct-off', !ok); a.setAttribute('aria-disabled', ok ? 'false' : 'true');
   });
 });
+/* CT-R2 N14: "Load example data" empties the file box (it kept the old file's name) */
+Shiny.addCustomMessageHandler('ct_clear_file', function(m) {
+  var f = document.getElementById(m.id); if (!f) return;
+  f.value = '';
+  var g = f.closest('.input-group'); var t = g && g.querySelector('input[type=text]'); if (t) t.value = '';
+  var pr = document.getElementById(m.id + '_progress');
+  if (pr) { pr.style.visibility = 'hidden'; var b = pr.querySelector('.progress-bar');
+            if (b) { b.style.width = '0%'; b.textContent = ''; } }
+  Shiny.setInputValue(m.id, null);
+});
 Shiny.addCustomMessageHandler('ct_disable', function(m) {
   var e = document.getElementById(m.id); if (e) { e.disabled = !!m.off; }
 });
@@ -688,7 +698,8 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.load_example)
-    def _load_example():
+    async def _load_example():
+        await session.send_custom_message("ct_clear_file", {"id": "file"})
         p = os.path.join(HERE, "example_agreement.csv")
         if not os.path.exists(p):
             ag.make_example(p)

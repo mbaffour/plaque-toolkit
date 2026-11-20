@@ -238,7 +238,7 @@ def _with_host(df, hosts=("a", "b")):
     return g
 
 
-def _app_texts(df, sel):
+def _app_texts(df, sel, with_zip=True):
     """Everything the app shows or writes for one analysis that came from the engine."""
     a = A.compute(df, sel)
     out = {"sentence": a["sentence"], "status": A.status_line(a), "summary": "\n".join(A.summary_lines(a))}
@@ -251,10 +251,11 @@ def _app_texts(df, sel):
                 out["key zip " + n] = kz.read(n).decode("utf-8")
     finally:
         R1.plt.close(fig)
-    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, a, sel, "x.csv", b"")))
-    for n in z.namelist():
-        if n.endswith((".md", ".txt", ".csv", ".json")):
-            out["zip " + n] = z.read(n).decode("utf-8", "replace")
+    if with_zip:
+        z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, a, sel, "x.csv", b"")))
+        for n in z.namelist():
+            if n.endswith((".md", ".txt", ".csv", ".json")):
+                out["zip " + n] = z.read(n).decode("utf-8", "replace")
     return out
 
 
@@ -275,7 +276,7 @@ def test_n5_no_cli_option_in_anything_the_app_shows_or_writes(name):
     for tag, d in (("wide", df), ("no plates", df.drop(columns=["replicate"]))):
         sel = R1._sel(d, **_SCENARIOS[name])
         try:
-            texts = _app_texts(d, sel)
+            texts = _app_texts(d, sel, with_zip=(tag == "wide" or name == "default"))   # the ZIP is slow
         except (ps.StatsError, SystemExit) as e:
             texts = {"message": A.message_of(e)}
         for where, t in texts.items():
@@ -349,3 +350,148 @@ def test_n11_subgroup_that_cannot_work_is_refused_in_plain_words():
             A.compute(one, R1._sel(one, **kw))
         except ps.StatsError as e:
             assert "comparisons tested" not in str(e) and "--" not in A.message_of(e)
+
+
+# =========================================================================== N6 size line (A)
+def test_n6_size_line_states_the_real_size_and_why():
+    sel = R1._sel(_wide(), width=9, height=5.4)
+    assert A.size_line((9.0, 7.4), sel) == \
+        "figure: 9.0 x 7.4 in: the key is below the plot, so it is taller than the Height slider"
+    assert A.size_line((9.0, 5.4), sel) == "figure: 9.0 x 5.4 in"
+    assert A.size_line((9.0, 5.5), sel) == "figure: 9.0 x 5.5 in"                   # inside the tolerance
+    assert "wider than the Width slider" in A.size_line((10.2, 5.4), sel)
+    assert "the key is below" not in A.size_line((9.0, 7.4), dict(sel, place_key=False))
+
+
+def test_n6_figure_size_uses_the_engines_final_size_else_the_png():
+    df = _wide()
+    a = A.compute(df, R1._sel(df))
+    fig = A.make_figure(a)
+    png = A.fig_bytes(fig, "png")
+    from PIL import Image
+    w_px, h_px = Image.open(io.BytesIO(png)).size
+    if not any(hasattr(fig, n) for n in ("final_size_in", "figure_size_in_final")):     # before the engine merge
+        assert A.figure_size_in(fig, png) == (pytest.approx(w_px / 300.0), pytest.approx(h_px / 300.0))
+    fig.final_size_in = (9.0, 7.4)                                  # what the engine will expose
+    assert A.figure_size_in(fig, png) == (9.0, 7.4)
+    del fig.final_size_in
+    fig.figure_size_in_final = (8.0, 6.0)                           # the other name it may use
+    assert A.figure_size_in(fig, png) == (8.0, 6.0)
+    R1.plt.close(fig)
+
+
+# =========================================================================== N7 literal labels (A)
+def test_n7_dollar_and_backslash_in_labels_are_drawn_literally():
+    import matplotlib.text as mtext
+    df = _wide()
+    title, yl = r"Run \1 $5 and $x$", r"Size $\mu$m \alpha"
+    assert A.literal_text(title) == r"Run \1 \$5 and \$x\$" and A.literal_text(None) is None
+    a = A.compute(df, R1._sel(df, title=title, ylabel=yl))
+    fig = A.make_figure(a)
+    found = {}
+    for t in fig.findobj(mtext.Text):
+        s_, math = t._preprocess_math(t.get_text())
+        if "Run" in s_ or "Size" in s_:
+            found[s_.split()[0]] = (s_, math)
+    assert found["Run"] == (title, False) and found["Size"] == (yl, False)       # shown as typed, not maths
+    assert len(A.fig_bytes(fig, "png")) > 1000
+    R1.plt.close(fig)
+
+
+# =========================================================================== N10 palette (A)
+def test_n10_empty_custom_palette_is_no_palette_and_never_colours_the_violins():
+    pal, hint = A.palette_choice("", ",,,", 3)
+    assert pal is None and "no colours" in hint
+    pal, hint = A.palette_choice("", " ; , ", 3)
+    assert pal is None and hint
+    df = _wide()
+    a = A.compute(df, R1._sel(df, palette_custom=",,,"))
+    assert a["opts"]["violin_fill"] == "auto" and list(a["opts"]["palette"]) == list(ps.DEFAULTS["palette"])
+    assert "no colours" in "\n".join(A.summary_lines(a))
+    # a real custom palette still switches the violins to sample colours; a named theme ignores ",,,"
+    b = A.compute(df, R1._sel(df, palette_custom="#0072B2,#D55E00,#009E73"))
+    assert b["opts"]["violin_fill"] == "group"
+    assert A.palette_choice("okabe", ",,,", 3)[1] == ""
+
+
+# =========================================================================== N12 (A)
+def test_n12_a_non_csv_saved_as_csv_never_shows_pandas_text(tmp_path):
+    xl = tmp_path / "renamed.csv"
+    _wide().to_excel(str(tmp_path / "real.xlsx"), index=False)
+    xl.write_bytes((tmp_path / "real.xlsx").read_bytes())
+    for p in (xl,):
+        with pytest.raises(ps.StatsError) as e:
+            A.read_upload(str(p), p.name)
+        msg = A.message_of(e.value)
+        assert not re.search(r"tokenizing|C error|Expected \d+ fields|codec|utf-8", msg, re.I), msg
+        assert p.name in msg or "CSV" in msg or "Excel" in msg
+    # the fallback itself (what the app says when the engine raises a pandas error)
+    import unittest.mock as um
+    with um.patch.object(ps, "read_table", side_effect=RuntimeError("Error tokenizing data. C error: x")):
+        with pytest.raises(ps.StatsError, match=r"does not look like a CSV table \(is it an Excel or binary file saved with a \.csv name\?\)"):
+            A.read_upload("whatever.csv", "whatever.csv")
+
+
+# =========================================================================== N14 (A)
+def test_n14_group_and_replicate_are_never_value_choices():
+    df = _wide().assign(group=lambda d: d["group"].map({"T4": 1, "T7": 2, "lambda": 3}),
+                        replicate=lambda d: d["replicate"].str.replace("plate", "").astype(int))
+    assert set(A.value_choices(df)) == {"group", "replicate", "diameter_mm", "area_mm2"}      # all numeric
+    assert A.value_choices(df, ("group", "replicate")) == ["diameter_mm", "area_mm2"]
+    d = A.picker_defaults(df)
+    assert d["value"] == "diameter_mm" and d["group"] == "group"
+    a = A.compute(df, R1._sel(df))
+    assert a["order"] == ["1", "2", "3"]
+    with pytest.raises(A.Stale):                                        # the value is still the group column
+        A.compute(df, R1._sel(df, value="group"))
+    only = pd.DataFrame({"g": [1, 1, 2, 2], "p": [1, 2, 1, 2]})
+    with pytest.raises(ps.StatsError, match="every numeric column is also chosen as Group or Replicate"):
+        A.compute(only, R1._sel(only, group="g", replicate="p", value="p"))
+
+
+def test_n14_removed_control_falls_back_to_all_pairs_and_says_so():
+    df = _wide()
+    a = A.compute(df, R1._sel(df, compare="T4", order=["T7", "lambda"]))     # T4 removed from the samples
+    assert a["opts"]["posthoc"] == "auto" and a["opts"]["control"] is None
+    assert any("Compare to was “T4”" in n and "all pairs" in n for n in a["notes"])
+    b = A.compute(df, R1._sel(df, compare="T4"))
+    assert b["opts"]["posthoc"] == "dunnett" and b["opts"]["control"] == "T4"
+
+
+def test_n14_zip_report_names_the_uploaded_file(tmp_path):
+    df = _wide()
+    sel = R1._sel(df)
+    a = A.compute(df, sel)
+    z = zipfile.ZipFile(io.BytesIO(A.zip_bytes(df, a, sel, "example_data_wide.csv", b"raw")))
+    rep = z.read([n for n in z.namelist() if n.startswith("report_")][0]).decode()
+    assert "example_data_wide.csv, 108 rows" in rep and "in-memory" not in rep
+    cfg = json.loads(z.read([n for n in z.namelist() if n.startswith("run_config")][0]))
+    assert cfg["data"] == "example_data_wide.csv"
+
+
+def test_n14_browser_example_resets_file_box_and_value_choices_skip_labels(browser_page, tmp_path):
+    page, srv = browser_page(os.path.join(PS_DIR, "app_py.py"), tmp_path)
+    df = _wide().assign(group=lambda d: d["group"].map({"T4": 1, "T7": 2, "lambda": 3}),
+                        replicate=lambda d: d["replicate"].str.replace("plate", "").astype(int))
+    page.set_input_files("#file", R1._write(tmp_path, "numeric_names.csv", df)); _idle(page, 3)
+    box = "() => document.querySelector('#file').closest('.input-group').querySelector('input[type=text]').value"
+    assert page.evaluate(box) == "numeric_names.csv"
+    opts = page.evaluate("() => [...document.getElementById('value').options].map(o => o.value)")
+    assert opts == ["diameter_mm", "area_mm2"]
+    page.click("#load_example"); _idle(page, 3)
+    page.wait_for_function("() => document.querySelector('#file').closest('.input-group')"
+                           ".querySelector('input[type=text]').value === ''", timeout=20000)
+    assert page.inner_text("#size_line").startswith("figure: ")
+
+
+def test_n14_browser_removing_the_control_sample_resets_compare_to(browser_page, tmp_path):
+    page, srv = browser_page(os.path.join(PS_DIR, "app_py.py"), tmp_path)
+    page.click("#load_example"); _idle(page, 3)
+    names = page.evaluate("() => [...document.getElementById('compare').options].map(o => o.value)")
+    ctl = names[1]
+    page.select_option("#compare", ctl); _idle(page, 2)
+    page.evaluate("(c) => document.getElementById('order').selectize.removeItem(c)", ctl); _idle(page, 3)
+    page.wait_for_function("() => document.getElementById('compare').value === 'all'", timeout=20000)
+    page.wait_for_function("(c) => document.getElementById('messages').innerText.includes('Compare to was')",
+                           arg=ctl, timeout=20000)
+    assert page.query_selector("#fig_preview img") is not None
