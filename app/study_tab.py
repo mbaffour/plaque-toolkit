@@ -93,24 +93,99 @@ _MM_RE = re.compile(r"(^|[^a-z])mm(2|²|\^2)?([^a-z0-9]|$)")
 _NOT_MM_RE = re.compile(r"px|pxl|pix|µm|um\b|micro|nm\b|cm\b")
 
 
-def _drop_unsized(df):
-    """(rows whose size may enter a summary, how many were left out and why) -- CT-R1 detection
-    D10a: plaques flagged CORE? (outlined at the dark centre only) or NO_SIZE (a split piece
-    whose size is not reliable) count on their plate, but their diameter is another edge
-    definition, so the size statistics leave them out. A table without a QC_FLAG column is
-    returned as it is (files from before the flag, or from other tools)."""
-    if df is None or "QC_FLAG" not in df.columns:
-        return df, {"core": 0, "no_size": 0}
-    import plaque_qc
-    flags = df["QC_FLAG"].tolist()
-    keep = [plaque_qc.size_ok(f) for f in flags]
-    return df[keep], plaque_qc.size_left_out_counts(flags)
+def _flag_col(df):
+    """The QC_FLAG column, whatever its case ('QC_FLAG', 'qc_flag', 'Qc_Flag'), or None
+    (CT-R2 F10: a lower-case header used to be ignored and every flagged row kept)."""
+    for c in getattr(df, "columns", []):
+        if str(c).strip().lower() == "qc_flag":
+            return c
+    return None
 
 
-def _left_out_text(counts):
+def _size_mask(df):
+    """(list of bools: may this row's size enter a summary, its flag cells or None). The rule is
+    plaque_qc.size_ok, applied to each cell exactly as it is in the file -- never re-derived here
+    (CT-R1 detection D10a: CORE? and NO_SIZE plaques count on their plate, but their diameter is
+    another edge definition). A table without a QC_FLAG column keeps every row."""
+    fc = _flag_col(df)
+    if df is None or fc is None:
+        return [True] * (0 if df is None else len(df)), None
     import plaque_qc
-    phrase = plaque_qc.left_out_phrase(counts)
-    return ("; %s were left out" % phrase) if phrase else ""
+    flags = df[fc].tolist()
+    return [bool(plaque_qc.size_ok(f)) for f in flags], flags
+
+
+def _left_out_account(flags, keep):
+    """{'n': plaques left out, 'counts': plaque_qc's counts (opaque here), 'why': its phrase}."""
+    if flags is None:
+        return {"n": 0, "counts": {}, "why": ""}
+    import plaque_qc
+    out = [f for f, k in zip(flags, keep) if not k]
+    counts = plaque_qc.size_left_out_counts(out) if out else {}
+    return {"n": len(out), "counts": counts,
+            "why": plaque_qc.left_out_phrase(counts) if out else ""}
+
+
+def _sum_counts(accounts):
+    tot = {}
+    for a in accounts:
+        for k, v in (a.get("counts") or {}).items():
+            tot[k] = tot.get(k, 0) + int(v or 0)
+    return tot
+
+
+def _left_out_text(accounts):
+    """'; 26 outlined at the dark centre only and 1 split piece … were left out' over the
+    plates actually added (CT-R2 F9), or ''."""
+    import plaque_qc
+    accounts = list(accounts)
+    n = sum(a.get("n", 0) for a in accounts)
+    if not n:
+        return ""
+    phrase = plaque_qc.left_out_phrase(_sum_counts(accounts)) or "%d flagged plaques" % n
+    return "; %s were left out of the sizes" % phrase
+
+
+_NO_QC_NOTE = ("%s %s no QC_FLAG column: every row was used; plaques outlined at the dark centre "
+               "only, if any, cannot be told apart.")
+
+
+def _no_qc_note(names):
+    """CT-R2 F1 (tab part): said once per import, naming the files."""
+    names = list(dict.fromkeys(names))
+    if not names:
+        return ""
+    return _NO_QC_NOTE % (", ".join(names), "has" if len(names) == 1 else "have")
+
+
+# CT-R2 F3: a per-plaque table with one of these columns holding several values holds several
+# plates (Batch's all_plaques.csv: IMAGE). 'source' is NOT one: in the Measure / Batch files it
+# says how a plaque was found (auto / small).
+_PLATE_COLS = ("image", "plate", "plate_id", "replicate", "rep")
+_PLATE_WORD = {"image": "image", "plate": "plate", "plate_id": "plate", "replicate": "replicate",
+               "rep": "replicate"}
+
+
+def _plate_account(p, name=None):
+    """'plate1: 21 plaques sized, 20 left out (10 outlined at the dark centre only and 10 split
+    pieces whose size is not reliable)' -- CT-R2 F7: the one account of a plate's plaques."""
+    n, lo = len(p.get("diam") or []), int(p.get("left_out") or 0)
+    s = "%s: %d plaque%s sized" % (name or p.get("replicate", "plate"), n, "" if n == 1 else "s")
+    if lo:
+        s += ", %d left out" % lo
+        if p.get("left_out_why"):
+            s += " (%s)" % p["left_out_why"]
+    return s
+
+
+def _plate_split_col(df):
+    for want in _PLATE_COLS:
+        for c in df.columns:
+            if str(c).strip().lower() == want:
+                vals = [v for v in df[c].astype(str).str.strip() if v]
+                if len(set(vals)) > 1:
+                    return c, _PLATE_WORD[want]
+    return None, None
 
 
 def _diam_col(df):
@@ -363,7 +438,7 @@ class _AssignDialog(QDialog):
             cb = QComboBox(); cb.setEditable(True)
             for g in groups:
                 cb.addItem(g)
-            cb.setCurrentText(_sample_guess(p["stem"]))
+            cb.setCurrentText(_sample_guess(os.path.splitext(p["label"])[0] if p.get("label") else p["stem"]))
             cb.setMinimumWidth(140)
             self.table.setCellWidget(i, 2, cb)
             self.table.setItem(i, 3, QTableWidgetItem(""))
@@ -390,8 +465,8 @@ class _AssignDialog(QDialog):
             out.append({"sample": self.table.cellWidget(i, 2).currentText().strip(),
                         "subgroup": self.table.item(i, 3).text().strip(),
                         "replicate": self.table.item(i, 4).text().strip(),
-                        "diam": p["diam"], "area": p["area"],
-                        "source": os.path.basename(p.get("path") or p["stem"])})
+                        "diam": p["diam"], "area": p["area"], "left_out": p.get("left_out"),
+                        "source": p.get("source") or os.path.basename(p.get("path") or p["stem"])})
         return out
 
 
@@ -900,6 +975,21 @@ class StudyTab(QWidget):
             return 0
         return None
 
+    def _ask_unsized(self, name, part):
+        """CT-R2 F8: the ONE question for a plate whose plaques are all left out of the sizes
+        (both Add current plate and the CSV routes ask it), or for a file without plaque rows."""
+        if part["left_out"]["n"]:
+            text = ("All %d plaques of %s are flagged as not sizeable (%s). Add it as a plate "
+                    "without sizes?\n\nA plate without sizes is listed under its sample but is not "
+                    "counted in the statistics." % (part["left_out"]["n"], name,
+                                                    part["left_out"]["why"] or "flagged"))
+            title = "No sizeable plaques"
+        else:
+            text = "%s has no plaque rows. Add it as a plate with ZERO plaques?" % name
+            title = "No plaques in the file"
+        return QMessageBox.question(self, title, text, QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No) == QMessageBox.Yes
+
     def _add_current(self):
         idx = self._target_sample_index()
         if idx is None:
@@ -913,11 +1003,16 @@ class StudyTab(QWidget):
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
             self._warn("Couldn't find a diameter-in-mm column on the current measurement."); return
-        df, left_out = _drop_unsized(df)            # CT-R1 detection D10a
-        diam = pd.to_numeric(df[dc], errors="coerce").dropna().tolist()
-        area = pd.to_numeric(df[ac], errors="coerce").dropna().tolist() if ac else []
-        # CT-R1 F25: clicking twice used to add the same plate twice (pseudo-replicates)
-        twin = next((p for p in self._plates if p.get("diam") == diam and diam), None)
+        keep, flags = _size_mask(df)                  # CT-R1 detection D10a
+        left = _left_out_account(flags, keep)
+        kdf = df[pd.Series(keep, index=df.index, dtype=bool)]
+        diam = pd.to_numeric(kdf[dc], errors="coerce").dropna().tolist()
+        area = pd.to_numeric(kdf[ac], errors="coerce").dropna().tolist() if ac else []
+        src = os.path.basename(str(getattr(mt, "image_path", "") or "")) or "Measure tab"
+        # CT-R1 F25: clicking twice used to add the same plate twice (pseudo-replicates).
+        # CT-R2 F8: a plate without sizes is the same plate when its source and left-out count match.
+        twin = next((p for p in self._plates if p.get("diam") == diam and (
+            diam or (p.get("source") == src and p.get("left_out", 0) == left["n"]))), None)
         if twin is not None:
             q = QMessageBox.question(
                 self, "Plate already added",
@@ -928,12 +1023,15 @@ class StudyTab(QWidget):
             if q != QMessageBox.Yes:
                 self._status("Not added: that plate is already in the study.", 5000)
                 return
-        src = os.path.basename(str(getattr(mt, "image_path", "") or "")) or "Measure tab"
-        self._add_plate(idx, diam, area, source=src)
+        elif not diam and not self._ask_unsized(src, {"left_out": left}):
+            self._status("Not added: %s has no sizeable plaques." % src, 6000)
+            return
+        self._add_plate(idx, diam, area, source=src, left_out=left)
         self._refresh_tree(); self._select_sample(idx)
         s = self._samples[idx]
-        self._status("Added a plate to '%s' (%d plaques%s)." % (s["group"], len(diam),
-                                                                _left_out_text(left_out)), 5000)
+        note = _no_qc_note([src]) if flags is None else ""
+        self._status("Added a plate to '%s' (%d plaques%s).%s" % (
+            s["group"], len(diam), _left_out_text([left]), (" " + note) if note else ""), 10000)
 
     def _add_csvs(self):
         idx = self._target_sample_index()
@@ -943,29 +1041,32 @@ class StudyTab(QWidget):
                                                 "CSV files (*.csv *.tsv *.txt);;All files (*.*)")
         if not paths:
             return
-        added, problems = 0, []
-        left = {"core": 0, "no_size": 0}
+        problems, notes, no_qc, added = [], [], [], []
         for p in paths:
-            r = self._parse_csv(p, problems)
-            if r is None:
-                continue
-            # CT-R1 F17: plate ids are plate1..n within the sample; the file name is the source
-            self._add_plate(idx, r[0], r[1], source=os.path.basename(p))
-            for k in left:
-                left[k] += r[2][k]
-            added += 1
+            parts = self._parse_csv(p, problems, notes, no_qc)
+            for part in parts or []:
+                # CT-R1 F17: plate ids are plate1..n within the sample; the file name is the source
+                self._add_plate(idx, part["diam"], part["area"], source=part["source"],
+                                left_out=part["left_out"])
+                added.append(part)
         if added:
             self._refresh_tree(); self._select_sample(idx)
-            self._status("Added %d replicate plate(s)%s." % (added, _left_out_text(left)), 5000)
+            msg = "Added %d replicate plate(s)%s." % (len(added), _left_out_text(p["left_out"] for p in added))
+            extra = " ".join(notes + ([_no_qc_note(no_qc)] if no_qc else []))
+            self._status(msg + ((" " + extra) if extra else ""), 12000)
         if problems:
             self._warn(" ".join(problems))
 
-    def _parse_csv(self, path, problems=None):
-        """Read a per-plaque CSV → (diam list, area list), or None (the reason is appended to
-        `problems`, or shown). CT-R1 F6: the diameter must be a diameter-in-mm column (or the
-        column the user names when asked); ';' tables and decimal commas are read; binary/JSON
-        files, non-numbers and values <= 0 are refused; a file without plaques becomes a
-        zero-plaque plate only after the user confirms."""
+    def _parse_csv(self, path, problems=None, notes=None, no_qc=None):
+        """Read a per-plaque CSV → a list of plates [{diam, area, left_out, source, stem, n}], or
+        None (the reason is appended to `problems`, or shown). CT-R1 F6: the diameter must be a
+        diameter-in-mm column (or the column the user names when asked); ';' tables and decimal
+        commas are read; binary/JSON files, non-numbers and values <= 0 are refused; a file
+        without plaques becomes a zero-plaque plate only after the user confirms.
+        CT-R2 F3: a table whose IMAGE / plate / replicate column holds several values is one
+        plate per value (never pooled), said in `notes`. CT-R2 F1: a file without a QC_FLAG column
+        is named in `no_qc`. CT-R2 F8: a plate whose plaques are ALL flagged asks the one
+        'plate without sizes' question."""
         name = os.path.basename(path)
 
         def fail(msg):
@@ -978,14 +1079,18 @@ class StudyTab(QWidget):
         try:
             df = _read_text_table(path)
         except (ValueError, OSError) as e:
-            return fail("%s — skipped." % e)
-        df, left_out = _drop_unsized(df)            # CT-R1 detection D10a
+            return fail("%s Skipped." % str(e).rstrip())          # CT-R2 F20: no '. —'
+        keep, flags = _size_mask(df)                   # CT-R1 detection D10a
+        if flags is None and no_qc is not None and len(df):
+            no_qc.append(name)
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
+            # CT-R2 F20: an area column is never offered as the diameter
             numeric = [c for c in df.columns if _numbers(df[c])[1] == 0 and _numbers(df[c])[0].notna().any()
-                       and not _NOT_MM_RE.search(str(c).lower())]      # no µm / px / cm columns
+                       and not _NOT_MM_RE.search(str(c).lower())          # no µm / px / cm columns
+                       and "area" not in str(c).lower() and c != _flag_col(df)]
             if not numeric:
-                return fail("%s has no diameter-in-mm column (columns: %s) — skipped."
+                return fail("%s has no diameter-in-mm column (columns: %s). Skipped."
                             % (name, ", ".join(map(str, df.columns))))
             item, ok = QInputDialog.getItem(
                 self, "Which column is the diameter?",
@@ -994,25 +1099,49 @@ class StudyTab(QWidget):
             if not ok or not item:
                 return fail("%s skipped: no diameter-in-mm column chosen." % name)
             dc = item
-        d, nbad = _numbers(df[dc])
+        kept = df[pd.Series(keep, index=df.index, dtype=bool)]
+        d, nbad = _numbers(kept[dc])
         if nbad:
-            return fail("%s: %d cell(s) of '%s' are not numbers — skipped." % (name, nbad, dc))
-        diam = d.dropna().tolist()
-        if any(x <= 0 for x in diam):
-            return fail("%s: %d diameter(s) are zero or negative, which is not a plaque diameter in mm "
-                        "— skipped." % (name, sum(1 for x in diam if x <= 0)))
-        area = []
+            return fail("%s: %d cell(s) of '%s' are not numbers. Skipped." % (name, nbad, dc))
+        if any(x <= 0 for x in d.dropna()):
+            return fail("%s: %d diameter(s) are zero or negative, which is not a plaque diameter in mm. "
+                        "Skipped." % (name, sum(1 for x in d.dropna() if x <= 0)))
+        a = None
         if ac is not None:
-            a, abad = _numbers(df[ac])
-            area = a.dropna().tolist() if not abad else []
-        if not diam:
-            q = QMessageBox.question(
-                self, "No plaques in the file",
-                "%s has no plaque rows. Add it as a plate with ZERO plaques?" % name,
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if q != QMessageBox.Yes:
-                return fail("%s skipped: it has no plaques." % name)
-        return diam, area, left_out
+            a, abad = _numbers(kept[ac])
+            if abad:
+                a = None
+        pcol, word = _plate_split_col(df)
+        if pcol is None:
+            keys, labels = [None], [None]
+        else:
+            labels = list(dict.fromkeys(v for v in df[pcol].astype(str).str.strip() if v))
+            keys = labels
+        stem = os.path.splitext(name)[0]
+        parts = []
+        for key in keys:
+            rows = [True] * len(df) if key is None else list(df[pcol].astype(str).str.strip() == key)
+            sel = [r and k for r, k in zip(rows, keep)]
+            sel_kept = pd.Series(sel, index=df.index)[pd.Series(keep, index=df.index, dtype=bool)]
+            diam = d[sel_kept.values].dropna().tolist()
+            area = a[sel_kept.values].dropna().tolist() if a is not None else []
+            g_flags = None if flags is None else [f for f, r in zip(flags, rows) if r]
+            g_keep = [k for k, r in zip(keep, rows) if r]
+            part = {"diam": diam, "area": area, "left_out": _left_out_account(g_flags, g_keep),
+                    "source": name if key is None else "%s · %s" % (name, key),
+                    "stem": stem if key is None else "%s · %s" % (stem, key),
+                    "path": path, "label": key}
+            part["n"] = len(diam)
+            if not diam and not self._ask_unsized(part["source"], part):
+                fail("%s skipped: %s." % (part["source"], "no sizeable plaques" if part["left_out"]["n"]
+                                          else "it has no plaques"))
+                continue
+            parts.append(part)
+        if pcol is not None and notes is not None:
+            notes.append("%s holds %d %ss: added as %d plate(s)%s." % (
+                name, len(keys), word, len(parts),
+                "" if len(parts) == len(keys) else " (%d skipped)" % (len(keys) - len(parts))))
+        return parts or None
 
     def _import_assign(self):
         """Pick many plate CSVs and map each (one plate) to a sample in one dialog → real replicates."""
@@ -1020,13 +1149,9 @@ class StudyTab(QWidget):
                                                 "CSV files (*.csv *.tsv *.txt);;All files (*.*)")
         if not paths:
             return
-        parsed, problems = [], []
+        parsed, problems, notes, no_qc = [], [], [], []
         for p in paths:
-            r = self._parse_csv(p, problems)
-            if r is None:
-                continue
-            parsed.append({"path": p, "stem": os.path.splitext(os.path.basename(p))[0],
-                           "n": len(r[0]), "diam": r[0], "area": r[1], "left_out": r[2]})
+            parsed.extend(self._parse_csv(p, problems, notes, no_qc) or [])
         if problems:
             self._warn(" ".join(problems))
         if not parsed:
@@ -1034,13 +1159,14 @@ class StudyTab(QWidget):
         dlg = _AssignDialog(self, parsed, self._samples)
         if dlg.exec() != QDialog.Accepted:
             return
-        self._import_left_out = {k: sum(p["left_out"][k] for p in parsed) for k in ("core", "no_size")}
-        self._apply_assignments(dlg.rows())
+        # CT-R2 F9: the left-out counts travel in each row; only the rows imported are counted
+        self._apply_assignments(dlg.rows(), notes=notes, no_qc=no_qc)
 
-    def _apply_assignments(self, rows):
-        """rows: [{sample, subgroup, replicate, diam, area, source}] — each becomes ONE plate under
-        its sample (created if new). The many-CSVs → real-replicates flow (each CSV is a plate)."""
-        added = 0
+    def _apply_assignments(self, rows, notes=None, no_qc=None):
+        """rows: [{sample, subgroup, replicate, diam, area, source, left_out}] — each becomes ONE
+        plate under its sample (created if new). The many-CSVs → real-replicates flow (each CSV,
+        or each IMAGE of a multi-plate CSV, is a plate)."""
+        added = []
         for r in rows:
             g = (r.get("sample") or "").strip()
             if not g:
@@ -1051,15 +1177,18 @@ class StudyTab(QWidget):
             if si is None:
                 self._samples.append({"group": g, "subgroup": sub}); si = len(self._samples) - 1
             self._add_plate(si, r["diam"], r.get("area") or [],
-                            rep=(r.get("replicate") or "").strip() or None, source=r.get("source", ""))
-            added += 1
+                            rep=(r.get("replicate") or "").strip() or None, source=r.get("source", ""),
+                            left_out=r.get("left_out"))
+            added.append(r)
         if added:
             self._refresh_tree()
-            left = getattr(self, "_import_left_out", None) or {}
-            self._import_left_out = None
-            self._status("Imported %d plate(s) across %d sample(s)%s." % (
-                added, len(self._samples), _left_out_text(left)), 6000)
-        return added
+            used = {str(r.get("source", "")).split(" · ")[0] for r in added}
+            extra = " ".join((notes or []) + ([_no_qc_note([n for n in no_qc if n in used])]
+                                              if no_qc and any(n in used for n in no_qc) else []))
+            self._status("Imported %d plate(s) across %d sample(s)%s.%s" % (
+                len(added), len(self._samples), _left_out_text(r.get("left_out") or {} for r in added),
+                (" " + extra) if extra else ""), 12000)
+        return len(added)
 
     def _next_auto_rep(self, group, subgroup=""):
         """A plate id not already used within this sample (group, subgroup). Per-sample uniqueness
@@ -1071,14 +1200,18 @@ class StudyTab(QWidget):
             i += 1
         return "plate%d" % i
 
-    def _add_plate(self, s_idx, diam, area, rep=None, source=""):
+    def _add_plate(self, s_idx, diam, area, rep=None, source="", left_out=None):
+        """left_out: {'n', 'why'} -- the plaques of this plate left out of the sizes and why
+        (CT-R2 F7); kept with the plate, shown in the tree / Report / ZIP, saved in the study."""
         s = self._samples[s_idx]
         g, sub = s["group"], s.get("subgroup", "")
         if not rep or any(p["group"] == g and p.get("subgroup", "") == sub and p["replicate"] == rep
                           for p in self._plates):
             rep = self._next_auto_rep(g, sub)        # blank or clashing id → next free one
+        lo = left_out or {}
         self._plates.append({"group": g, "subgroup": sub, "replicate": rep,
-                             "diam": list(diam), "area": list(area), "source": source or ""})
+                             "diam": list(diam), "area": list(area), "source": source or "",
+                             "left_out": int(lo.get("n") or 0), "left_out_why": lo.get("why") or ""})
 
     def _plates_of(self, s):
         return [p for p in self._plates
@@ -1100,16 +1233,22 @@ class StudyTab(QWidget):
         self._invalidate_analysis()
         self.tree.blockSignals(True)
         self.tree.clear()
-        total_plates = 0
+        total_plates, unsized = 0, []
         for si, s in enumerate(self._samples):
             plates = self._plates_of(s)
-            total_plates += len(plates)
-            means = [float(np.mean(p["diam"])) for p in plates if p.get("diam")]
+            # CT-R2 F8: ONE rule everywhere (tree, compiled line, PLATES chip, Summary): a plate
+            # with at least one sized plaque counts; a plate without sizes is listed apart
+            sized = [p for p in plates if p.get("diam")]
+            total_plates += len(sized)
+            unsized += ["%s/%s" % (s["group"], p["replicate"]) for p in plates if not p.get("diam")]
+            n_un = len(plates) - len(sized)
+            means = [float(np.mean(p["diam"])) for p in sized]
             roll = np.mean(means) if means else float("nan")
             top = QTreeWidgetItem([
                 s["group"],
                 s.get("subgroup", "") or "—",
-                "%d plate(s) · %d plaques" % (len(plates), sum(len(p.get("diam") or []) for p in plates)),
+                "%d plate(s)%s · %d plaques" % (len(sized), (" + %d without sizes" % n_un) if n_un else "",
+                                                sum(len(p.get("diam") or []) for p in plates)),
                 ("%.3f" % roll) if means else "—"])
             top.setData(0, Qt.UserRole, ("sample", si))
             f = top.font(0); f.setBold(True)
@@ -1118,11 +1257,15 @@ class StudyTab(QWidget):
             self.tree.addTopLevelItem(top)
             for p in plates:
                 d = p.get("diam") or []
+                lo = int(p.get("left_out") or 0)
                 child = QTreeWidgetItem(["    " + p["replicate"], "",
-                                         str(len(d)), ("%.3f" % np.mean(d)) if d else "—"])
+                                         ("%d (+%d left out)" % (len(d), lo)) if lo else str(len(d)),
+                                         ("%.3f" % np.mean(d)) if d else "—"])
                 child.setData(0, Qt.UserRole, ("plate", id(p)))
-                if p.get("source"):
-                    child.setToolTip(0, "Source: %s" % p["source"])
+                tip = ["Source: %s" % p["source"]] if p.get("source") else []
+                tip.append(_plate_account(p))                   # CT-R2 F7
+                for c in range(4):
+                    child.setToolTip(c, "\n".join(tip))
                 top.addChild(child)
             top.setExpanded(True)
         self.tree.blockSignals(False)
@@ -1130,7 +1273,10 @@ class StudyTab(QWidget):
         if n == 0:
             self.count_lbl.setText("No samples yet — click “New sample”, then add its plates.")
         else:
-            self.count_lbl.setText("%d sample(s) · %d plate(s) compiled." % (n, total_plates))
+            self.count_lbl.setText("%d sample(s) · %d plate(s) compiled%s." % (
+                n, total_plates, ("; %d plate(s) without sizes, not counted: %s" % (
+                    len(unsized), ", ".join(unsized[:4]) + (", …" if len(unsized) > 4 else "")))
+                if unsized else ""))
         self._refresh_mode()
 
     def _on_tree_selection(self):
@@ -1232,9 +1378,14 @@ class StudyTab(QWidget):
                                  "replicate": pl["replicate"],
                                  "diameter_mm": diam[i] if i < len(diam) else np.nan,
                                  "area_mm2": area[i] if i < len(area) else np.nan,
-                                 "source": pl.get("source", "")})
-        return pd.DataFrame(rows, columns=["group", "subgroup", "replicate", "diameter_mm",
-                                           "area_mm2", "source"])
+                                 "source": pl.get("source", ""),
+                                 # CT-R2 F7: the plate's left-out account, on its first row
+                                 "left_out_plaques": (int(pl.get("left_out") or 0) or "") if i == 0 else "",
+                                 "left_out_why": (pl.get("left_out_why") or "") if i == 0 else ""})
+        return pd.DataFrame(rows, columns=self._STUDY_COLS)
+
+    _STUDY_COLS = ["group", "subgroup", "replicate", "diameter_mm", "area_mm2", "source",
+                   "left_out_plaques", "left_out_why"]
 
     def _long_frame(self):
         """Standalone-ready LONG format: one row per (plaque, metric)."""
@@ -1343,8 +1494,19 @@ class StudyTab(QWidget):
             key = (g, sg, rep)
             if key not in index:
                 index[key] = {"group": g, "subgroup": sg, "replicate": rep, "diam": [], "area": [],
-                              "source": str(r["source"]).strip() if "source" in df.columns else ""}
+                              "source": str(r["source"]).strip() if "source" in df.columns else "",
+                              "left_out": 0, "left_out_why": ""}
                 plates.append(index[key])
+            # CT-R2 F7: the left-out account saved with the plate comes back with it
+            lo = str(r["left_out_plaques"]).strip() if "left_out_plaques" in df.columns else ""
+            if lo and not index[key]["left_out"]:
+                try:
+                    index[key]["left_out"] = int(float(lo))
+                except ValueError:
+                    pass
+            why = str(r["left_out_why"]).strip() if "left_out_why" in df.columns else ""
+            if why and not index[key]["left_out_why"]:
+                index[key]["left_out_why"] = why
             if d == d:
                 index[key]["diam"].append(float(d))
             if a == a:
@@ -1512,6 +1674,7 @@ class StudyTab(QWidget):
                                % (len(miss), metric_name.split(" (")[0].lower(), ", ".join(plates[:8]),
                                   ", …" if len(plates) > 8 else ""))
         df = df.dropna(subset=["value"])
+        self._plate_warns = self._unsized_warnings(metric_key)
         if df.empty:
             self._invalidate_analysis()
             self._warn("No %s values found — did you measure that metric?" % metric_name); return
@@ -1594,7 +1757,7 @@ class StudyTab(QWidget):
                 "%s %s no %s values, so %s left out of the figure and the test."
                 % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
                    "it is" if len(empty) == 1 else "they are"))
-        warns = list(omni.get("warnings") or [])
+        warns = list(omni.get("warnings") or []) + list(getattr(self, "_plate_warns", []))
         self.warn_lbl.setText(_ui_words("\n".join("⚠ " + w for w in warns)))
         self._write_report_single(ps, metric_name, summ, omni, posthoc, unit, have_rep)
         self._status("Analyzed %d samples (%s)." % (len(order), omni.get("test")), 5000)
@@ -1609,10 +1772,43 @@ class StudyTab(QWidget):
         bits = [key.get("note") or "", getattr(self._last_fig, "annotation_note", "") or ""]
         return " ".join(b for b in bits if b)
 
+    def _unsized_warnings(self, metric_key):
+        """CT-R2 F8: every plate without a value of this metric, named (it is listed under its
+        sample but not counted as a plate)."""
+        out = []
+        for p in self._plates_in_order():
+            if p.get(metric_key):
+                continue
+            lo = int(p.get("left_out") or 0)
+            what = ("no sized plaques (%d left out: %s)" % (lo, p.get("left_out_why") or "flagged")
+                    if lo else "no plaques" if not (p.get("diam") or p.get("area")) else
+                    "no %s values" % ("diameter" if metric_key == "diam" else "area"))
+            out.append("%s/%s has %s, so it is not counted as a plate." % (p["group"], p["replicate"], what))
+        return out
+
+    def _account_lines(self):
+        """CT-R2 F7: one line per plate with plaques left out of the sizes, for the Report and the
+        ZIP report (the tree tooltip shows the same sentence)."""
+        lines = []
+        for p in self._plates_in_order():
+            if int(p.get("left_out") or 0):
+                lines.append("%s · %s" % (p["group"], _plate_account(p)))
+        if not lines:
+            return []
+        n = sum(int(p.get("left_out") or 0) for p in self._plates)
+        return (["Plaques left out of the sizes (%d in all; they count on their plate, but their "
+                 "diameter is not this plate's edge definition):" % n] + ["  " + x for x in lines])
+
     def _set_report(self, lines):
         lines = list(lines)
         if getattr(self, "_data_note", ""):
             lines += ["", "Data: " + self._data_note]
+        pw = [w for w in getattr(self, "_plate_warns", []) if not any(w in str(x) for x in lines)]
+        if pw:
+            lines += [""] + ["⚠ " + w for w in pw]
+        acc = self._account_lines()
+        if acc:
+            lines += [""] + acc
         self.report.setPlainText(_ui_words("\n".join(lines)))
 
     def _write_report_single(self, ps, metric_name, summ, omni, posthoc, unit, have_rep):
@@ -1743,7 +1939,7 @@ class StudyTab(QWidget):
         ft = self._figure_text()
         if ft:
             L += ["", "Figure: " + ft]
-        warns = list(info.get("warnings") or [])
+        warns = list(info.get("warnings") or []) + list(getattr(self, "_plate_warns", []))
         if excluded:
             warns.append("%d plate(s) without a 2nd-factor tag were EXCLUDED (%d analyzed). Clear all "
                          "2nd-factor tags to compare every plate as single-factor samples."
@@ -2126,6 +2322,14 @@ class StudyTab(QWidget):
                     cfg["figure_size_in"] = [opts["width"], opts["height"]]
                     with open(fp, "w", encoding="utf-8") as fh:
                         json.dump(cfg, fh, indent=2, default=str)
+            # CT-R2 F7/F8: the plates' left-out account and the plates without sizes
+            extra = (["- ⚠️ %s" % w for w in getattr(self, "_plate_warns", [])]
+                     + ["- %s" % x.strip() for x in self._account_lines()])
+            if extra:
+                for f in os.listdir(out):
+                    if f.startswith("report_") and f.endswith(".md"):
+                        with open(os.path.join(out, f), "a", encoding="utf-8") as fh:
+                            fh.write("\n## Plates and plaques left out\n\n" + "\n".join(extra) + "\n")
             # also drop the standalone-ready long + wide CSVs and the study file in the bundle
             _write_csv(self._long_frame(), os.path.join(out, "compiled_long.csv"))
             _write_csv(tidy, os.path.join(out, "compiled_wide.csv"))
