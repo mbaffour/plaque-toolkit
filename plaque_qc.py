@@ -26,8 +26,9 @@ Flags (several may apply, joined with `|`; `OK` when none):
 * ``NESTED``   its centre lies inside a LARGER plaque's outline (a core and its halo, or a plaque
                counted inside another; CT-R1 F14).
 * ``TINY``     the outline is too few pixels for a reliable size: area-equivalent diameter below
-               ``tiny_diam_px`` (16 px; 12 until CT-R2 N11: outlines 12-16 px across are +25 to
-               +53 % too big on the frozen benchmark); the reason gives px and mm. Pixel outlines only (not circles). Being found
+               ``tiny_diam_px`` (12 px), where one pixel of edge error is more than 15 % of the
+               area; the reason gives px and mm. Plates where many plaques are 12-16 px across
+               get a PLATE warning instead (small_plaque_warning; CT-R2 N11). Pixel outlines only (not circles). Being found
                only by the small pass is not a flag: SOURCE says so (CT-R1 detection D9).
 * ``BRIGHT``   the plaque interior is brighter than a ring around it by more than
                ``bright_margin`` grey levels: a bubble or glare, not a clearing (CT-R1 F19). Only
@@ -52,9 +53,9 @@ import math
 
 STANDARD_ENCL_DIAM_MIN = 30      # plaque_size_tool.filter_contours: green_diam_min without -small
 LAWN_EDGE_FRAC = 0.93            # where the lawn ends, as a fraction of the dish radius (F11)
-TINY_DIAM_PX = 16                # area-equivalent diameter below this: too few pixels (D9).
-                                 # CT-R2 N11: was 12; on the frozen benchmark every outline
-                                 # 12-16 px across is +25 to +53 % too big (10 of 10)
+TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9).
+                                 # CT-R2 N11: kept at 12. A 16 px cut flagged half of Plate_11 /
+                                 # Plate_13; the 12-16 px band is a plate warning instead.
 MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from this diameter (D9)
 
 
@@ -134,8 +135,10 @@ def size_summary_lines(flag_strings):
 # about the halo's size. Measured on the frozen benchmark's plate model with the CLI default
 # (validation/detection_benchmark/standard_range.py): haloed discs within +-5 % every time up to
 # 135 px, at the centre from 140 px (1 of 3 at 141 px in the benchmark's own scenes); sharp discs
-# every time only up to 225 px (failures seen at 250-350 px, depending on the layout). Below about
-# 70 px every outline is 5-28 % too big. Synthetic blur model; the frozen engine's limit, not Auto's.
+# every time only up to 225 px (failures seen at 250-350 px, depending on the layout). These come
+# from the synthetic blur model; the 135 px limit for haloed plaques is consistent with the bundled
+# plates at 2x, where medians drop, but has not been measured on real photographs with manual
+# tracing. It is the frozen engine's limit, not Auto's.
 STANDARD_HALO_MAX_PX = 135
 # warn when the plate's largest outline reaches this (a choice, not a measurement: about 3/4 of
 # the limit). Blind spot: a plate whose plaques are ALL past the limit shows only centres of
@@ -156,6 +159,25 @@ def large_plaque_warning(diams_px, mm_per_px=None):
             % (STANDARD_HALO_MAX_PX, where, max(d))]
 
 
+# CT-R2 detection N11: single sizes under 16 px across are uncertain. Real paired data
+# (validation/tiny_plaques.csv: 20 plaques of ~8-11 px, median +3.8 % against Fiji, single
+# errors -31 % to +27 %) say noisy rather than systematically too big, so this is a PLATE
+# warning, not a per-plaque flag; it fires when at least a quarter of the plaques are this small.
+SMALL_PLAQUE_WARN_PX = 16
+SMALL_PLAQUE_WARN_SHARE = 0.25
+
+
+def small_plaque_warning(diams_px):
+    """[warning] when at least a quarter of the plaques are under SMALL_PLAQUE_WARN_PX across."""
+    d = [float(x) for x in diams_px if x is not None and x == x]
+    n_small = sum(1 for x in d if x < SMALL_PLAQUE_WARN_PX)
+    if not d or n_small < SMALL_PLAQUE_WARN_SHARE * len(d):
+        return []
+    return ["%d of %d plaques are under %d px across: single sizes are uncertain at this size "
+            "(about +-30 %% against manual tracing); report the group mean, or photograph at "
+            "higher magnification." % (n_small, len(d), SMALL_PLAQUE_WARN_PX)]
+
+
 def few_sized_warning(flag_strings):
     """[warning] when fewer than half of the counted plaques are sized (CT-R2 detection N3:
     a quarter to a third of haloed plates was left out of sizing, not at random), else []."""
@@ -171,9 +193,10 @@ def few_sized_warning(flag_strings):
 
 def plate_warnings(diams_px, mm_per_px=None, flag_strings=None):
     """Per-plate warnings about the plaque sizes, for the app's flag line, the CLI's stdout and
-    run_metadata.json: the large-plaque limit of the standard pass (Part 3) and, when QC flags
+    run_metadata.json: the large-plaque limit of the standard pass (Part 3), many plaques under
+    16 px across (N11) and, when QC flags
     are given, fewer than half of the plaques sized (Part 4). One call for every front end."""
-    out = large_plaque_warning(diams_px, mm_per_px)
+    out = large_plaque_warning(diams_px, mm_per_px) + small_plaque_warning(diams_px)
     if flag_strings is not None:
         out += few_sized_warning(flag_strings)
     return out
@@ -304,7 +327,7 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
             why.append("%s: size not reliable, left out of size summaries"
                        % (p.get("size_reason") or "split piece"))
         # TINY (CT-R1 detection D9): the outline is too few pixels for a reliable size -- below
-        # tiny_diam_px (16 px since CT-R2 N11) across the size is not reliable. Being found
+        # tiny_diam_px (12) across, one pixel of edge error is > 15 % of the area. Being found
         # only by the small pass is not a flag (SOURCE says so); 389 of 767 rows were TINY.
         if p.get("pixel_outline", True) and a > 0 and 2.0 * r < tiny_diam_px:
             if mm_per_px:

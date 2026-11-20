@@ -18,6 +18,7 @@ Writes <folder>/scorecard.csv (long: section, group, mode_rule, metric, value), 
 (per bundled plate: plaques, sized, median mm per mode/rule) and prints the tables.
 """
 import argparse
+import textwrap
 import math
 import os
 import pickle
@@ -32,6 +33,8 @@ import scenes as SC  # noqa: E402
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+
+CAVEAT = "CAVEAT: " + "The synthetic scenes are for COMPARING rules against each other on identical input; their absolute numbers are NOT calibrated to real plaques. Synthetic: 52.5 % of standard-pass (CLI default) sized rows beyond +-5 %. Real paired data against manual Fiji tracing: validation/paired_toolkit_vs_fiji.csv (100 plaques, 0.84-2.20 mm) median -1.4 %, 24 % beyond +-5 % (14 % for 1.5-2.2 mm); validation/tiny_plaques.csv (20 plaques, 0.34-0.46 mm, ~8-11 px) median +3.8 %, single errors -31 % to +27 %, 65 % beyond +-5 %. Read the synthetic figures as differences between rules, not as the tool's accuracy."
 
 KEEP = ["X", "Y", "DIAMETER_PXL", "DIAMETER_MM", "AREA_PXL", "SOURCE", "QC_FLAG", "CORE_ONLY",
         "SIZE_UNRELIABLE", "IN_STD_BLOB"]
@@ -353,6 +356,9 @@ def main(argv=None):
         card += perturb_scorecard(pt)
     cd = pd.DataFrame(card)
     cd.to_csv(os.path.join(a.out, "scorecard.csv"), index=False)
+    with open(os.path.join(a.out, "scorecard_README.txt"), "w") as fh:   # travels with the CSV
+        fh.write(textwrap.fill(CAVEAT, 100) + "\n")
+    print("\n" + textwrap.fill(CAVEAT, 100))
     if len(cd):
         pd.set_option("display.width", 250)
         for section, d in cd.groupby("section", sort=False):

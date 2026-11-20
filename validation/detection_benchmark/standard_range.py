@@ -8,6 +8,10 @@ replicates were found and their size bias, so one can read off
 * the smallest diameter the standard pass finds, and from where it finds every disc;
 * the largest diameter it still outlines within +-5 % every time, and the smallest that failed.
 
+From the synthetic blur model only: the 135 px limit for haloed plaques is consistent with the
+bundled plates at 2x, where medians drop, but has not been measured on real photographs with
+manual tracing.
+
     python validation/detection_benchmark/standard_range.py --out <folder>
 """
 import argparse

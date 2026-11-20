@@ -424,10 +424,18 @@ def test_p5_merged_shape_test_skips_core_outlines():
     assert f == ["CORE?", "MERGED?"]
 
 
-def test_p5_tiny_cut_is_16_px():
-    """N11: outlines 12-16 px across are +25 to +53 % too big on the frozen benchmark."""
+def test_p5_tiny_cut_stays_12_px_and_12_to_16_is_a_plate_warning():
+    """N11: the per-plaque TINY cut stays at 12 px (16 flagged half of Plate_11 / Plate_13);
+    a plate with at least a quarter of its plaques under 16 px gets one warning instead."""
     import plaque_qc
-    assert plaque_qc.TINY_DIAM_PX == 16
+    assert plaque_qc.TINY_DIAM_PX == 12
     a = lambda d: 3.14159265 * (d / 2.0) ** 2   # noqa: E731
-    f = [r[0] for r in plaque_qc.flag_plaques([_disc(100, a(14.0)), _disc(400, a(17.0))], (1000, 1000))]
+    f = [r[0] for r in plaque_qc.flag_plaques([_disc(100, a(11.0)), _disc(400, a(14.0))], (1000, 1000))]
     assert f == ["TINY", "OK"]
+    assert plaque_qc.small_plaque_warning([14.0, 30.0, 30.0, 30.0, 30.0]) == []        # 1 of 5
+    w = plaque_qc.small_plaque_warning([14.0, 15.9, 30.0, 30.0])                       # 2 of 4
+    assert w == ["2 of 4 plaques are under 16 px across: single sizes are uncertain at this size "
+                 "(about +-30 % against manual tracing); report the group mean, or photograph at "
+                 "higher magnification."]
+    assert plaque_qc.plate_warnings([14.0, 30.0, 30.0, 30.0]) == \
+        plaque_qc.small_plaque_warning([14.0, 30.0, 30.0, 30.0])
