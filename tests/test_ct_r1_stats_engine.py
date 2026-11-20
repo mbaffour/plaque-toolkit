@@ -661,6 +661,7 @@ def test_S4_power_sentence_never_advises_fewer_than_3_plates():
     assert "For the largest observed difference (1.37) the minimum of 3 plates per sample is enough" in s
     assert "detecting the smallest observed difference (0.2) needs 7 plates per sample" in s
     assert s.count("(computed from the observed spread; treat as a rough guide)") == 1
+    assert s.startswith("**Power:**")                       # the desktop tab strips ** and looks for it
 
 
 LONG12 = ["Wild-type MG1655 control %d" % i if i % 3 == 0 else "ΔompC::kan strain %d" % i for i in range(12)]
@@ -739,8 +740,16 @@ def test_S3_text_starter_explains_the_annotation(tmp_path):
     t2 = lk.text_starter(lk.from_figure(f2))
     assert "compact letter display" in t2 and "Stars:" not in t2
     plt.close(f2)
+    # the name travels with the run_stats() result, so a GUI that draws from it says the same
+    df = _tidy(_frame())
+    _o, ph, _u, _h = ps.run_stats(df, order, "auto", "auto")
+    assert ph.name == "Tukey HSD, adjusted p" and isinstance(ph, dict)
+    f3 = ps.plot_violin(df, order, dict(ps.DEFAULTS), "d", ph)
+    screen = lk.text_starter(lk.from_figure(f3))
+    plt.close(f3)
     ps.run(_args(tmp_path, _frame()))
     tf = (tmp_path / "out" / "violin_diameter_mm_legend_text.txt").read_text(encoding="utf-8")
+    assert tf.strip() == screen
     assert "Brackets: the significant pairs. Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not " \
            "significant (Tukey HSD, adjusted p)." in tf
 

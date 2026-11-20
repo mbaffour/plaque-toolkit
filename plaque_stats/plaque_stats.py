@@ -968,6 +968,13 @@ def _n_range(ns, tg, uw):
     return "%d %ss" % (v[0], uw) if len(v) == 1 else "%d to %d %ss" % (v[0], v[-1], uw)
 
 
+class PosthocResult(dict):
+    """The {(a, b): adjusted p} dict run_stats() has always returned, plus `.name`: the post-hoc
+    test that produced it ("Tukey HSD, adjusted p", "Welch t-test", ...). Figures read the name
+    so the legend text starter can say which test the stars come from (CT-R1 S3)."""
+    name = None
+
+
 def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", control=None,
               equivalence_margin=None):
     """Compute normality, an omnibus test, and pairwise post-hoc p-values on the chosen unit.
@@ -1244,6 +1251,10 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
     omni["power"] = power_summary(groups)
     omni["icc"] = plate_variance_share(df)
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
+    posthoc = PosthocResult(posthoc or {})
+    post = omni.get("posthoc")
+    posthoc.name = ("%s, adjusted p" % post if post in ("Tukey HSD", "Games-Howell", "Dunnett",
+                                                        "Dunn (Holm)") else omni.get("test"))
     return omni, posthoc, unit, have_rep
 
 
@@ -1759,7 +1770,7 @@ def annotation_sentence(plan, opts):
     annotation_plan note plus the star thresholds and the test they come from."""
     if not plan or plan.get("mode") == "none":
         return ""
-    s = " " + plan["note"].strip()
+    s = " " + plan["note"].strip().replace("`", "")
     if plan["mode"] in ("brackets", "vsref"):
         test = (opts or {}).get("_posthoc_name")
         s += (" Stars: * p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant%s."
@@ -2096,7 +2107,8 @@ def _plot_violin(df, order, opts, metric_name, posthoc):
                         fontsize=fs, fontweight="bold", color="#33413c", linespacing=1.15)
             if used_short and rm is not None:
                 caption_bits.append("n = plaques, N = plates")
-    key["note"] = (key.get("note") or "") + annotation_sentence(plan, opts)   # CT-R1 S3
+    key["note"] = (key.get("note") or "") + annotation_sentence(
+        plan, dict(opts, _posthoc_name=opts.get("_posthoc_name") or getattr(posthoc, "name", None)))
     if log_y:                                     # ticks for the FINAL range (CT-R1 DA-F15)
         _log_axis(ax, *ax.get_ylim())
     cap = _caption(fig, caption_bits)
@@ -2410,7 +2422,7 @@ def power_sentence(pw, unit="replicate"):
     uw = _unit_word(unit)
     if not pw or not pw.get("available"):
         return "**Power:** not estimated (%s)." % ((pw or {}).get("reason") or "no data")
-    s = ("**Power** (computed from the observed spread; treat as a rough guide): with %d %s per "
+    s = ("**Power:** (computed from the observed spread; treat as a rough guide) with %d %s per "
          "sample and the observed pooled SD of the %s (%.3g), a difference "
          "of %.3g would be detected with %d %% power (two-sided α = %g, two-sample t-test)."
          % (pw["n_per_group"], uw, "plate means" if unit == "replicate" else "plaques",
@@ -3169,9 +3181,6 @@ def run(args):
         pw_df = pd.DataFrame(rows)
         pw_df.to_csv(os.path.join(out, f"pairwise_tests_{mt}.csv"), index=False)
 
-    post = omni.get("posthoc")
-    args["_posthoc_name"] = ("%s, adjusted p" % post if post in ("Tukey HSD", "Games-Howell", "Dunnett",
-                                                                  "Dunn (Holm)") else omni.get("test"))
     fig = plot_violin(df, order, args, metric, posthoc)
     base = os.path.join(out, f"violin_{mt}")
     _save_fig(fig, base, args)
