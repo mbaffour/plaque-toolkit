@@ -149,8 +149,10 @@ def phage_folder(neutral_plate_tif, tmp_path):
     return folder
 
 
-def _key_region(img, patch):
-    x, y = pgui.key_origin(img.shape, patch.shape)
+def _key_region(img, patch, shape):
+    """CT-R3 F5: the key sits OUTSIDE the plate image, so its place comes from the plate
+    image's own ``shape`` (the figure itself is larger)."""
+    x, y = pgui.key_origin(shape, patch.shape)
     return img[y:y + patch.shape[0], x:x + patch.shape[1]]
 
 
@@ -171,12 +173,13 @@ def test_n8_batch_overlay_ships_its_key_text_and_honours_place_key_on_figure(neu
     assert text == pgui.key_text(engine_api.reading_order(det["plaques"])) and "auto-detected (green" in text
     patch = pgui.key_image_for(det["orig_bgr"].shape, key)
     img_off = cv2.imread(os.path.join(d, "out_neutral_plate.tif"))
-    assert not np.array_equal(_key_region(img_off, patch), patch)
+    shape = det["orig_bgr"].shape
+    assert not np.array_equal(_key_region(img_off, patch, shape), patch)
 
     on = batch_measure.batch_measure(str(folder), plate_mm=90, out_dir=str(tmp_path / "on"),
                                      key_on_figure=True)
     img_on = cv2.imread(os.path.join(on["out_dir"], "neutral_plate", "out_neutral_plate.tif"))
-    assert np.array_equal(_key_region(img_on, patch), patch)
+    assert np.array_equal(_key_region(img_on, patch, shape), patch)
     meta = json.load(open(os.path.join(on["out_dir"], "run_metadata.json")))
     assert meta["settings"]["key_on_figure"] is True
 
@@ -216,12 +219,13 @@ def test_n8_turbidity_overlay_has_key_text_readable_labels_and_plate_index(phage
     text = (out / "overlay_T4_1_legend_text.txt").read_text().strip()
     assert text.startswith("dish rim (") and "plaque (no turbidity: needs a blank-agar image) (" in text
     assert os.path.getsize(out / "overlay_T4_1_legend_key.png") > 500
-    patch = pgui.key_image_for(img.shape, key)
-    assert np.array_equal(_key_region(img, patch), patch)
+    shape = cv2.imread(str(phage_folder / "T4_1.tif")).shape
+    patch = pgui.key_image_for(shape, key)
+    assert np.array_equal(_key_region(img, patch, shape), patch)
     # the switch off: re-drawn from the records, no key on the overlay, files still there
     ptb.redraw_overlays(recs, str(out), key_on_figure=False)
     img2 = cv2.imread(str(out / "overlay_T4_1.png"))
-    assert not np.array_equal(_key_region(img2, patch), patch)
+    assert not np.array_equal(_key_region(img2, patch, shape), patch)
     assert (out / "overlay_T4_1_legend_text.txt").read_text().strip() == text
 
 
@@ -247,13 +251,14 @@ def test_n8_compare_key_switch_redraws_the_overlays(window, qtbot, phage_folder,
     out = phage_folder / "out_turbidity"
     assert len(tab._overlays) == 3
     img = cv2.imread(str(out / "overlay_T4_1.png"))
-    patch = pgui.key_image_for(img.shape, ptb.overlay_key(tab._overlays[0]))
-    assert np.array_equal(_key_region(img, patch), patch)
+    shape = cv2.imread(str(phage_folder / "T4_1.tif")).shape
+    patch = pgui.key_image_for(shape, ptb.overlay_key(tab._overlays[0]))
+    assert np.array_equal(_key_region(img, patch, shape), patch)
     tab.key_cb.setChecked(False)
     qtbot.waitUntil(lambda: tab.run_btn.isEnabled(), timeout=TIMEOUT)
     qtbot.wait(50)
     img2 = cv2.imread(str(out / "overlay_T4_1.png"))
-    assert not np.array_equal(_key_region(img2, patch), patch)
+    assert not np.array_equal(_key_region(img2, patch, shape), patch)
 
 
 # =========================================================================== N1
@@ -482,8 +487,8 @@ def test_n3_size_not_used_has_its_own_outline_label_and_key_on_canvas_and_export
                                 labels="numbers + mm", **ed._figure_kwargs())
     assert all(t in drawn for t in texts)
     assert "%d (core)" % (core[0] + 1) in drawn and "%d (split)" % (nos[0] + 1) in drawn
-    patch = pgui.key_image_for(img.shape, key)
-    assert np.array_equal(_key_region(img, patch), patch)
+    patch = pgui.key_image_for(ed.orig_bgr.shape, key)
+    assert np.array_equal(_key_region(img, patch, ed.orig_bgr.shape), patch)
     # the export draws the dotted outline in the class colour (cyan), not the auto green
     rgb = pgui.PLAQUE_CLASSES["nosize"][1]
     img = pgui.annotate_plaques(ed.orig_bgr, [dict(p) for p in ed.plaques], ed.ppm, labels="none",

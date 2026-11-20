@@ -1177,6 +1177,7 @@ class PlaqueCanvas(QWidget):
                 pass
             self._key_item = None
         self._key_rect = None
+        self._fit_scene_to_key(None)
         if not (self.key_on_figure and key):
             return
         try:
@@ -1193,8 +1194,23 @@ class PlaqueCanvas(QWidget):
             self.scene.addItem(item)
             self._key_item = item
             self._key_rect = (x, y, x + patch.shape[1], y + patch.shape[0])
+            self._fit_scene_to_key(self._key_rect)
         except Exception:                               # noqa: BLE001
             self._key_item = None; self._key_rect = None
+
+    def _fit_scene_to_key(self, rect):
+        """CT-R3 F5: the key sits OUTSIDE the image (pgui.figure_with_key), so the scene grows to
+        hold it exactly as the exported figure does; without a key it is the image again. Tools
+        still act on the image only (_in_image)."""
+        H, W = self.orig_bgr.shape[:2]
+        r = QRectF(0, 0, W, H)
+        if rect is not None:
+            pad = pgui._key_pad(self.orig_bgr.shape)
+            r = r.united(QRectF(0, 0, rect[2] + pad, rect[3] + pad))
+        if self.scene.sceneRect() != r:
+            self.scene.setSceneRect(r)
+            if getattr(self, "_auto_fit", False) and getattr(self, "view", None) is not None:
+                self._fit_to_scene()
 
     def _key_toggled(self, on):
         self.key_on_figure = bool(on)

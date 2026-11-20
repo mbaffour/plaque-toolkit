@@ -403,3 +403,92 @@ def test_f2_small_tooltip_says_what_the_apps_small_is_on_every_tab(window):
     assert "differs" not in box.toolTip()
     box.set_engine("current")
     assert box.scale() == "small" and box.toolTip().startswith("Plaque size. " + want)
+
+
+# =========================================================================== F5
+def _beside(fig, img_shape, patch):
+    """The key region of a figure whose plate image had ``img_shape``."""
+    x, y = pgui.key_origin(img_shape, patch.shape)
+    assert x >= img_shape[1] or y >= img_shape[0]             # outside the image
+    return fig[y:y + patch.shape[0], x:x + patch.shape[1]]
+
+
+@pytest.fixture(scope="module")
+def sample_det():
+    return engine_api.detect_single(SAMPLE_TIF, plate_mm=100, scale="auto")
+
+
+def test_f5_measure_figure_key_sits_beside_the_image_and_covers_nothing(sample_det, window, qtbot, dialogs, tmp_path):
+    det = sample_det
+    orig, H, W = det["orig_bgr"], det["orig_bgr"].shape[0], det["orig_bgr"].shape[1]
+    plaques = engine_api.reading_order(det["plaques"])
+    off = pgui.annotate_plaques(orig, plaques, det["pxl_per_mm"], plate=det["plate"], key=False)
+    on = pgui.annotate_plaques(orig, plaques, det["pxl_per_mm"], plate=det["plate"], key=True)
+    assert off.shape == orig.shape and on.shape[1] >= W and on.shape[0] >= H
+    assert on.shape[0] * on.shape[1] > H * W
+    # the image part (outlines, every label, the scale bar) is EXACTLY the figure without a key
+    np.testing.assert_array_equal(on[:H, :W], off)
+    tagged = [dict(p) for p in plaques]
+    pgui.tag_qc(tagged, orig, det["pxl_per_mm"], plate=det["plate"])
+    patch = pgui.key_image_for(orig.shape, pgui.plate_key(tagged))
+    np.testing.assert_array_equal(_beside(on, orig.shape, patch), patch)
+    # the app's Measure figure: the same, and the canvas shows the key at that same place
+    img = os.path.join(str(tmp_path / "m"), "sample.tif")
+    os.makedirs(os.path.dirname(img)); shutil.copy(SAMPLE_TIF, img)
+    ed = _open(window.measure_tab, qtbot, dialogs, img)
+    ed.key_cb.setChecked(True)
+    fig = cv2.imread(ed.export_figure(str(tmp_path / "with_key.png")))
+    ed.key_cb.setChecked(False)
+    fig0 = cv2.imread(ed.export_figure(str(tmp_path / "no_key.png")))
+    np.testing.assert_array_equal(fig[:H, :W], fig0)
+    patch = pgui.key_image_for(orig.shape, ed.legend_key())
+    np.testing.assert_array_equal(_beside(fig, orig.shape, patch), patch)
+    # the standalone key lists the same entries as the embedded one (one builder)
+    from plaque_stats import legend_key
+    assert legend_key.entries_signature(ed.legend_key()) == legend_key.entries_signature(pgui.plate_key(tagged))
+    # the canvas: the scene grows to hold the key beside the image, and shrinks back
+    ed.key_cb.setChecked(True)
+    r = ed.scene.sceneRect()
+    assert (r.width(), r.height()) == (fig.shape[1], fig.shape[0])
+    x, y = pgui.key_origin(orig.shape, patch.shape)
+    assert ed._key_rect[:2] == (x, y) and (x > W or y > H)
+    ed.key_cb.setChecked(False)
+    assert (ed.scene.sceneRect().width(), ed.scene.sceneRect().height()) == (W, H)
+    # the side-by-side figure still builds with the key on
+    ed.key_cb.setChecked(True)
+    cmp = ed.export_comparison(str(tmp_path / "cmp.png"))
+    assert cmp and cv2.imread(cmp).shape[1] >= 2 * W
+
+
+def test_f5_batch_and_turbidity_overlays_keep_the_key_off_the_plate(tmp_path):
+    import plaque_turbidity as ptb
+    folder = tmp_path / "b"; folder.mkdir()
+    shutil.copy(SAMPLE_TIF, str(folder / "sample.tif"))
+    orig = cv2.imread(SAMPLE_TIF)
+    H, W = orig.shape[:2]
+    outs = {}
+    for on in (False, True):
+        res = batch_measure.batch_measure(str(folder), plate_mm=100, mode="current", scale="auto",
+                                          out_dir=str(tmp_path / ("on" if on else "off")), key_on_figure=on)
+        outs[on] = cv2.imread(os.path.join(res["out_dir"], "sample", "out_sample.tif"))
+    assert outs[False].shape[:2] == (H, W) and outs[True].shape[0] * outs[True].shape[1] > H * W
+    np.testing.assert_array_equal(outs[True][:H, :W], outs[False])
+    det = engine_api.detect_single(SAMPLE_TIF, plate_mm=100, scale="auto")
+    key = pgui.plate_key([dict(p, qc_flag=f) for p, f in zip(
+        engine_api.reading_order(det["plaques"]),
+        engine_api.measure_table(engine_api.reading_order(det["plaques"]), det["orig_bgr"],
+                                 det["pxl_per_mm"], det["lawn_gray"], plate=det["plate"])["QC_FLAG"])])
+    patch = pgui.key_image_for(orig.shape, key)
+    np.testing.assert_array_equal(_beside(outs[True], orig.shape, patch), patch)
+    # turbidity overlay (Compare): drawn once, re-drawn with and without the key
+    recs = []
+    cdir = tmp_path / "c"; cdir.mkdir(); shutil.copy(SAMPLE_TIF, str(cdir / "sample.tif"))
+    ptb.run_batch(str(cdir), "100", False, None, None, str(tmp_path / "t"), make_plots=False,
+                  key_on_figure=True, overlay_records=recs, scale="auto")
+    with_key = cv2.imread(str(tmp_path / "t" / "overlay_sample.png"))
+    ptb.redraw_overlays(recs, str(tmp_path / "t"), key_on_figure=False)
+    no_key = cv2.imread(str(tmp_path / "t" / "overlay_sample.png"))
+    assert no_key.shape[:2] == (H, W) and with_key.shape[0] * with_key.shape[1] > H * W
+    np.testing.assert_array_equal(with_key[:H, :W], no_key)
+    patch = pgui.key_image_for(orig.shape, ptb.overlay_key(recs[0]))
+    np.testing.assert_array_equal(_beside(with_key, orig.shape, patch), patch)

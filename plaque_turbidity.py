@@ -798,19 +798,17 @@ def render_overlay(orig, rec, out_dir, key_on_figure=True):
     except Exception as e:                       # noqa: BLE001 -- a key never stops the overlay
         print("  (legend key skipped for %s: %s)" % (rec.get("plate"), e))
         key = None
-    patch, avoid = None, []
+    patch = None
     if key_on_figure and key:
         patch = pgui.key_image_for(img.shape, key)
-        if patch is not None:
-            kx, ky = pgui.key_origin(img.shape, patch.shape)
-            avoid.append((kx, ky, kx + patch.shape[1], ky + patch.shape[0]))
     if rec["plaques"]:
         sizes = [pgui.text_size(s, m["font_px"], m["stroke"]) for s in rec["labels"]]
-        placed = pgui.layout_labels(rec["plaques"], sizes, img.shape, m["gap"], avoid=avoid)
+        placed = pgui.layout_labels(rec["plaques"], sizes, img.shape, m["gap"], avoid=[])
         pgui._draw_texts(img, [(s, r[0], r[1], m["font_px"], (255, 255, 255), m["stroke"])
                                for s, (_side, r) in zip(rec["labels"], placed)])
     if patch is not None:
-        pgui._paste_key(img, patch)
+        # CT-R3 F5: beside the overlay, never over the dish (it covered plaques in a corner)
+        img, _rect = pgui.figure_with_key(img, patch)
     path = os.path.join(out_dir, "overlay_%s.png" % rec["plate"])
     pst.imwrite_checked(path, img)
     try:

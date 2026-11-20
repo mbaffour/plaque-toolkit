@@ -381,8 +381,8 @@ def test_f12_legend_key_follows_the_plate_and_matches_on_figure(window, qtbot, d
     ed.key_cb.setChecked(True)
     out = ed.export_figure(str(tmp_path / "with_key.png"))
     fig = cv2.imread(out)
-    patch = pgui.key_image_for(fig.shape, ed.legend_key())
-    x, y = pgui.key_origin(fig.shape, patch.shape)
+    patch = pgui.key_image_for(ed.orig_bgr.shape, ed.legend_key())     # CT-R3 F5: beside the
+    x, y = pgui.key_origin(ed.orig_bgr.shape, patch.shape)              # plate image, not on it
     np.testing.assert_array_equal(fig[y:y + patch.shape[0], x:x + patch.shape[1]], patch)
     # ... and the canvas shows that same picture at that same place
     items = [it for it in ed.scene.items() if isinstance(it, QGraphicsPixmapItem) and it.zValue() == 24]
