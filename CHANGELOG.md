@@ -57,13 +57,18 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
     standard (halo) edge where it can: the standard outline where the standard pass finds the
     plaque; touching halos divided between their plaques (`SOURCE` = `split`, flag `SPLIT`);
     plaques only the small pass finds added as they are. A haloed plaque whose halo could not be
-    separated keeps its dark-centre outline and is flagged **`CORE?`**. Medians on plates with
-    large or haloed plaques rise toward the command-line values (old app → Auto: `sample.tif`
-    2.81 → 5.35 mm, 42 → 41 plaques; Plate_8 3.89 → 5.17 mm; Plate_6 1.87 → 2.57 mm). Choose
-    **Small** for the old behaviour. `CORE?` rows are a different size definition from the rest
-    of the plate (10 of 41 plaques on `sample.tif`, 26 of 89 on Plate_6): check the flag before
-    pooling sizes. The thresholds behind the halo rule were set on the bundled plates and have
-    not been validated on other images.
+    separated keeps its dark-centre outline and is flagged **`CORE?`**; a split piece that
+    overlaps its neighbours too much to size within 5 % is flagged **`NO_SIZE`**. Both are
+    **counted but left out of every size summary** (the Measure median and mean, Batch
+    `median_diam_mm` / `mean_diam_mm` with a new `n_sized` column, and what the Analyze tab
+    imports), and the app says "sizes from N of M plaques". Old app → Auto, plaques / plaques
+    sized / median: `sample.tif` 42 / 42 / 2.81 mm → 41 / 21 / 5.93 mm; Plate_6 96 / 96 /
+    1.87 mm → 89 / 62 / 3.16 mm; Plate_8 27 / 27 / 3.89 mm → 27 / 22 / 5.39 mm (the
+    command-line default gives 5.97, 3.79 and 5.57 mm on 16, 48 and 19 plaques). Choose
+    **Small** for the old behaviour. The ±5 % rule comes from a sweep of 168 synthetic plates
+    (`validation/split_sweep/`); the halo thresholds were set on the bundled plates and have
+    not been validated on other images, and whether the halo or the dark centre is the right
+    edge for a given phage is the experimenter's call.
   * The dish, and so the mm scale, now comes from the standard pass. On four bundled plates the
     old dish was a threshold halo 4–5 % too wide (Plate_8, 11, 14, 17), so every mm size on them
     grows by about that much; Plate_2, which had no dish, now gets one.
@@ -152,8 +157,13 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
 * **Plaque size: Auto / Standard / Small** on the Measure and Batch tabs (replaces Batch's "Small
   plaques" box). Changing it marks the result on screen as out of date. The table's `SOURCE`
   column says which pass found each plaque; `run_metadata.json` records the choice. On the
-  command line the same merge is opt-in: `--multiscale` (ignored, with a note, under
-  `--published`).
+  command line the same code is opt-in: `--multiscale` gives exactly the app's Auto result
+  (same plaques, `SOURCE` values and, with `--qc`, flags; ignored, with a note, under
+  `--published`). The shared code is the new `plaque_scales.py`; the default command-line run
+  never loads it.
+* `pip install` now includes `plaque_qc` and `plaque_scales` (without them `--qc` and
+  `--multiscale` failed outside a checkout); `tests/test_packaging_modules.py` checks that every
+  module the command-line tools import is packaged.
 * **Dish warnings.** The app and the command line say when the dish looks wrong (far smaller than
   the image, far off-centre, or more than 2 % cut off by the frame) instead of silently reporting
   millimetres from it. Warnings go to the flag line / stdout and `run_metadata.json`, never

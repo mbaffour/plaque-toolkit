@@ -19,7 +19,7 @@ binaries += collect_dynamic_libs("pillow_heif")     # native HEIF/AVIF DLLs (the
 hiddenimports = []
 hiddenimports += collect_submodules("pillow_heif")
 hiddenimports += [
-    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar",
+    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "plaque_qc", "plaque_scales", "heic_to_tiff", "scalebar",
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths",
     "imutils", "pandas",

@@ -48,7 +48,7 @@ datas += [(os.path.join(ROOT, f), ".")
 
 hiddenimports += [
     # project modules
-    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "heic_to_tiff", "scalebar",
+    "plaque_size_tool", "plaque_gui", "plaque_turbidity", "plaque_qc", "plaque_scales", "heic_to_tiff", "scalebar",
     "plate_crop",
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths", "app.plaque_canvas",

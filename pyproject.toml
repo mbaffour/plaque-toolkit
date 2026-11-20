@@ -38,7 +38,7 @@ Homepage = "https://github.com/mbaffour/plaque-toolkit"
 # Everything the two CLIs import at run time. `provenance` was missing, so a pip-installed
 # plaque_size_tool silently wrote no run_metadata.json (AUDIT-2026-10.md, PT-39).
 py-modules = ["plaque_size_tool", "plaque_turbidity", "_version", "provenance", "scalebar",
-              "summarize_plates", "plate_crop", "plaque_gui"]
+              "summarize_plates", "plate_crop", "plaque_gui", "plaque_qc", "plaque_scales"]
 
 [tool.setuptools.dynamic]
 version = { attr = "_version.__version__" }
