@@ -506,6 +506,7 @@ class StudyTab(QWidget):
         self._last_fig = None
         self._last = None         # (kind, payload) cache for redraw + saving
         self._building = True     # guard so wiring customize controls doesn't trigger redraw
+        self._cmp_ref = None      # CT-R2 F11: the Compare reference, the SAMPLE itself (not its name)
         self._stats_ok = _stats_available()
 
         intro = QLabel(
@@ -640,6 +641,7 @@ class StudyTab(QWidget):
         self.param_sel.addItem("Non-parametric (MWU / KW)", "nonparametric")
         self.param_sel.setToolTip("Auto uses a parametric test on plate means at small n (SuperPlot "
                                   "recommendation); else normality checks decide.")
+        self.param_sel.currentIndexChanged.connect(self._sync_controls)       # CT-R2 F12
         self.param_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
         # CT-R1 new options: one control each, no dialogs
         self.var_cap = QLabel("Variances:"); self.var_cap.setObjectName("FieldLabel")
@@ -650,13 +652,14 @@ class StudyTab(QWidget):
         self.var_sel.setToolTip("3 or more samples: Auto lets Levene's test decide; Equal = one-way ANOVA + "
                                 "Tukey; Unequal = Welch's ANOVA + Games-Howell. With 3 plates per sample "
                                 "Levene's test cannot see a difference in spread.")
+        self.var_sel.currentIndexChanged.connect(self._sync_controls)         # CT-R2 F12
         self.var_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
         self.cmp_to_cap = QLabel("Compare:"); self.cmp_to_cap.setObjectName("FieldLabel")
         self.cmp_to_sel = QComboBox(); self.cmp_to_sel.setMinimumWidth(130)
         self.cmp_to_sel.addItem("All pairs", None)
         self.cmp_to_sel.setToolTip("All pairs (Tukey / Games-Howell / Dunn), or each sample vs one "
                                    "reference sample (Dunnett's test).")
-        self.cmp_to_sel.currentIndexChanged.connect(self._reanalyse_if_ready)
+        self.cmp_to_sel.currentIndexChanged.connect(self._on_cmp_changed)
         self.analyse_btn = QPushButton("  Analyze  "); self.analyse_btn.setObjectName("Primary")
         self._bind(self.analyse_btn, self._analyse)
         row.addWidget(QLabel("Metric:")); row.addWidget(self.metric_sel)
@@ -1617,6 +1620,13 @@ class StudyTab(QWidget):
                 "posthoc": "dunnett" if ctrl else "auto",
                 "control": ctrl}
 
+    def _on_cmp_changed(self, *_):
+        """CT-R2 F11: remember WHICH sample is the reference, so a rename keeps it."""
+        name = self.cmp_to_sel.currentData()
+        self._cmp_ref = next((s for s in self._samples if s["group"] == name), None) if name else None
+        self._sync_controls()
+        self._reanalyse_if_ready()
+
     def _reanalyse_if_ready(self, *_):
         if not self._building and self._last is not None:
             self._run_action(self._analyse)
@@ -1661,6 +1671,30 @@ class StudyTab(QWidget):
                                  "2nd-factor values." if grouped else
                                  "Auto: grey violins when the plates carry the colours, coloured violins "
                                  "otherwise. The palette colours whatever is coloured.")
+        # CT-R2 F12: Dunnett's test assumes similar variances and is parametric. The choices that
+        # cannot be combined with it are greyed (both ways), as Median greys SD and SEM
+        if hasattr(self, "cmp_to_sel"):
+            dunnett = (not grouped) and self.cmp_to_sel.currentData() is not None
+            welch = self.var_sel.currentData() == "no"
+            nonpar = self.param_sel.currentData() == "nonparametric"
+            why_d = ("Not with Compare: vs a sample (Dunnett): Dunnett's test %s. Choose Compare: All "
+                     "pairs first.")
+            for combo, key, off, why in (
+                    (self.var_sel, "no", dunnett, why_d % "assumes similar variances"),
+                    (self.param_sel, "nonparametric", dunnett, why_d % "is parametric")):
+                it = combo.model().item(combo.findData(key))
+                it.setEnabled(not off)
+                it.setToolTip(why if off else "")
+            cm = self.cmp_to_sel.model()
+            block = ("Variances: Unequal (Welch)" if welch else "Test: Non-parametric" if nonpar else "")
+            for i in range(self.cmp_to_sel.count()):
+                if self.cmp_to_sel.itemData(i) is not None:
+                    cm.item(i).setEnabled(not block)
+                    cm.item(i).setToolTip(
+                        ("Dunnett's test cannot be combined with %s: it %s. Set %s back first."
+                         % (block, "assumes similar variances" if welch else "is parametric",
+                            "Variances to Auto or Equal" if welch else "Test to Auto or Parametric"))
+                        if block else "")
         am = self.annot_sel.model()
         for i in range(self.annot_sel.count()):
             if self.annot_sel.itemData(i) in ("all", "adjacent", "letters"):
@@ -1705,16 +1739,50 @@ class StudyTab(QWidget):
         else:
             msg = None
         if not ok:
-            # CT-R1 F19: a failed compute removes the old results and disables every export
             keep = self.err.text()
+            text = ("Analysis failed: %s" % msg) if msg else (keep or "Analysis failed.")
+            if self._last is not None:
+                # CT-R2 F12: a refusal never wipes a valid result of the SAME data (a data change
+                # has already cleared it): the last good result stays, and the controls go back
+                # to the choices it was computed with, so the screen and the ZIP agree with it
+                self._restore_controls(self._last[1])
+                self._warn(text + " The previous result stays on screen; the options were set back "
+                           "to the ones it was computed with.")
+                return
+            # CT-R1 F19: nothing valid to keep: clear the results and disable every export
             self._invalidate_analysis()
-            self._warn(("Analysis failed: %s" % msg) if msg else (keep or "Analysis failed."))
+            self._warn(text)
             return
         for b in self._export_buttons:
             b.setEnabled(True)
         if self._last_fig is None:                                # the figure itself failed
             for b in self._figure_buttons:
                 b.setEnabled(False)
+
+    def _restore_controls(self, pl):
+        """Put Metric / Test / Variances / Compare / Control back to the choices of result `pl`."""
+        sc = pl.get("stat_choices") or {}
+        self._building = True
+        try:
+            for combo, val in ((self.metric_sel, pl.get("metric_key")), (self.param_sel, sc.get("parametric")),
+                               (self.var_sel, sc.get("equal_var"))):
+                i = combo.findData(val) if val is not None else -1
+                if i >= 0:
+                    combo.blockSignals(True); combo.setCurrentIndex(i); combo.blockSignals(False)
+            if "control" in sc:
+                i = self.cmp_to_sel.findData(sc["control"]) if sc["control"] else 0
+                self.cmp_to_sel.blockSignals(True)
+                self.cmp_to_sel.setCurrentIndex(max(i, 0))
+                self.cmp_to_sel.blockSignals(False)
+                name = self.cmp_to_sel.currentData()
+                self._cmp_ref = next((s for s in self._samples if s["group"] == name), None) if name else None
+            if pl.get("control") and self.control_sel.findText(pl["control"]) >= 0:
+                self.control_sel.blockSignals(True)
+                self.control_sel.setCurrentText(pl["control"])
+                self.control_sel.blockSignals(False)
+        finally:
+            self._building = False
+        self._sync_controls()
 
     @staticmethod
     def _effect_text(eff):
@@ -2159,8 +2227,12 @@ class StudyTab(QWidget):
         for w in (self.ctrl_cap, self.control_sel):
             w.setVisible(has_sub)
         groups = self._ordered_groups()
-        # "Compare: all pairs / vs <sample>" follows the current sample names
-        cur_ref = self.cmp_to_sel.currentData()
+        # "Compare: all pairs / vs <sample>" follows the current sample names; the reference is
+        # the sample itself, so renaming it keeps it (CT-R2 F11: it used to fall back to All pairs)
+        ref = self._cmp_ref
+        cur_ref = ref["group"] if ref is not None and any(s is ref for s in self._samples) else None
+        if cur_ref is None:
+            self._cmp_ref = None
         self.cmp_to_sel.blockSignals(True)
         self.cmp_to_sel.clear()
         self.cmp_to_sel.addItem("All pairs", None)

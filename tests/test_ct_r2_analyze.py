@@ -538,3 +538,69 @@ def test_zip_report_uses_the_tabs_words(st, dialogs, tmp_path, par, var, cmp_, a
 def test_engine_phrases_become_the_tabs_control_names(engine, screen):
     """CT-R2 F13: whole engine phrases are replaced, longest first; no doubled bracket."""
     assert ST._ui_words(engine, "mutA") == screen
+
+
+# --------------------------------------------------------------------------- F11 / F12
+def test_compare_reference_follows_a_rename(st, dialogs, monkeypatch):
+    """CT-R2 F11: renaming the sample chosen in 'Compare: vs X (Dunnett)' used to switch the test
+    to All pairs (Tukey) silently. The reference is the sample itself, so it follows the rename."""
+    _fill(st, THREE)
+    st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData("mutA"))
+    st.analyse_btn.click()
+    assert st._last[1]["omni"]["posthoc"] == "Dunnett"
+    st._select_sample(1)
+    monkeypatch.setattr(ST._SampleDialog, "exec",
+                        lambda self: (self.name_in.setText("mutA-renamed"), ST.QDialog.Accepted)[1])
+    st.edit_btn.click()
+    assert st.cmp_to_sel.currentData() == "mutA-renamed"
+    assert st.cmp_to_sel.currentText() == "vs mutA-renamed (Dunnett)"
+    st.analyse_btn.click()
+    assert st._last[1]["omni"]["posthoc"] == "Dunnett"
+    assert st._last[1]["omni"]["control"] == "mutA-renamed"
+    # removing the reference sample falls back to All pairs
+    st._select_sample(1)
+    st.remove_btn.click()
+    assert st.cmp_to_sel.currentData() is None
+
+
+def _enabled(combo, data):
+    return combo.model().item(combo.findData(data)).isEnabled()
+
+
+def test_dunnett_greys_the_choices_it_cannot_be_combined_with(st, dialogs):
+    """CT-R2 F12: with Compare = vs a sample (Dunnett), Variances 'Unequal (Welch)' and Test
+    'Non-parametric' are greyed with a tooltip saying why -- and the other way round."""
+    _fill(st, THREE)
+    st.analyse_btn.click()
+    assert _enabled(st.var_sel, "no") and _enabled(st.param_sel, "nonparametric")
+    st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData("mutA"))
+    assert not _enabled(st.var_sel, "no") and not _enabled(st.param_sel, "nonparametric")
+    tip = st.var_sel.model().item(st.var_sel.findData("no")).toolTip()
+    assert "Dunnett" in tip and "similar variances" in tip
+    assert "parametric" in st.param_sel.model().item(st.param_sel.findData("nonparametric")).toolTip()
+    st.cmp_to_sel.setCurrentIndex(0)                         # All pairs
+    assert _enabled(st.var_sel, "no") and _enabled(st.param_sel, "nonparametric")
+    st.var_sel.setCurrentIndex(st.var_sel.findData("no"))
+    assert not _enabled(st.cmp_to_sel, "mutA")
+    assert "Variances: Unequal (Welch)" in st.cmp_to_sel.model().item(st.cmp_to_sel.findData("mutA")).toolTip()
+    st.var_sel.setCurrentIndex(st.var_sel.findData("auto"))
+    st.param_sel.setCurrentIndex(st.param_sel.findData("nonparametric"))
+    assert not _enabled(st.cmp_to_sel, "WT")
+
+
+def test_a_refused_combination_keeps_the_last_good_result(st, dialogs, tmp_path):
+    """CT-R2 F12: an engine refusal (reached programmatically, past the greyed item) never wipes
+    the previous valid result: chips, figure, tables and exports stay, the message is shown and
+    the control is set back, so the ZIP is the result on screen."""
+    _fill(st, THREE)
+    st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData("mutA"))
+    st.analyse_btn.click()
+    test, p = st._chips["test"].text(), st._chips["p"].text()
+    st.var_sel.setCurrentIndex(st.var_sel.findData("no"))   # Dunnett + Welch: refused
+    assert "Analysis failed" in st.err.text() and "previous result stays on screen" in st.err.text()
+    assert st._chips["test"].text() == test and st._chips["p"].text() == p
+    assert st._last_fig is not None and st.zip_btn.isEnabled() and st.report.toPlainText()
+    assert st.var_sel.currentData() == "auto"
+    z = _zip(st, dialogs, tmp_path)
+    omni = pd.read_csv(io.BytesIO(z.read("omnibus_test_diameter_mm.csv")))
+    assert omni["posthoc"][0] == "Dunnett"
