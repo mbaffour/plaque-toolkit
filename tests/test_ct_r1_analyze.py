@@ -156,9 +156,10 @@ def test_engine_exit_is_a_message_not_a_dead_app(st, dialogs, tmp_path, monkeypa
     monkeypatch.setattr(ps, "run_stats", lambda *a, **k: (_ for _ in ()).throw(SystemExit("[error] stats said no")))
     st.analyse_btn.click()
     assert "stats said no" in st.err.text()
-    # CT-R1 F19: the failed compute removed the old results and disabled every export
-    assert st._last is None and st._last_fig is None and not st.zip_btn.isEnabled()
-    assert st._chips["test"].text() == "—"
+    # CT-R2 F12 (replaces CT-R1 F19 here): a refusal on the SAME data keeps the last good result
+    # on screen (a data change still clears it, see test_clear_removes_results...)
+    assert st._last is not None and st._last_fig is not None and st.zip_btn.isEnabled()
+    assert "previous result stays on screen" in st.err.text()
 
 
 # --------------------------------------------------------------------------- F3
@@ -439,9 +440,11 @@ def test_variances_and_compare_to_options_reach_the_engine_and_the_zip(st, dialo
     assert omni["posthoc"][0] == "Dunnett"
     pw = _csv(z, "pairwise_tests_diameter_mm.csv")
     assert len(pw) == 2
-    # an engine refusal (Dunnett is parametric) is shown, not a traceback
+    # an engine refusal (Dunnett is parametric) is shown, not a traceback; CT-R2 F12: the item is
+    # greyed, and a refusal keeps the last good result and sets the control back
     st.param_sel.setCurrentIndex(st.param_sel.findData("nonparametric"))
-    assert "Dunnett" in st.err.text() and st._last is None
+    assert "Dunnett" in st.err.text() and st._last is not None
+    assert st.param_sel.currentData() == "auto"
     assert "Test: Non-parametric" in st.err.text() and "--parametric" not in st.err.text()
 
 
