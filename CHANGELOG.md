@@ -292,6 +292,14 @@ fixed, the rest partly) and reported 81 new ones; the entries below are the fixe
   report; the Variances choices say what "auto" can detect; subgroup choices that cannot work
   are refused; a line under the preview states the figure's real size; `$` and `\` in labels
   print as typed; a new optional **Difference to detect** box gives the plates needed.
+* **R Shiny app.** A sample with zero spread falls back to ANOVA + Tukey with a note instead of
+  "Welch ANOVA p = n/a"; sample names such as `NA`, `None` and `#1` are kept; quoted decimal
+  commas are read; with more than 5 samples the figure shows one row of stars against the first
+  sample, and a key placed below makes the figure taller instead of squeezing the plot; a colour
+  theme chosen after a paper style says that it replaced the style's colours, and clearing the
+  custom palette restores the earlier colours; the user's own variance choice is a note, not a
+  warning. `tests/test_ct_r1_parity.py` now compares R and Python on 126 cases (test chosen,
+  unit, exact-or-asymptotic method, omnibus and pairwise p) with no exceptions.
 * **A frozen detection benchmark** (`validation/detection_benchmark/`): the second-round
   tester's synthetic plates and perturbations, kept so that any future change to detection or
   sizing is scored on scenes it was not tuned on. Its absolute numbers are pessimistic compared
