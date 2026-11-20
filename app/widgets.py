@@ -33,6 +33,8 @@ COLUMN_TOOLTIPS = {
                "NESTED — its centre lies inside a larger plaque.\n"
                "SPLIT — separated from a touching neighbour (Auto); its size is less certain.\n"
                "CORE? — measured at the dark centre only: its halo could not be separated (Auto).\n"
+               "NO_SIZE — a split piece cut so much that its size is biased by more than 5 % (Auto).\n"
+               "CORE? and NO_SIZE plaques count, but stay out of the median / mean and the Analyze tab.\n"
                "TINY — under 12 px across: too few pixels for a reliable size.\n"
                "BRIGHT — brighter inside than around it: a bubble or glare, not a clearing.\n"
                "OVERLAP — its disk overlaps another plaque's, so both sizes are unreliable.\n"

@@ -688,7 +688,7 @@ def test_d8_two_overlapping_haloed_discs_come_out_as_two_halo_plaques(tmp_path):
     for p in split:
         assert abs(_dpx(p) - 2 * HALO_R) / (2 * HALO_R) < 0.10 and not p.get("core_only")
     assert d["sources"] == {"standard": 1, "split": 2, "standard-relaxed": 0, "small": 0,
-                            "other": 0, "core": 0}
+                            "other": 0, "core": 0, "no_size": 0}
     df = engine_api.measure_table(d["plaques"], d["orig_bgr"], d["pxl_per_mm"], d["lawn_gray"],
                                   plate=d["plate"], with_reason=True)
     for f in df.loc[df["SOURCE"] == "split", "QC_FLAG"]:
@@ -778,3 +778,205 @@ def test_d8_flag_line_and_run_metadata_report_edge_sources(qtbot, tmp_path):
     meta = json.load(open(tmp_path / "o" / "run_metadata.json"))
     assert meta["images"][0]["sources"]["split"] == 2 and meta["images"][0]["sources"]["core"] == 0
     assert meta["images"][0]["n_manual_or_edited"] == 0            # split plaques are detector results
+
+
+# --------------------------------------------------------------------------- #
+#  D10b: the CLI's --multiscale is the app's Auto (one implementation, plaque_scales)
+# --------------------------------------------------------------------------- #
+def _cli_multiscale_rows(path, mm, monkeypatch, tmp_path, qc=False):
+    """Run plaque_size_tool._process_one exactly as main() does with --multiscale and capture
+    the green frame it writes."""
+    import plaque_size_tool as pst
+    import plaque_scales
+    cap = {}
+    real = pst.write_data
+
+    def _wd(out_dir, image_path, green_df, red_df, other_df):
+        cap["green"] = green_df
+        return real(out_dir, image_path, green_df, red_df, other_df)
+    monkeypatch.setattr(pst, "write_data", _wd)
+    monkeypatch.setattr(pst, "out_dir_path", str(tmp_path))
+    for k, v in (("small_plaques", False), ("use_published", False), ("watershed_enabled", False),
+                 ("sensitive", False), ("upstream_exact", False), ("debug_mode", False),
+                 ("multiscale", True)):
+        monkeypatch.setattr(pst, k, v)
+    pst.last_calibration['mm_per_px'] = None
+    pst._process_one(path, str(mm), [], {"qc": qc})
+    g = cap["green"]
+    out = []
+    for _, row in g.iterrows():
+        c = plaque_scales._contour_center(row["CONTOURS"], row["ENCL_CENTER"])
+        out.append((round(float(row["AREA_PXL"]), 2), round(c[0], 3), round(c[1], 3), row["SOURCE"]))
+    return sorted(out), g
+
+
+@pytest.mark.parametrize("name,mm", [("sample", 100), ("large/Plate_8", 90)])
+def test_d10b_cli_multiscale_equals_app_auto(name, mm, monkeypatch, tmp_path):
+    from app import engine_api
+    path = _plate_path(name)
+    cli, g = _cli_multiscale_rows(path, mm, monkeypatch, tmp_path, qc=True)
+    det = engine_api.detect_single(path, plate_mm=mm, scale="auto")
+    app = sorted((round(p["area_pxl"], 2), round(p["center"][0], 3), round(p["center"][1], 3),
+                  p["source"]) for p in det["plaques"])
+    assert cli == app
+    # --qc: the same flags as the app's table, plaque by plaque
+    df = engine_api.measure_table(det["plaques"], det["orig_bgr"], det["pxl_per_mm"], det["lawn_gray"],
+                                  plate=det["plate"])
+    assert sorted(g["QC_FLAG"]) == sorted(df["QC_FLAG"])
+
+
+def test_d10b_default_cli_does_not_load_plaque_scales(tmp_path, mixed_plate):
+    """The default and --published runs never import the shared Auto module."""
+    import subprocess
+    import sys
+    code = ("import sys, runpy; sys.argv=['plaque_size_tool.py','-i',%r,'-p','90','-o',%r]; "
+            "sys.path.insert(0,%r); runpy.run_path(%r, run_name='__main__'); "
+            "print('LOADED' if 'plaque_scales' in sys.modules else 'CLEAN')"
+            % (mixed_plate, str(tmp_path / "o"), REPO_ROOT, os.path.join(REPO_ROOT, "plaque_size_tool.py")))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600)
+    assert r.stdout.strip().endswith("CLEAN"), r.stdout[-400:] + r.stderr[-400:]
+
+
+# --------------------------------------------------------------------------- #
+#  D10a: one rule for where sizes go (plaque_qc.size_ok)
+# --------------------------------------------------------------------------- #
+def test_d10a_size_ok_rule():
+    import plaque_qc as q
+    assert q.has_flag("SPLIT|OVERLAP", "SPLIT") and not q.has_flag("SPLIT|OVERLAP", "SPLIT?")
+    assert not q.has_flag(None, "CORE?") and not q.has_flag(float("nan"), "CORE?")
+    assert q.size_ok("OK") and q.size_ok("SPLIT|EDGE") and q.size_ok(None)
+    assert not q.size_ok("CORE?") and not q.size_ok("EDGE|CORE?") and not q.size_ok("SPLIT|NO_SIZE")
+    c = q.size_left_out_counts(["OK", "CORE?", "CORE?|EDGE", "SPLIT|NO_SIZE", "SPLIT"])
+    assert c == {"core": 2, "no_size": 1}
+    assert q.left_out_phrase(c) == ("2 outlined at the dark centre only and "
+                                    "1 split pieces whose size is not reliable")
+    assert q.left_out_phrase({"core": 0, "no_size": 0}) == ""
+
+
+def _analyze(qtbot, monkeypatch):
+    pytest.importorskip("PySide6")
+    pytest.importorskip("pytestqt")
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    appui = _gui()
+    win = appui.MainWindow()
+    qtbot.addWidget(win)
+    q = {"openN": [], "seen": []}
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        staticmethod(lambda *a, **k: q["openN"].pop(0) if q["openN"] else ([], "")))
+    for name in ("warning", "information", "critical"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(
+            lambda *a, _n=name, **k: q["seen"].append((_n, a[2] if len(a) > 2 else "")) or QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
+    st = win.study_tab
+    st._samples.append({"group": "T4", "subgroup": ""})
+    st._refresh_tree()
+    st._select_sample(0)
+    return win, st, q
+
+
+FLAGGED = pd_rows = None
+
+
+def _flagged_table():
+    import pandas as pd
+    return pd.DataFrame({"INDEX": [1, 2, 3, 4, 5], "DIAMETER_MM": [5.1, 5.3, 2.4, 5.0, 2.6],
+                         "AREA_MM2": [20.4, 22.1, 4.5, 19.6, 5.3],
+                         "SOURCE": ["auto", "split", "small", "auto", "small"],
+                         "QC_FLAG": ["OK", "SPLIT", "CORE?", "OK", "CORE?|EDGE"]})
+
+
+def test_d10a_analyze_add_current_plate_leaves_out_core_rows(qtbot, monkeypatch):
+    win, st, q = _analyze(qtbot, monkeypatch)
+    win.measure_tab.model.set_dataframe(_flagged_table())
+    st.add_cur_btn.click()
+    assert st._plates[0]["diam"] == [5.1, 5.3, 5.0] and st._plates[0]["area"] == [20.4, 22.1, 19.6]
+    assert win.statusBar().currentMessage() == (
+        "Added a plate to 'T4' (3 plaques; 2 outlined at the dark centre only were left out).")
+
+
+def test_d10a_analyze_add_csv_and_import_leave_out_core_rows(qtbot, monkeypatch, tmp_path):
+    from app import study_tab as ST
+    win, st, q = _analyze(qtbot, monkeypatch)
+    flagged = tmp_path / "data_flagged.csv"
+    _flagged_table().to_csv(flagged, index=False)
+    plain = tmp_path / "data_plain.csv"                 # no QC_FLAG column: unchanged behaviour
+    _flagged_table().drop(columns=["QC_FLAG"]).to_csv(plain, index=False)
+    q["openN"].append(([str(flagged), str(plain)], ""))
+    st.add_csv_btn.click()
+    assert [p["diam"] for p in st._plates] == [[5.1, 5.3, 5.0], [5.1, 5.3, 2.4, 5.0, 2.6]]
+    assert win.statusBar().currentMessage() == (
+        "Added 2 replicate plate(s); 2 outlined at the dark centre only were left out.")
+    monkeypatch.setattr(ST._AssignDialog, "exec", lambda self: ST.QDialog.Accepted)
+    q["openN"].append(([str(flagged)], ""))
+    st.assign_btn.click()
+    assert st._plates[-1]["diam"] == [5.1, 5.3, 5.0]
+    assert "; 2 outlined at the dark centre only were left out." in win.statusBar().currentMessage()
+
+
+def test_d10a_measure_tab_and_batch_size_summary_leave_out_core_and_no_size(qtbot, tmp_path):
+    """sample.tif in Auto: 41 plaques count; 10 CORE? + 10 NO_SIZE split pieces stay out of the
+    median / mean, on the Measure tab (real Detect) and in the Batch per_plate.csv."""
+    import shutil
+    import pandas as pd
+    import plaque_qc
+    from app import batch_measure
+    appui = _gui()
+    win = appui.MainWindow()
+    qtbot.addWidget(win)
+    tab = win.measure_tab
+    tab.mode.setCurrentIndex(_mode_index(appui, "current"))
+    tab.plate.setValue(100)
+    tab.image_path = SAMPLE_TIF
+    tab._detect()
+    qtbot.waitUntil(lambda: tab.det is not None and not tab.busy, timeout=120_000)
+    assert ("Sizes from 21 of 41 plaques (10 outlined at the dark centre only and 10 split pieces "
+            "whose size is not reliable are counted but left out of the size summary).") \
+        in tab.flag_label.text()
+    df = tab.model.dataframe()
+    assert len(df) == 41                                 # the table keeps every row
+    sized = pd.to_numeric(df[[plaque_qc.size_ok(f) for f in df["QC_FLAG"]]]["DIAMETER_MM"])
+    assert tab._metrics["count"].text() == "41"
+    assert tab._metrics["median"].text() == "%.2f" % sized.median() == "5.93"
+    folder = tmp_path / "f"
+    folder.mkdir()
+    shutil.copy(SAMPLE_TIF, folder / "sample.tif")
+    res = batch_measure.batch_measure(str(folder), plate_mm=100, mode="current")
+    row = res["summary_df"].iloc[0]
+    assert int(row["n_plaques"]) == 41 and int(row["n_sized"]) == 21
+    assert round(float(row["median_diam_mm"]), 2) == 5.93
+    allp = pd.read_csv(os.path.join(res["out_dir"], "all_plaques.csv"))
+    assert len(allp) == 41 and int(allp["QC_FLAG"].str.contains("CORE").sum()) == 10
+
+
+# --------------------------------------------------------------------------- #
+#  D10c: the split-size sweep (validation/split_sweep) and the rule built on it
+# --------------------------------------------------------------------------- #
+SWEEP = os.path.join(REPO_ROOT, "validation", "split_sweep", "split_size_sweep.csv")
+
+
+def test_d10c_sweep_headline_numbers():
+    import pandas as pd
+    df = pd.read_csv(SWEEP)
+    sp = df[df["outcome"] == "split"]
+    m = sp.groupby(["cuts_true", "s"])["bias"].mean().round(3)
+    assert m[(1, 0.6)] == -0.078 and m[(1, 0.7)] == -0.052 and m[(1, 0.8)] == -0.029
+    assert m[(1, 0.9)] == -0.012 and m[(2, 0.8)] == -0.066 and m[(2, 0.9)] == -0.029
+    assert m[(3, 0.8)] == -0.100 and m[(3, 0.9)] == -0.049
+    assert float(sp.groupby(["cuts_true", "s"])["bias"].std().max()) < 0.006   # systematic
+    # where Auto splits at all: D = 80 and 120 px (40 px halos are not split, 200 px clusters
+    # are accepted whole by the standard pass)
+    assert sorted(sp["D_px"].unique()) == [80, 120]
+
+
+def test_d10c_rule_keeps_only_pieces_within_5_percent():
+    import pandas as pd
+    import plaque_scales
+    sp = pd.read_csv(SWEEP)
+    sp = sp[sp["outcome"] == "split"]
+    keep = [plaque_scales.split_size_reliable(int(c), r)[0] for c, r in zip(sp["cut_by"], sp["cut_ratio"])]
+    kept, dropped = sp[keep], sp[[not k for k in keep]]
+    assert (kept["bias"].abs() <= 0.05).all()
+    assert (dropped["bias"] < -0.045).all()              # nothing within 4.5 % is thrown away
+    assert len(kept) == 70 and len(dropped) == 56
+    ok, why = plaque_scales.split_size_reliable(3, 0.73)
+    assert not ok and why == "cut by 3 neighbours, centres 0.73 of its diameter apart"

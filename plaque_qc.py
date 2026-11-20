@@ -34,6 +34,10 @@ Flags (several may apply, joined with `|`; `OK` when none):
                cluster split (SOURCE "split"); its size is less certain. Never also MERGED?.
 * ``CORE?``    Auto only: the outline is a dark centre whose paler halo could not be separated
                from its neighbours or the lawn edge, so its size is the core's, not the halo's.
+* ``NO_SIZE``  Auto only: a split piece whose size is biased by more than 5 % in the D10c
+               sweep (validation/split_sweep); the reason says why (e.g. "cut by 3 neighbours").
+               It counts, but -- like CORE? -- its diameter is left out of every size summary
+               (size_ok()).
 * ``OVERLAP``  its disk overlaps another plaque's disk (sizes of both are unreliable).
 * ``LOW_CONF`` the Precise classifier scored it below ``low_conf`` (only when a score exists).
 
@@ -48,6 +52,43 @@ STANDARD_ENCL_DIAM_MIN = 30      # plaque_size_tool.filter_contours: green_diam_
 LAWN_EDGE_FRAC = 0.93            # where the lawn ends, as a fraction of the dish radius (F11)
 TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9)
 MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from this diameter (D9)
+
+
+# Flags whose plaque COUNTS but whose diameter is not this plate's edge definition / not
+# reliable, so it must not enter any size summary (CT-R1 detection D10a/D10c).
+SIZE_EXCLUDING_FLAGS = ("CORE?", "NO_SIZE")
+
+
+def has_flag(flag_string, name):
+    """True when ``name`` is one of the |-joined flags in ``flag_string`` (exact token)."""
+    if flag_string is None or flag_string != flag_string:      # None / NaN
+        return False
+    return name in str(flag_string).split("|")
+
+
+def size_ok(flag_string):
+    """May this plaque's diameter enter a size summary (median, mean, the Analyze tab)? False
+    for CORE? (measured at the dark centre, a different edge definition from the rest of the
+    plate) and NO_SIZE (a split piece whose size the D10c sweep shows to be biased). The ONE
+    rule; the Measure tab, the Batch summary and the Analyze hand-off all use it."""
+    return not any(has_flag(flag_string, f) for f in SIZE_EXCLUDING_FLAGS)
+
+
+def size_left_out_counts(flag_strings):
+    """{'core': n with CORE?, 'no_size': n with NO_SIZE (and not CORE?)} over many rows."""
+    core = sum(1 for f in flag_strings if has_flag(f, "CORE?"))
+    nos = sum(1 for f in flag_strings if has_flag(f, "NO_SIZE") and not has_flag(f, "CORE?"))
+    return {"core": core, "no_size": nos}
+
+
+def left_out_phrase(counts):
+    """'10 outlined at the dark centre only' / '2 cut by several neighbours' / both, or ''."""
+    parts = []
+    if counts.get("core"):
+        parts.append("%d outlined at the dark centre only" % counts["core"])
+    if counts.get("no_size"):
+        parts.append("%d split pieces whose size is not reliable" % counts["no_size"])
+    return " and ".join(parts)
 
 
 def _point_in_poly(x, y, poly):
@@ -147,6 +188,10 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         if p.get("core_only"):
             flags.append("CORE?")
             why.append("outline is the dark centre only; its halo could not be separated")
+        if p.get("size_unreliable"):           # D10c: a split piece cut too much to size
+            flags.append("NO_SIZE")
+            why.append("%s: size not reliable, left out of size summaries"
+                       % (p.get("size_reason") or "split piece"))
         # TINY (CT-R1 detection D9): the outline is too few pixels for a reliable size -- below
         # tiny_diam_px (12) across, one pixel of edge error is > 15 % of the area. Being found
         # only by the small pass is not a flag (SOURCE says so); 389 of 767 rows were TINY.
@@ -318,7 +363,9 @@ def flags_for_plaque_dicts(plaques, image_shape, plate=None, circularities=None,
                "p_plaque": p.get("p_plaque"), "source": p.get("source"),
                "solidity": p.get("solidity"), "encl_diam_px": p.get("encl_diam_px"),
                "core_only": bool(p.get("core_only")),
-               "pixel_outline": p.get("kind") != "circle"}
+               "pixel_outline": p.get("kind") != "circle",
+               "size_unreliable": bool(p.get("size_unreliable")),
+               "size_reason": p.get("size_reason")}
         # the size-gate TINY rule is about the classic detector's gate: only its own outlines
         # are judged by it, not circles drawn by hand or Precise's model plaques
         classic = p.get("kind") != "circle" and p.get("source") not in ("manual", "freehand")
