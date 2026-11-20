@@ -918,3 +918,12 @@ chk("R3_py_no_brackets_when_nothing_testable", {
   nrow(sel$pairs) == 0 && is.null(sel$vsref) && is.null(sel$note) && is.null(sel$sentence) })
 chk("R3_py_single_plate_bar_wording", grepl("Bar: the single plate mean.", figure_sentence("mean", "sem", TRUE, TRUE, TRUE, c(1L, 1L)), fixed = TRUE))
 chk("R3_py_median_iqr_wording_as_python", grepl("Bar: median of all plaques. Whisker: IQR of the plaques (25th to 75th percentile).", figure_sentence("median", "iqr", TRUE), fixed = TRUE))
+
+# ---- click-through round 4, N3: "1 plate", never "1 plates" -----------------------------------
+chk("R4_N3_n_word_singular_plural", identical(n_word(1, "plate"), "1 plate") && identical(n_word(3, "plate"), "3 plates") &&
+      identical(n_word(1L, "plaque"), "1 plaque"), paste(n_word(1, "plate"), n_word(3, "plate")))
+testServer(app, {
+  raw(read_plaque_table(fx("ct_r1_E_oneplate_group.csv"))$df); do.call(session$setInputs, ui_defaults)
+  s <- output$sentence
+  chk("R4_N3_sentence_has_no_1_plates", !grepl("\\b1 plates\\b", s) && !grepl("\\b1 plate means\\b", s), s)
+})

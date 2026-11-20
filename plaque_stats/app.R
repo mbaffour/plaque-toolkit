@@ -508,6 +508,9 @@ tidy_plaque_data <- function(df, group, replicate = NULL, value = NULL, metric =
 fmt_p <- function(p) {                          # as _fmt_p(): "n/a", "< 0.001" or 3 decimals
   vapply(p, function(v) if (is.na(v)) "n/a" else if (v < 1e-3) "< 0.001" else formatC(v, format = "f", digits = 3), "")
 }
+# "1 plate" / "3 plates" (click-through round 4, N3: the sentence printed "1 plates")
+n_word <- function(n, word) sprintf("%d %s%s", as.integer(n), word, if (isTRUE(n == 1)) "" else "s")
+
 p_eq <- function(p) {                           # "p < 0.001" / "p = 0.004" / "p = n/a" (never "p = < 0.001")
   f <- fmt_p(p); if (startsWith(f, "<")) paste("p", f) else paste("p =", f)
 }
@@ -927,12 +930,14 @@ stats_sentence <- function(metric, summ, st, ct = NULL, center = "mean", error =
                                        if (st$unit == "replicate") "plate" else "plaque"))
     }
     if (st$unit == "replicate")
-      return(sprintf("%s in %s was %s ± %s (mean ± SEM of %d plate means; %d plaques) vs %s %s ± %s (%d plates; %d plaques); %s on plate means, %s%s.",
-                     metric, summ$group[1], f2(us$mean[1]), f2(us$sem[1]), us$n[1], summ$n[1],
-                     summ$group[2], f2(us$mean[2]), f2(us$sem[2]), us$n[2], summ$n[2],
-                     st$test, p_eq(st$p), d_txt))
+      return(sprintf("%s in %s was %s ± %s (mean ± SEM of %s; %s) vs %s %s ± %s (%s; %s); %s on plate means, %s%s.",
+                     metric, summ$group[1], f2(us$mean[1]), f2(us$sem[1]),
+                     if (us$n[1] == 1) "1 plate mean" else sprintf("%d plate means", us$n[1]),
+                     n_word(summ$n[1], "plaque"),
+                     summ$group[2], f2(us$mean[2]), f2(us$sem[2]), n_word(us$n[2], "plate"),
+                     n_word(summ$n[2], "plaque"), st$test, p_eq(st$p), d_txt))
     nfmt <- function(i) paste0(sprintf("n=%d", summ$n[i]),
-                               if (st$have_rep) sprintf(", %d plates", summ$n_plates[i]) else " plaques")
+                               if (st$have_rep) paste0(", ", n_word(summ$n_plates[i], "plate")) else " plaques")
     return(sprintf("%s in %s was %s ± %s (%s) vs %s %s ± %s (%s); %s, %s%s.",
                    metric, summ$group[1], f2(summ$mean[1]), f2(summ$sd[1]), nfmt(1),
                    summ$group[2], f2(summ$mean[2]), f2(summ$sd[2]), nfmt(2), st$test, p_eq(st$p), d_txt))
@@ -941,8 +946,8 @@ stats_sentence <- function(metric, summ, st, ct = NULL, center = "mean", error =
   us <- st$unit_stats
   post <- if (is.na(st$posthoc)) "" else paste0("; pairwise comparisons: ", st$posthoc)
   if (st$unit == "replicate") {
-    items <- sprintf("%s %s ± %s (%d plates; %d plaques)", summ$group, vapply(us$mean, f2, ""), vapply(us$sem, f2, ""),
-                     us$n, summ$n)
+    items <- sprintf("%s %s ± %s (%s; %s)", summ$group, vapply(us$mean, f2, ""), vapply(us$sem, f2, ""),
+                     vapply(us$n, n_word, "", "plate"), vapply(summ$n, n_word, "", "plaque"))
     return(sprintf("%s (mean ± SEM of plate means; n = plates, plaques in brackets): %s. %s on plate means across %d groups, %s%s.",
                    metric, paste(items, collapse = "; "), st$test, k, p_eq(st$p), post))
   }

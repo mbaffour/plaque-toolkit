@@ -378,6 +378,17 @@ what they found:
   coloured violins R chooses plate colours that stay clear of the sample colours, so they can
   differ from Python's.
 
+### Fourth test round (targeted re-check)
+
+One tester re-ran every third-round finding on the merged build and spot-checked the main
+routes for regressions: the plate without a scale is refused on every route, sizes agree across
+all routes, the four statistics front-ends agree to 6 digits, the three agreement front-ends give
+the same numbers and sentence, the legend key sits beside the plate, and the frozen command-line
+outputs still match their v1.1.0 hashes. No wrong number or disagreement between screens was
+found. Three wording fixes: the legend text names the dotted "size not used" outline "cyan", as
+drawn (it said "bluish green"); a desktop note starts its sentence with a capital; the R sentence
+says "1 plate", not "1 plates".
+
 ### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
 
 * **Reading files.** Labels are kept exactly as typed; comma, semicolon and tab files and decimal

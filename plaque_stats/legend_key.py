@@ -43,6 +43,10 @@ COLOUR_NAMES = [
     ("olive", "#808000"), ("gold", "#DAA520"), ("sky blue", "#56B4E9"),
     ("vermillion", "#D55E00"), ("bluish green", "#009E73"), ("reddish purple", "#CC79A7"),
     ("yellow-green", "#9ACD32"),
+    # True cyan. The "cyan" above is a sky blue, so the plate figures' dotted "size not used"
+    # outline, drawn (0, 230, 230), was named "bluish green" (click-through round 4, N1).
+    # Adding this changes no word for any colour of the shipped palettes.
+    ("cyan", "#00E5E5"),
 ]
 
 MARKER_WORDS = {

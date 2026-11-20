@@ -382,7 +382,8 @@ _FLAG_WORDS = [
     ("--equal-var no (Welch ANOVA + Games-Howell)", "Variances: Unequal (Welch ANOVA + Games-Howell)"),
     ("choose --equal-var no", "choose Variances: Unequal (Welch)"),
     ("--annotate letters gives a compact letter display, --annotate all every bracket",
-     "choose Brackets: Letters for a compact letter display, or Brackets: All pairs for every bracket"),
+     # the engine phrase always starts a sentence (click-through round 4, N2: was "choose")
+     "Choose Brackets: Letters for a compact letter display, or Brackets: All pairs for every bracket"),
     ("not in --order", "not in the sample order"),
     ("--log-y-drop-nonpositive", "removing the values ≤ 0"),
     ("--parametric nonparametric", "Test: Non-parametric"),

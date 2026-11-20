@@ -532,7 +532,7 @@ def test_zip_report_uses_the_tabs_words(st, dialogs, tmp_path, par, var, cmp_, a
     ("Override with `--parametric`.", "Override with the Test control."),
     ("Every pair is in the pairwise table. `--annotate letters` gives a compact letter display, "
      "`--annotate all` every bracket.",
-     "Every pair is in the pairwise table. choose Brackets: Letters for a compact letter display, "
+     "Every pair is in the pairwise table. Choose Brackets: Letters for a compact letter display, "
      "or Brackets: All pairs for every bracket."),
     ("Welch ANOVA (Welch) (Welch)", "Welch ANOVA (Welch)"),
 ])
