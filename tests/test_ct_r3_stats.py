@@ -280,3 +280,223 @@ def test_desktop_detect_field_hidden_in_grouped_mode(st, dialogs):
     _fill(st, [("WT", "host2", [1.0, 1.1])])
     assert st.detect_in.isHidden() and st.detect_cap.isHidden()
 
+
+# =========================================================================== 4. F8 sizes <= 0
+SIZE_WARN = ("8 values are zero or negative: a plaque size cannot be; check the column (they are "
+             "included in this analysis).")
+
+
+def test_f8_size_rule_by_name():
+    assert ps.size_warning([1.0, 0.0, -1.0], "diameter_mm") == (
+        "2 values are zero or negative: a plaque size cannot be; check the column (they are included "
+        "in this analysis).")
+    assert ps.size_warning([1.0, 0.0], "Area (mm²)").startswith("1 value is zero or negative")
+    for name in ("DIAM", "plaque_radius", "size_um", "len_mm"):
+        assert ps.size_warning([0.0], name)
+    assert ps.size_warning([0.0, -2.0], "turbidity") is None          # not a size: no warning
+    assert ps.size_warning([1.0, 2.0], "diameter_mm") is None
+
+
+def test_f8_cli_warns_and_numbers_do_not_change(tmp_path):
+    """k_zeros.csv: 8 diameters <= 0 are analysed (p = 6.24e-03, as before) with ONE warning."""
+    res = _cli(tmp_path, K_ZEROS, value="diameter_mm")
+    assert res["omni"]["p"] == pytest.approx(6.24e-03, abs=5e-6)
+    assert res["warnings"][0] == SIZE_WARN
+    assert "- ⚠️ **%s**" % SIZE_WARN in _report(res)
+    # the same rows, the same numbers: the values stay in
+    d, _ = ps.normalize(ps.read_table(K_ZEROS), "group", "diameter_mm", "replicate", "metric")
+    assert int((d["value"] <= 0).sum()) == 8 and len(res["summary"]) == d["group"].nunique()
+
+
+def test_f8_cli_grouped_warns(tmp_path):
+    df = ps.read_table(K_ZEROS)
+    df["host"] = np.where(np.arange(len(df)) % 2, "h1", "h2")
+    p = tmp_path / "kg.csv"
+    df.to_csv(p, index=False)
+    res = _cli(tmp_path, str(p), value="diameter_mm", subgroup="host")
+    assert res["warnings"][0] == SIZE_WARN
+
+
+def test_f8_web_warns_in_both_modes():
+    A = _web()
+    df, inf = A.read_upload(K_ZEROS)
+    a = A.compute(df, _sel(A, df), inf)
+    assert "⚠ " + SIZE_WARN in A.summary_lines(a)
+    assert a["omni"]["p"] == pytest.approx(6.24e-03, abs=5e-6)
+    df2 = df.copy()
+    df2["host"] = np.where(np.arange(len(df2)) % 2, "h1", "h2")
+    g = A.compute(df2, _sel(A, df2, subgroup="host", control="h1"), inf)
+    assert g["warnings"][0] == SIZE_WARN
+    # a column that is not a size: no warning
+    df3 = df.rename(columns={"diameter_mm": "turbidity"}).drop(columns=["area_mm2"])
+    t = A.compute(df3, _sel(A, df3), inf)
+    assert not any("zero or negative" in w for w in t["warnings"])
+
+
+def test_f8_desktop_has_no_hide_control_and_refusal_says_why(st, dialogs, tmp_path):
+    """Desktop: Load study keeps refusing sizes <= 0 (stricter than the other front-ends, and it
+    says so); the 'hide ≤ 0' control that could never act on a size column is gone."""
+    assert not hasattr(st, "logy_drop_cb")
+    texts = [w.text() for w in st.findChildren(__import__("PySide6.QtWidgets", fromlist=["QCheckBox"]).QCheckBox)]
+    assert not any("≤ 0" in t for t in texts), texts
+    dialogs["open"].append((K_ZEROS, ""))
+    st._load_study()
+    assert "Not loaded" in st.err.text() and "zero or negative" in st.err.text()
+    assert "this tab refuses them" in st.err.text()
+    assert st._samples == []
+
+
+# =========================================================================== 5. wording
+_FLAG = re.compile(r"(?<![-|\w])--[a-z]")
+
+
+def _depth(t):
+    d = m = 0
+    for ch in t:
+        d += ch == "("
+        d -= ch == ")"
+        m = max(m, d)
+    return m
+
+
+def test_n3_median_bootstrap_wording_has_no_nested_brackets():
+    o = ps._plot_opts(dict(ps.DEFAULTS, center="median", error="ci95"))
+    fs = ps.figure_sentence(o, True, [3, 3])
+    assert ("Whisker: bootstrap interval of the median, approximate (too narrow with fewer than about "
+            "10 plates, plates resampled, 2,000 bootstrap resamples, seed 7).") in fs
+    assert _depth(fs) <= 1 and ";" not in fs
+    w = ps._what_values("median", "ci95", True, "replicate", 3)
+    assert w == ("median of all plaques, whisker: bootstrap interval of the median, approximate (too "
+                 "narrow with fewer than about 10 plates)")
+    df = ps.read_table(F_ONE)
+    d, _ = ps.normalize(df, "group", "diameter_mm", "replicate", "metric")
+    d = d[d["group"] != "mutB"]
+    for order in (["WT", "mutA"],):
+        omni, ph, unit, hr = ps.run_stats(d, order, "auto", "auto")
+        summ = ps.group_summary(d, order, unit=unit)
+        cen = ps.center_table(d, order, o)
+        s = ps.paste_sentence("diameter", summ, omni, unit, hr, o, centers=cen)
+        # the value range "(2.41–2.82)" is the only bracket before the description bracket
+        assert "approximate (too narrow" in s and _depth(s) <= 2, s
+        assert "((" not in s and "median (bootstrap" not in s
+
+
+def test_n11_single_plate_mean_wording():
+    o = ps._plot_opts(dict(ps.DEFAULTS))
+    assert "Bar: the single plate mean." in ps.figure_sentence(o, True, [1, 1])
+    assert "1 plate means" not in ps.figure_sentence(o, True, [1, 1])
+    assert "Bar: mean of the 3 plate means." in ps.figure_sentence(o, True, [3, 3])
+
+
+TWELVE = [("S%02d" % i, "", [1.0 + 0.1 * i, 1.05 + 0.1 * i, 0.95 + 0.1 * i]) for i in range(12)]
+
+
+@pytest.mark.parametrize("cmp_", [None, "S00"])
+def test_f4_f12_no_option_names_in_many_sample_or_dunnett_texts(st, dialogs, tmp_path, cmp_):
+    """CT-R3 F4: the 12-sample key text starter said '`--annotate letters` gives a compact letter
+    display, `--annotate all` every bracket'. Every screen text, key text, caption and ZIP text is
+    scanned for '--option', for the many-sample case and for Dunnett."""
+    _fill(st, TWELVE)
+    if cmp_:
+        st.cmp_to_sel.setCurrentIndex(st.cmp_to_sel.findData(cmp_))
+    st.analyse_btn.click()
+    assert st._last is not None, st.err.text()
+    kt = st.key_text.text()
+    if not cmp_:
+        assert "Brackets: Letters" in kt and "Brackets: All pairs" in kt, kt
+    z = _zip(st, dialogs, tmp_path)
+    zt = [z.read(n).decode() for n in z.namelist() if n.endswith((".md", ".txt"))]
+    key_files = [n for n in z.namelist() if n.endswith("_legend_text.txt")]
+    assert key_files and z.read(key_files[0]).decode().strip() == kt.strip()
+    for t in [st.report.toPlainText(), st.warn_lbl.text(), st.fig_caption.text(), st.err.text(),
+              kt, st.cmp_cap.text()] + zt:
+        assert not _FLAG.search(t), t[max(0, _FLAG.search(t).start() - 80):][:200]
+
+
+def test_f12_dunnett_advice_has_one_bracket():
+    from app import study_tab as ST
+    eng = ("If you expect the groups to differ in spread, drop --posthoc dunnett and use "
+           "--equal-var no (Welch ANOVA + Games-Howell).")
+    out = ST._ui_words(eng, "WT")
+    assert "(Welch) (Welch" not in out and "Variances: Unequal (Welch ANOVA + Games-Howell)" in out, out
+
+
+# =========================================================================== 6. F9 no plate column
+def test_f9_engine_untestable_text_is_plain(tmp_path):
+    df = pd.DataFrame({"group": list("AAABBBCCC"), "replicate": ["p1"] * 9,
+                       "value": [1, 1.1, 1.2, 2, 2.1, 2.2, 3, 3.1, 3.2]})
+    omni, ph, unit, hr = ps.run_stats(df, list("ABC"), "auto", "auto")
+    assert "fewer than 8" not in omni["choice_note"]
+    assert omni["choice_note"].startswith("No test can be run: fewer than 2 samples have 2 or more plates")
+    s = ps.paste_sentence("d", ps.group_summary(df, list("ABC"), unit=unit), omni, unit, hr, {})
+    assert "(n/a (" not in s and "(no test: need ≥2 samples with ≥2 plates)" in s, s
+
+
+def test_f9_desktop_file_without_plate_column(st, dialogs, tmp_path):
+    """A table with NO plate column: say on load what happened and what to do; the chips, the
+    sentence and the Test-choice text agree with it."""
+    rng = np.random.default_rng(1)
+    rows = [{"group": g, "diameter_mm": round(float(mu + rng.normal(0, 0.1)), 3)}
+            for g, mu in (("WT", 1.0), ("mutA", 1.5), ("mutB", 1.2)) for _ in range(20)]
+    p = tmp_path / "noplate.csv"
+    pd.DataFrame(rows).to_csv(p, index=False)
+    dialogs["open"].append((str(p), ""))
+    st._load_study()
+    msg = st.err.text()
+    assert ("this file has no plate (replicate) column: each sample was loaded as ONE plate, so no "
+            "test can be run on plate means") in msg, msg
+    assert "Add a plate column, or analyse per plaque in the command line / web app" in msg
+    st.analyse_btn.click()
+    rep = st.report.toPlainText()
+    assert "fewer than 8" not in rep and "(n/a (" not in rep and "; p = n/a)" not in rep, rep
+    assert "no plate (replicate) column" in rep and "no plate (replicate) column" in st.warn_lbl.text()
+    assert st._chips["test"].text() == "none (1 plate per sample)"
+    assert st._chips["p"].text() == "n/a"
+
+
+# =========================================================================== 7. F10 p floor
+def test_f10_underflowing_p_is_noted_and_never_printed_as_zero(tmp_path):
+    groups = {"A": [1.0, 1.001, 0.999, 1.0005], "B": [5.0, 5.001, 4.999, 5.0005],
+              "C": [9.0, 9.001, 8.999, 9.0005]}
+    df = pd.DataFrame([{"group": g, "replicate": "%s%d" % (g, i), "value": v}
+                       for g, vs in groups.items() for i, v in enumerate(vs)])
+    res = _cli(tmp_path, df, value="value")
+    pw = pd.read_csv(os.path.join(res["out"], "pairwise_tests_value.csv"))
+    assert (pw["p_adj"] < 1e-15).any()                     # the CSV keeps what was computed
+    note = [n for n in res["notes"] if "below 1e-15" in n]
+    assert note and "read them as p < 1e-15" in note[0], res["notes"]
+    md = _report(res)
+    assert note[0] in md and not re.search(r"p = 0(?![.\d])", md) and "p = 0.000" not in md
+    cfg = json.load(open(os.path.join(res["out"], "run_config_value.json")))
+    assert cfg["p_floor"] == 1e-15
+
+
+# =========================================================================== 8. default figure size
+def test_one_default_size_everywhere(st):
+    A = _web()
+    assert (ps.DEFAULTS["width"], ps.DEFAULTS["height"]) == (8.0, 5.2)
+    assert (st.width_in.value(), st.height_in.value()) == (8.0, 5.2)
+    html = str(A.app_ui)
+    for name in ("width", "height"):
+        m = re.search(r'id="%s"[^>]*data-from="([\d.]+)"' % name, html)
+        assert m and float(m.group(1)) == ps.DEFAULTS[name], name
+
+
+def test_web_size_line_is_the_served_file_and_says_why():
+    """CT-R3: the web's 'figure: W x H in' line is the file it serves (to 0.05 in), and says why it
+    is smaller than the sliders (the empty margin is trimmed); it used to say 8.8 x 5.2 beside
+    sliders at 9 x 5.4 without a reason."""
+    A = _web()
+    df, inf = A.read_upload(os.path.join(PS_DIR, "example_data_wide.csv"))
+    sel = _sel(A, df, width=9, height=5.4)
+    fig = A.make_figure(A.compute(df, sel, inf))
+    try:
+        png = A.fig_bytes(fig, "png")
+        size = A.figure_size_in(fig, png)
+    finally:
+        plt.close(fig)
+    w, h = (v / 300.0 for v in struct.unpack(">II", png[16:24]))
+    line = A.size_line(size, sel)
+    said = [float(x) for x in re.match(r"figure: ([\d.]+) x ([\d.]+) in", line).groups()]
+    assert abs(said[0] - w) <= 0.05 and abs(said[1] - h) <= 0.05, (line, w, h)
+    assert "margin around the figure is trimmed" in line and "(9.0 x 5.4 in)" in line, line

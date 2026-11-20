@@ -1119,6 +1119,9 @@ def sensitivity_text(omni):
     return str(((omni or {}).get("sensitivity") or {}).get("text") or "")
 
 
+P_FLOOR = 1e-15                # CT-R3 F10: p-values below this are not resolved
+
+
 class PosthocResult(dict):
     """The {(a, b): adjusted p} dict run_stats() has always returned, plus `.name`: the post-hoc
     test that produced it ("Tukey HSD, adjusted p", "Welch t-test", ...). Figures read the name
@@ -1219,7 +1222,11 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         # group). Unequal variances alone no longer send normal data to a rank test: Welch's
         # ANOVA / Games-Howell handle them (CT-R1 SM-F5).
         use_param = True if min_n < 8 else bool(all_normal)
-        if min_n < 8:
+        if len(tg) < 2:
+            # CT-R3 F9: nothing can be tested (e.g. one plate per sample): no "fewer than 8" text
+            choice = ("No test can be run: fewer than 2 samples have 2 or more %ss (%s)."
+                      % (uw, _n_list(ns, unit)))
+        elif min_n < 8:
             choice = ("With fewer than 8 %ss per sample (here %d) a parametric test is used on the %s: "
                       "Shapiro–Wilk is unreliable and rank tests are underpowered at this size "
                       "(Mann–Whitney cannot go below p = 0.10 at 3 vs 3). This follows SuperPlots "
@@ -1462,6 +1469,16 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                          "measurement (got %r)." % (detect,))
     if det is not None and not (det > 0 and math.isfinite(det)):
         raise StatsError("--detect must be greater than 0 (got %r)." % (detect,))
+    # CT-R3 F10: a p that underflows (0.0, or below 1e-15) is written to the CSV as computed;
+    # every text shows "< 0.001". Say once that such values are not resolved.
+    tiny = sum(1 for v in [omni.get("p")] + [r.get("p_adj") for r in omni["pairwise"]]
+               if v is not None and v == v and v < P_FLOOR)
+    if tiny:
+        notes.append("%s below %g, which floating-point arithmetic does not resolve: the CSV writes "
+                     "%s as computed (0 or a tiny number), every text shows < 0.001; read %s as "
+                     "p < %g." % ("1 p-value is" if tiny == 1 else "%d p-values are" % tiny, P_FLOOR,
+                                  "it" if tiny == 1 else "them", "it" if tiny == 1 else "them", P_FLOOR))
+    omni["p_floor"] = P_FLOOR
     omni["power"] = power_summary(groups, detect=det)
     omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl, uw)
     omni["icc"] = plate_variance_share(df)
@@ -1618,8 +1635,11 @@ def center_table(df, order, opts, by=("group",)):
 
 
 BOOT_MIN_PLATES = 10            # from here on the plate bootstrap of the median keeps its 95 % CI name
-BOOT_APPROX = ("bootstrap interval of the median (approximate: too narrow with fewer than about "
+# CT-R3 (stats N3): no brackets inside brackets ("median (bootstrap interval of the median
+# (approximate: ...))"); the reason follows a comma
+BOOT_APPROX = ("bootstrap interval of the median, approximate (too narrow with fewer than about "
                "%d plates)" % BOOT_MIN_PLATES)
+BOOT_APPROX_REASON = "too narrow with fewer than about %d plates" % BOOT_MIN_PLATES
 _ERR_WORDS = {"sd": "SD", "sem": "SEM", "ci95": "95 % CI", "iqr": "IQR (25th to 75th percentile)"}
 
 
@@ -1663,15 +1683,17 @@ def figure_sentence(opts, have_rep, n_units=None, grouped=False):
                 wh = ("95 %% CI of the median (%s bootstrap resamples of the plaques, seed %d)"
                       % (format(BOOT_N, ","), BOOT_SEED))
             elif error == "ci95" and not (ns and ns[0] >= BOOT_MIN_PLATES):
-                wh = ("%s (plates resampled, %s bootstrap resamples, seed %d)"
-                      % (BOOT_APPROX, format(BOOT_N, ","), BOOT_SEED))
+                wh = ("bootstrap interval of the median, approximate (%s, plates resampled, %s "
+                      "bootstrap resamples, seed %d)" % (BOOT_APPROX_REASON, format(BOOT_N, ","), BOOT_SEED))
             else:
                 wh = ("95 %% CI of the median (plates resampled, %s bootstrap resamples, seed %d)"
                       % (format(BOOT_N, ","), BOOT_SEED)) if error == "ci95" else _ERR_WORDS.get(error)
             if error == "iqr":
                 wh = "IQR of the plaques (25th to 75th percentile)"
         else:
-            bar = "mean of the %splate means" % ntxt
+            # CT-R3 (stats N11): "mean of the 1 plate means" -> "the single plate mean"
+            one = ns == [1]
+            bar = "the single plate mean" if one else "mean of the %splate means" % ntxt
             wh = _ERR_WORDS.get(error)
             if wh:
                 wh += " of the plate means"
@@ -2077,6 +2099,12 @@ def annotation_plan(order, posthoc, opts):
 
     allpairs = [pr for pr in itertools.combinations(order, 2) if _has(pr)]
     complete = len(allpairs) == len(order) * (len(order) - 1) // 2
+    tested = [pr for pr in allpairs
+              if posthoc.get(pr, posthoc.get((pr[1], pr[0]))) == posthoc.get(pr, posthoc.get((pr[1], pr[0])))]
+    if allpairs and not tested:
+        # CT-R3 F9: nothing could be tested (one plate per sample): no "n/a" brackets and no
+        # "No pair is significant ... (n/a (need ...))" sentence
+        return plan
     if mode == "letters":
         if complete and len(order) > 2:
             plan.update(mode="letters", letters=compact_letters(order, posthoc),
@@ -2588,7 +2616,8 @@ def _what_values(center, error, have_rep, unit, n_min=None):
     stat = _CENTER_WORDS.get((center, error), center)
     if (center, error) == ("median", "ci95") and have_rep and unit == "replicate" \
             and not (n_min is not None and (n_min >= BOOT_MIN_PLATES or n_min < 2)):
-        stat = "median (%s)" % BOOT_APPROX
+        # CT-R3 (stats N3): one level of brackets at most, also inside a two-sample sentence
+        return "median of all plaques, whisker: %s" % BOOT_APPROX
     if center == "median":
         return "%s of all plaques" % stat
     return "%s of the %s" % (stat, "plate means" if (have_rep and unit == "replicate") else "plaques")
@@ -2669,7 +2698,10 @@ def paste_sentence(metric, summ=None, omni=None, unit=None, have_rep=None, opts=
     if len(order) < 2:
         return "%s: only one sample (%s), so nothing was compared." % (metric, order[0] if order else "none")
     k = len(order)
-    if p != p:
+    if p != p and str(test).startswith("n/a (") and str(test).endswith(")"):
+        # CT-R3 F9: "(n/a (need ...); p = n/a)" said the reason in a bracket inside a bracket
+        verdict = "%s was not tested across the %d samples (no test: %s)" % (metric, k, str(test)[5:-1])
+    elif p != p:
         verdict = "%s was not tested across the %d samples (%s; p = n/a)" % (metric, k, test)
     else:
         verdict = ("%s %s between the %d samples (%s on %s, %s, %s)"
@@ -3557,6 +3589,9 @@ def run_grouped(args):
     summ, comp, unit, info = grouped_stats(df, group_order, sub_order, control,
                                            args.get("parametric", "auto"), unit=args.get("unit", "auto"),
                                            posthoc=args.get("posthoc") or "auto", return_info=True)
+    sw = size_warning(df["value"].values, metric)            # CT-R3 F8
+    if sw:
+        info["warnings"].insert(0, sw)
     summ.to_csv(os.path.join(out, "grouped_summary_%s.csv" % mt), index=False)
     if len(comp):
         comp.to_csv(os.path.join(out, "control_comparisons_%s.csv" % mt), index=False)
@@ -3632,6 +3667,9 @@ def run(args):
         df, order, args["unit"], args["parametric"], equal_var=args.get("equal_var", "auto"),
         posthoc=args.get("posthoc") or "auto", control=args.get("control"),
         equivalence_margin=args.get("equivalence_margin"), detect=args.get("detect"))
+    sw = size_warning(df["value"].values, metric)            # CT-R3 F8
+    if sw:
+        omni["warnings"].insert(0, sw)
     summ = group_summary(df, order, unit=unit)
     rep = replicate_means(df)
     summ.to_csv(os.path.join(out, f"summary_by_group_{mt}.csv"), index=False)
@@ -3694,6 +3732,7 @@ def run(args):
                                 metric, unit, args["formats"], pairwise=pw)
     prov = _prov(args)
     prov.update({"metric": metric, "groups": order, "unit": unit, "figure_size_in_final": final_size,
+                 "p_floor": P_FLOOR,
                  "versions": {"plaque_stats": __version__, "toolkit": _toolkit_version(),
                               "numpy": np.__version__, "pandas": pd.__version__,
                               "scipy": scipy.__version__}})

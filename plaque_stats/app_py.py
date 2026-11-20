@@ -458,6 +458,7 @@ def compute(df, sel, info=None):
         notes.append("%d rows not analysed: %s not selected." % (int(d["group"].isin(gone).sum()),
                                                                  ", ".join(gone)))
     d = d[d["group"].isin(order)].reset_index(drop=True)
+    size_warn = [w for w in [ps.size_warning(d["value"].values, metric)] if w]   # CT-R3 F8
     if grouped:
         subs = list(dict.fromkeys(d["subgroup"]))
         ctrl = sel.get("control")
@@ -489,7 +490,7 @@ def compute(df, sel, info=None):
         have_rep = unit == "replicate"
         base.update(mode="grouped", group_order=order, sub_order=sub_order, control=control,
                     summ=summ, comp=comp, unit=unit, have_rep=have_rep,
-                    warnings=list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
+                    warnings=size_warn + list(ginfo["warnings"]), notes=notes + list(ginfo["notes"]),
                     sentence=ps.paste_sentence(metric, comp=comp, unit=unit, control=control, opts=opts),
                     fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"]), grouped=True))
         return in_app_words(base, sel)
@@ -502,7 +503,7 @@ def compute(df, sel, info=None):
     src = rm if (unit == "replicate" and rm is not None) else d
     base.update(mode="single", omni=omni, posthoc=posthoc, unit=unit, have_rep=have_rep, summ=summ,
                 unit_means=src.groupby("group")["value"].mean().to_dict(),
-                warnings=list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
+                warnings=size_warn + list(omni.get("warnings", [])), notes=notes + list(omni.get("notes", [])),
                 sentence=ps.paste_sentence(metric, summ, omni, unit, have_rep, opts, centers=centers),
                 fig_sentence=ps.figure_sentence(o, have_rep, list(summ["n_units"])))
     return in_app_words(base, sel)
@@ -528,8 +529,15 @@ def file_base(a):
 
 
 def figure_size_in(fig, png, dpi=300):
-    """(width, height) in inches of the figure as saved: the engine's final size when it exposes
-    one (fig.final_size_in / fig.figure_size_in_final), else the PNG's pixels / dpi (CT-R2 N6)."""
+    """(width, height) in inches of the figure as saved. CT-R3: the PNG that is served is the
+    truth (its pixels / dpi); the engine's final size is only the fallback (CT-R2 N6)."""
+    import struct
+    try:
+        w, h = struct.unpack(">II", png[16:24])
+        if w > 0 and h > 0:
+            return w / float(dpi), h / float(dpi)
+    except Exception:                                       # noqa: BLE001 -- fall through
+        pass
     for name in ("final_size_in", "figure_size_in_final"):
         v = getattr(fig, name, None)
         try:
@@ -554,6 +562,11 @@ def size_line(size, sel):
                    else "it is taller than the Height slider (long labels or notes need room)")
     if w > sw + 0.15:
         why.append("it is wider than the Width slider (long labels need room)")
+    if not why and (w < sw - 0.05 or h < sh - 0.05):
+        # CT-R3: the file is saved with its empty white margin trimmed, so it is a little smaller
+        # than the sliders (9 x 5.4 in gave an 8.8 x 5.2 in file); say so instead of hiding it
+        why.append("the empty white margin around the figure is trimmed when it is saved, so the file is "
+                   "a little smaller than the Width x Height sliders (%.1f x %.1f in)" % (sw, sh))
     return line + (": " + "; ".join(why) if why else "")
 
 
@@ -802,8 +815,9 @@ app_ui = ui.page_sidebar(
                                                "(they stay in the statistics)", False)),
         ui.input_text("title", "Title", ""),
         ui.input_text("ylabel", "Y-axis label", ""),
-        ui.input_slider("width", "Width (in)", 4, 16, 9, step=0.5),
-        ui.input_slider("height", "Height (in)", 3, 12, 5.4, step=0.2),
+        # CT-R3: the engine's default size (the command line's and the desktop's): 8 x 5.2 in
+        ui.input_slider("width", "Width (in)", 4, 16, ps.DEFAULTS["width"], step=0.5),
+        ui.input_slider("height", "Height (in)", 3, 12, ps.DEFAULTS["height"], step=0.2),
         width=330, open="always",
     ),
     ui.tags.style(CSS),

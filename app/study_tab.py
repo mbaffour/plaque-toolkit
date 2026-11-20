@@ -371,13 +371,18 @@ def _ui_words(text, ref=None):
 _DOUBLE_BRACKET = re.compile(r"(\([^()]{1,60}\))(?:\s*\1)+")
 
 _FLAG_WORDS = [
-    ("pass --log-y-drop-nonpositive", "tick 'hide ≤ 0'"),
+    # CT-R3 F8: no 'hide ≤ 0' control here (a plaque size must be positive)
+    ("or pass --log-y-drop-nonpositive to hide them on the figure (they stay in the statistics)",
+     "or remove those plaques: a plaque size must be a positive number"),
+    ("pass --log-y-drop-nonpositive", "remove the values ≤ 0 (a plaque size must be positive)"),
     ("--equal-var no (Welch)", "Variances: Unequal (Welch)"),
+    # CT-R3 F12: "Variances: Unequal (Welch) (Welch ANOVA + Games-Howell)" -> one bracket
+    ("--equal-var no (Welch ANOVA + Games-Howell)", "Variances: Unequal (Welch ANOVA + Games-Howell)"),
     ("choose --equal-var no", "choose Variances: Unequal (Welch)"),
     ("--annotate letters gives a compact letter display, --annotate all every bracket",
      "choose Brackets: Letters for a compact letter display, or Brackets: All pairs for every bracket"),
     ("not in --order", "not in the sample order"),
-    ("--log-y-drop-nonpositive", "'hide ≤ 0'"),
+    ("--log-y-drop-nonpositive", "removing the values ≤ 0"),
     ("--parametric nonparametric", "Test: Non-parametric"),
     ("--posthoc dunnett", "Compare: vs a sample (Dunnett)"),
     ("--equal-var no", "Variances: Unequal (Welch)"),
@@ -395,6 +400,12 @@ _FLAG_WORDS = [
     ("--unit replicate", "plates as the unit"), ("--unit plaque", "plaques as the unit"),
     ("--detect", "Difference to detect"),                                   # CT-R3
 ]
+
+
+# CT-R3 F9: what a table without a plate column means here, and what to do
+NO_PLATE_TEXT = ("this file has no plate (replicate) column: each sample was loaded as ONE plate, so no "
+                 "test can be run on plate means. Add a plate column, or analyse per plaque in the command "
+                 "line / web app (pseudoreplication).")
 
 
 class _MsgLabel(QLabel):
@@ -532,6 +543,7 @@ class StudyTab(QWidget):
         self._last_fig = None
         self._last = None         # (kind, payload) cache for redraw + saving
         self._building = True     # guard so wiring customize controls doesn't trigger redraw
+        self._no_plate_source = None   # CT-R3 F9: the loaded file that had no plate column
         self._cmp_ref = None      # CT-R2 F11: the Compare reference, the SAMPLE itself (not its name)
         self._stats_ok = _stats_available()
 
@@ -846,8 +858,8 @@ class StudyTab(QWidget):
         self.jitter = QDoubleSpinBox(); self.jitter.setRange(0, 0.30); self.jitter.setValue(0.08); self.jitter.setSingleStep(0.01); self.jitter.setDecimals(2)
         self.alpha = QDoubleSpinBox(); self.alpha.setRange(0.05, 1.0); self.alpha.setValue(0.55); self.alpha.setSingleStep(0.05); self.alpha.setDecimals(2)
         self.alpha.setToolTip("Violin opacity: higher = more solid (0.55 is the default look).")
-        self.width_in = QDoubleSpinBox(); self.width_in.setRange(4, 16); self.width_in.setValue(8.4); self.width_in.setSingleStep(0.2); self.width_in.setDecimals(1)
-        self.height_in = QDoubleSpinBox(); self.height_in.setRange(3, 12); self.height_in.setValue(5.4); self.height_in.setSingleStep(0.2); self.height_in.setDecimals(1)
+        self.width_in = QDoubleSpinBox(); self.width_in.setRange(4, 16); self.width_in.setValue(8.0)  # CT-R3: the engine's default 8 x 5.2 in, as the CLI / web; self.width_in.setSingleStep(0.2); self.width_in.setDecimals(1)
+        self.height_in = QDoubleSpinBox(); self.height_in.setRange(3, 12); self.height_in.setValue(5.2); self.height_in.setSingleStep(0.2); self.height_in.setDecimals(1)
         self.dpi_in = QSpinBox(); self.dpi_in.setRange(72, 600); self.dpi_in.setValue(300); self.dpi_in.setSingleStep(50)
         self.dpi_in.setToolTip("Resolution of every raster export (Save figure, legend key, ZIP), TIFF included.")
         self.seed_in = QSpinBox(); self.seed_in.setRange(0, 9999); self.seed_in.setValue(7)
@@ -862,10 +874,8 @@ class StudyTab(QWidget):
         self.legend_cb.setToolTip("Draw the legend key on the figure itself (the same entries as the "
                                   "stand-alone key from “Legend key…”).")
         self.logy_cb = QCheckBox("log Y"); self.logy_cb.setChecked(False)
-        # CT-R1 F15: values <= 0 cannot be drawn on a log axis -- the engine refuses unless asked
-        self.logy_drop_cb = QCheckBox("hide ≤ 0"); self.logy_drop_cb.setChecked(False)
-        self.logy_drop_cb.setToolTip("With log Y: leave values that are zero or negative off the figure "
-                                     "(they stay in the statistics, and the figure says how many).")
+        # CT-R3 F8: the 'hide ≤ 0' control is gone. Both metrics here are plaque SIZES, and Load study /
+        # Add CSV(s) refuse a size <= 0, so it could never act; a log axis simply works.
         self.frame_cb = QCheckBox("full frame"); self.frame_cb.setChecked(False)
 
         # layout: 6 rows × 3 label/widget pairs
@@ -882,7 +892,7 @@ class StudyTab(QWidget):
         self.size_lbl = QLabel(""); self.size_lbl.setObjectName("Placeholder"); self.size_lbl.setWordWrap(True)
         g.addWidget(self.size_lbl)
         g.addWidget(_flow([self.show_points, self.show_n, self.show_value, self.logy_cb,
-                           self.logy_drop_cb, self.frame_cb], hspace=12))
+                           self.frame_cb], hspace=12))
 
         # wire every cosmetic control to a live redraw
         self.center_sel.currentIndexChanged.connect(self._sync_controls)
@@ -896,7 +906,7 @@ class StudyTab(QWidget):
         for sp in (self.point_size, self.jitter, self.alpha, self.width_in, self.height_in, self.dpi_in, self.seed_in):
             sp.valueChanged.connect(self._on_cosmetic)
         for cb in (self.show_points, self.show_n, self.show_value, self.legend_cb, self.logy_cb,
-                   self.logy_drop_cb, self.frame_cb):
+                   self.frame_cb):
             cb.toggled.connect(self._on_cosmetic)
         self._sync_controls()
         return box
@@ -1368,6 +1378,7 @@ class StudyTab(QWidget):
         if QMessageBox.question(self, "Clear all",
                                 "Remove all samples and plates?") == QMessageBox.Yes:
             self._samples = []; self._plates = []
+            self._no_plate_source = None
             self._refresh_tree(dirty=False)
             self._dirty = False
             self.warn_lbl.setText("")
@@ -1516,7 +1527,8 @@ class StudyTab(QWidget):
                      for i, col, cell, why in sorted(bad)[:8]]
             self._warn("Not loaded: %s has %d cell(s) that are not plaque sizes — %s%s. A diameter or "
                        "area must be a positive number (leave the cell empty for a plate without "
-                       "plaques). Fix these cells and load the file again."
+                       "plaques). Fix these cells and load the file again. (The command line and the "
+                       "web app analyse such values with a warning; this tab refuses them.)"
                        % (source, len(bad), "; ".join(where), "; …" if len(bad) > 8 else ""))
             return
         samples, plates, index = [], [], {}
@@ -1560,6 +1572,10 @@ class StudyTab(QWidget):
         self._dirty = False
         self._status("Loaded %d sample(s) · %d plate(s) from %s"
                      % (len(self._samples), len(self._plates), source), 5000)
+        # CT-R3 F9: a table with no plate column used to load silently as one plate per sample
+        self._no_plate_source = None if rcol else source
+        if not rcol:
+            self._warn("Loaded %d sample(s) from %s, but %s" % (len(self._samples), source, NO_PLATE_TEXT))
 
     @staticmethod
     def _bad_sizes(raw, num, mask, col):
@@ -1619,7 +1635,7 @@ class StudyTab(QWidget):
         o["show_value"] = self.show_value.isChecked()
         o["legend"] = self.legend_cb.isChecked()
         o["log_y"] = self.logy_cb.isChecked()
-        o["log_y_drop_nonpositive"] = self.logy_cb.isChecked() and self.logy_drop_cb.isChecked()
+        o["log_y_drop_nonpositive"] = False          # CT-R3 F8: sizes are positive here
         o["frame"] = self.frame_cb.isChecked()
         o["point_size"] = float(self.point_size.value())
         o["jitter"] = float(self.jitter.value())
@@ -1691,7 +1707,7 @@ class StudyTab(QWidget):
 
     def _sync_controls(self, *_):
         """Offer only combinations that mean something (CT-R1 F13/F15/F16): around a median only
-        IQR / 95 % CI / none; Jitter only with raw plaques; 'hide ≤ 0' only with log Y; in
+        IQR / 95 % CI / none; Jitter only with raw plaques; in
         grouped mode the violins are always grey and brackets are always vs the control."""
         median = self.center_sel.currentData() == "median"
         m = self.error_sel.model()
@@ -1707,7 +1723,6 @@ class StudyTab(QWidget):
         self.error_sel.setToolTip("Around a median: IQR, a bootstrap 95 % CI of the median, or none." if median
                                   else "Around a mean: SEM, 95 % CI, SD, IQR or none (Auto = SEM).")
         self.jitter.setEnabled(self.show_points.isChecked())
-        self.logy_drop_cb.setEnabled(self.logy_cb.isChecked())
         grouped = any(self._is_tagged(p.get("subgroup", "")) for p in self._plates)
         self.fill_sel.setEnabled(not grouped)
         self.fill_sel.setToolTip("Grouped mode: the violins are always grey; the palette colours the "
@@ -1865,19 +1880,31 @@ class StudyTab(QWidget):
                 "%s %s no %s values, so %s left out of the figure and the test."
                 % (", ".join(empty), "has" if len(empty) == 1 else "have", metric_name.split(" (")[0].lower(),
                    "it is" if len(empty) == 1 else "they are"))
+        # CT-R3 F9: every sample has one plate: nothing can be tested; say why once, plainly
+        n_pl = df.dropna(subset=["replicate"]).groupby("group")["replicate"].nunique()
+        one_plate = bool(len(n_pl)) and int(n_pl.max()) <= 1 and unit == "replicate"
+        if one_plate:
+            why = ("This study has no plate (replicate) column in its file (%s): each sample was loaded "
+                   "as ONE plate, so no test can be run on plate means. Add a plate column, or analyse "
+                   "per plaque in the command line / web app (pseudoreplication)."
+                   % self._no_plate_source if getattr(self, "_no_plate_source", None) else
+                   "Every sample has only ONE plate, so no test can be run on plate means. Add plates "
+                   "(at least 2 per sample).")
+            omni["warnings"] = [why] + [w for w in omni.get("warnings") or []
+                                        if "cannot be tested; add plates" not in w]
         self._last = ("single", {"df": df, "order": order, "posthoc": posthoc, "omni": omni,
                                   "unit": unit, "have_rep": have_rep,
                                   "metric_name": metric_name, "metric_key": metric_key,
                                   "summary": summ, "replicates": rep, "pairwise": pairwise,
                                   "stat_choices": dict(sc), "data_note": self._data_note,
-                                  "plate_warns": list(self._plate_warns)})
+                                  "plate_warns": list(self._plate_warns), "one_plate": one_plate})
         self._redraw()
 
         n_plates = int(df.dropna(subset=["replicate"]).drop_duplicates(["group", "replicate"]).shape[0])
         self._chips["groups"].setText(str(len(order)))
         self._chips["plates"].setText(str(n_plates))         # CT-R1 F25: plates WITH plaques
         self._chips["unit"].setText("plate" if unit == "replicate" else "plaque")
-        self._chips["test"].setText(str(omni.get("test", "—")))
+        self._chips["test"].setText("none (1 plate per sample)" if one_plate else str(omni.get("test", "—")))
         self._chips["p"].setText(ps.fmt_p(omni.get("p")))
         self._chips["effect"].setText(self._effect_text(omni.get("effect")))
 
@@ -1981,9 +2008,12 @@ class StudyTab(QWidget):
         except (Exception, SystemExit):                            # noqa: BLE001
             centers = None
         L = [ps.paste_sentence(metric_name, summ, omni, unit, have_rep, o, centers=centers), ""]
-        L.append("Test choice: %s, followed by %s. %s %s" % (
-            omni.get("test"), omni.get("posthoc") or "no post-hoc test",
-            omni.get("choice_note") or "", omni.get("variance_rule") or ""))
+        if pl.get("one_plate"):                          # CT-R3 F9: no test, said once
+            L.append("Test choice: none. %s" % (omni.get("choice_note") or ""))
+        else:
+            L.append("Test choice: %s, followed by %s. %s %s" % (
+                omni.get("test"), omni.get("posthoc") or "no post-hoc test",
+                omni.get("choice_note") or "", omni.get("variance_rule") or ""))
         sens = ps.sensitivity_text(omni)                  # CT-R3 F2: as in the ZIP's report
         if sens:
             L.append("Sensitivity: " + sens)
@@ -2310,7 +2340,9 @@ class StudyTab(QWidget):
         """The text starter always comes from the figure on screen (never a stored copy)."""
         legend_key = _legend_key()
         key = legend_key.from_figure(fig) if fig is not None else None
-        self.key_text.setText(legend_key.text_starter(key) if key else "")
+        # CT-R3 F4: no command-line option names ('--annotate letters ...'); the ZIP's legend text
+        # file gets the same words, so the two stay identical
+        self.key_text.setText(self._words(legend_key.text_starter(key)) if key else "")
         self.key_text.setCursorPosition(0)
 
     # ---------------------------------------------------------------- results helpers
@@ -2609,6 +2641,13 @@ class StudyTab(QWidget):
                     # CT-R2 F13: the tab's control names, not command-line flags
                     with open(fp, "w", encoding="utf-8") as fh:
                         fh.write(self._words(md))
+            for f in os.listdir(out):                  # CT-R3 F4: the key text starter, tab's words
+                if f.endswith("_legend_text.txt"):
+                    fp = os.path.join(out, f)
+                    with open(fp, encoding="utf-8") as fh:
+                        txt = fh.read()
+                    with open(fp, "w", encoding="utf-8") as fh:
+                        fh.write(self._words(txt))
             # also drop the standalone-ready long + wide CSVs and the study file in the bundle
             _write_csv(self._long_frame(), os.path.join(out, "compiled_long.csv"))
             _write_csv(tidy, os.path.join(out, "compiled_wide.csv"))
