@@ -1062,7 +1062,15 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
         sd_ratio = float(max(sds) / min(sds)) if min(sds) > 0 else float("inf")
     else:
         sd_ratio = float("nan")
-    all_normal = all((p != p) or p > 0.05 for p in normal.values())
+    # CT-R2 item 3: per-sample Shapiro tests at 0.05 sent NORMAL data to a rank test in 14 % of
+    # runs with 3 samples x 8 plates (21-24 % with 5). The gate is now Bonferroni over the m
+    # samples whose normality could be tested: non-normal only if the smallest p < 0.05 / m.
+    sw_p = {g: p for g, p in normal.items() if p == p}
+    sw_m = len(sw_p)
+    sw_thr = 0.05 / sw_m if sw_m else 0.05
+    all_normal = all(p >= sw_thr for p in sw_p.values())
+    sw_how = "Shapiro–Wilk (Bonferroni over %s)" % _plural(sw_m, "sample")
+    sw_thr_txt = "threshold 0.05/%d = %.3g" % (sw_m, sw_thr)
     # the n that decides the method: the samples that can be tested (a 1-plate sample is n/a)
     min_n = min((ns[g] for g in tg), default=min(ns.values()) if ns else 0)
     if parametric == "auto":
@@ -1080,13 +1088,19 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                       "(Mann–Whitney cannot go below p = 0.10 at 3 vs 3). This follows SuperPlots "
                       "(Lord et al. 2020). Override with `--parametric`."
                       % (uw, min_n, "plate means" if unit == "replicate" else "plaque values"))
+        elif use_param and not sw_m:
+            choice = ("Every sample has at least 8 %ss; Shapiro–Wilk could not be run (no sample has "
+                      "spread), so a parametric test is used. Override with `--parametric`." % uw)
         elif use_param:
-            choice = ("Every sample has at least 8 %ss and none fails Shapiro–Wilk (all p > 0.05), so a "
-                      "parametric test is used. Override with `--parametric`." % uw)
+            choice = ("Every sample has at least 8 %ss and %s does not reject normality (smallest %s, "
+                      "%s), so a parametric test is used. Override with `--parametric`."
+                      % (uw, sw_how, p_text(min(sw_p.values())), sw_thr_txt))
         else:
-            bad = [g for g, p in normal.items() if p == p and p <= 0.05]
-            reject_txt = ("With at least 8 %ss per sample, Shapiro–Wilk rejects normality for %s (p ≤ 0.05)"
-                          % (uw, ", ".join(map(str, bad))))
+            bad = [g for g, p in sw_p.items() if p < sw_thr]
+            reject_txt = ("With at least 8 %ss per sample, %s rejects normality for %s (%s)"
+                          % (uw, sw_how, _and_list(["%s (%s)" % (g, p_text(sw_p[g])) for g in bad])
+                             if len(bad) > 1 else "%s" % bad[0],
+                             sw_thr_txt if len(bad) > 1 else "%s, %s" % (p_text(sw_p[bad[0]]), sw_thr_txt)))
             choice = reject_txt + ", so a rank-based test is used. Override with `--parametric`."
     else:
         use_param = (parametric == "parametric")

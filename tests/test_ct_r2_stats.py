@@ -197,3 +197,41 @@ def test_N6_a_hash_group_row_in_the_middle_is_kept(tmp_path):
     df, info = ps.read_table(str(p), return_info=True)
     assert len(df) == 4 and info["comment_lines"] == 0 and "skipped" not in info["note"]
     assert sorted(df["group"]) == ["#", "#", "A", "A"]
+
+
+# =========================================================================== 3. normality gate
+def _borderline(k=3, n=8, seed=21):
+    """k normal samples of n plates; the first has a Shapiro p between 0.05/k and 0.05, all the
+    others p > 0.2: the old per-sample rule called it non-normal, Bonferroni does not."""
+    r = np.random.default_rng(seed)
+    while True:
+        g = {"S%d" % i: r.normal(2.0, 0.3, n) for i in range(k)}
+        p = [st.shapiro(v).pvalue for v in g.values()]
+        if 0.05 / k < p[0] < 0.05 and min(p[1:]) > 0.2:
+            return g, p
+
+
+@pytest.mark.parametrize("k", [2, 3, 5])
+def test_item3_bonferroni_gate_keeps_borderline_normal_data_parametric(k):
+    g, p = _borderline(k)
+    om = ps.run_stats(_units(g), list(g), "auto", "auto")[0]
+    assert om["parametric_used"] and om["test"] in ("one-way ANOVA", "Welch ANOVA", "Welch t-test")
+    assert ("Shapiro–Wilk (Bonferroni over %d samples) does not reject normality (smallest %s, "
+            "threshold 0.05/%d = %.3g)" % (k, ps.p_text(min(p)), k, 0.05 / k)) in om["choice_note"]
+
+
+def test_item3_bonferroni_gate_still_catches_a_skewed_sample():
+    g = _skewed_c()
+    om = ps.run_stats(_units(g), list("ABC"), "auto", "auto")[0]
+    assert om["test"] == "Kruskal–Wallis"
+    pc = st.shapiro(g["C"]).pvalue
+    assert ("Shapiro–Wilk (Bonferroni over 3 samples) rejects normality for C (%s, threshold 0.05/3 = "
+            "0.0167), so a rank-based test is used" % ps.p_text(pc)) in om["choice_note"]
+
+
+def test_item3_below_8_plates_nothing_changes():
+    g, _ = _borderline(3, n=7)
+    g["S0"] = np.exp(g["S0"] * 3)                       # even a skewed sample stays parametric
+    om = ps.run_stats(_units(g), list(g), "auto", "auto")[0]
+    assert om["parametric_used"] and om["choice_note"].startswith("With fewer than 8 plates per sample (here 7)")
+
