@@ -18,14 +18,17 @@ suppressWarnings(testServer(app, {
                     palette_name = "", palette = "", width = 8, height = 5.2, dpi = 100,
                     place_key = TRUE)
   fills <- function() {
-    b <- ggplot2::ggplot_build(build_main())
-    toupper(unique(unlist(lapply(b$data, function(l) if ("fill" %in% names(l)) l$fill))))
+    g <- build_main(); b <- ggplot2::ggplot_build(g)
+    # CT-R3 F7: the white box behind a bar's value (GeomLabel) is a label background, not a key colour
+    toupper(unique(unlist(lapply(seq_along(b$data), function(i)
+      if (inherits(g$layers[[i]]$geom, "GeomLabel")) NULL else if ("fill" %in% names(b$data[[i]])) b$data[[i]]$fill))))
   }
   emit("KEY1", paste(key()$label, key()$colour, sep = ":"))
   emit("DRAWN1", sort(fills()))
   emit("TEXT1", output$key_text)
   emit("PLACED1", inherits(build_plot(), "ggarrange"))
-  write_key_files(key(), file.path(out_dir, "violin"), 100)
+  # CT-R3 F5: the file carries the bar / whisker sentence, as the Legend key download does
+  write_key_files(key(), file.path(out_dir, "violin"), 100, 14, "", annotation_text(), figure_sentence_text())
   d$group[d$group == "T7"] <- "T7 mut"                      # rename one sample ...
   raw(d)
   session$setInputs(palette = "#0072B2,#E69F00,#D62728")    # ... and recolour another

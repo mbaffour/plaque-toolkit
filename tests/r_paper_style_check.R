@@ -38,7 +38,10 @@ ui_defaults <- list(group = "group", replicate = "replicate", value = "diameter_
                     base_size = 14, axis_color = "#33413c", axis_line_width = 0.6)
 fills <- function(g) {
   b <- ggplot2::ggplot_build(g)
-  toupper(unique(unlist(lapply(b$data, function(l) if ("fill" %in% names(l)) l$fill))))
+  # CT-R3 F7: the white box behind the value next to each bar is a label background, not a sample or
+  # plate colour: it is not counted among the colours the figure draws (the key lists those)
+  toupper(unique(unlist(lapply(seq_along(b$data), function(i)
+    if (inherits(g$layers[[i]]$geom, "GeomLabel")) NULL else if ("fill" %in% names(b$data[[i]])) b$data[[i]]$fill))))
 }
 
 # ---- 1. byte-identical defaults against the 1.2.0 app.R --------------------------------------
@@ -55,7 +58,8 @@ if (!have_base) {
   child <- file.path(out_dir, "render_defaults.R")
   writeLines(c(
     'args <- commandArgs(TRUE); app_path <- args[1]; out <- args[2]',
-    'Sys.setenv(CFU_PAPER_STYLE = file.path(out, "no_paper_style.json"))',
+    # CT-R3: a third argument points CFU_PAPER_STYLE at an (inert) style file instead of no file
+    'Sys.setenv(CFU_PAPER_STYLE = if (length(args) >= 3) args[3] else file.path(out, "no_paper_style.json"))',
     'suppressMessages(suppressWarnings(source(app_path, chdir = TRUE)))',
     'app <- shinyApp(ui, server)',
     'set.seed(1)',
@@ -75,16 +79,19 @@ if (!have_base) {
     '  lay <- function(g, cls, keep) { b <- ggplot2::ggplot_build(g); for (i in seq_along(g$layers)) if (inherits(g$layers[[i]]$geom, cls)) {',
     '      x <- b$data[[i]]; if (!is.null(keep)) x <- x[, intersect(keep, names(x)), drop = FALSE]; return(paste(deparse(x), collapse = "")) }; "none" }',
     '  g0 <- build_main()',
-    '  writeLines(c(lay(g0, "GeomViolin", NULL), lay(g0, "GeomErrorbar", NULL), lay(g0, "GeomText", c("label", "x"))), file.path(out, "layers.txt"))',
+    # CT-R3: one file per layer, so the layers CT-R3 did not touch stay pinned byte for byte to 1.2.0
+    '  writeLines(lay(g0, "GeomViolin", NULL), file.path(out, "layers_violin.txt"))',
+    '  writeLines(lay(g0, "GeomErrorbar", NULL), file.path(out, "layers_errorbar.txt"))',
+    '  writeLines(lay(g0, "GeomText", c("label", "x")), file.path(out, "layers_ntext.txt"))',
     '  session$setInputs(place_key = FALSE); save("default_key_off")',
     '  session$setInputs(place_key = TRUE, vfill = "group", frame = TRUE); save("coloured_framed")',
     '  session$setInputs(frame = FALSE, show_sig = TRUE, show_points = FALSE); save("coloured_nopoints")',
     '  write_key_files(key(), file.path(out, "violin"), 100)   # the stand-alone key files',
     '}))'
   ), child)
-  render_with <- function(app_path, dir) {
+  render_with <- function(app_path, dir, style = NULL) {
     dir.create(dir, showWarnings = FALSE)
-    res <- suppressWarnings(system2(rscript, c(shQuote(child), shQuote(app_path), shQuote(dir)),
+    res <- suppressWarnings(system2(rscript, c(shQuote(child), shQuote(app_path), shQuote(dir), if (!is.null(style)) shQuote(style)),
                                     stdout = TRUE, stderr = TRUE))
     status <- attr(res, "status"); if (is.null(status)) status <- 0L
     if (!identical(as.integer(status), 0L)) cat("child failed for", app_path, ":", tail(res, 8), sep = "\n")
@@ -93,19 +100,31 @@ if (!have_base) {
   old_dir <- file.path(out_dir, "old"); new_dir <- file.path(out_dir, "new")
   ok_old <- render_with(base_app, old_dir)
   ok_new <- render_with(normalizePath("app.R"), new_dir)
+  # CT-R3: this app.R once more, with a paper style file that changes nothing ({"settings": {}}): a style
+  # must do NOTHING at the defaults, whatever else changed in the figure since 1.2.0
+  inert_json <- file.path(out_dir, "inert_paper_style.json")
+  writeLines('{"kind": "paper_style", "app": "CFU Plot Studio", "settings": {}}', inert_json)
+  inert_dir <- file.path(out_dir, "inert")
+  ok_inert <- render_with(normalizePath("app.R"), inert_dir, inert_json)
   emit("BYTE_RENDER", c(old = ok_old, new = ok_new))
+  emit("INERT_RENDER", ok_inert)
   # CT-R1 deliberately changes the FIGURE bytes of the default view (F6 visible centre line,
   # F7 brackets above the data, F23 seeded jitter and base-size text, F16 white key block) and
   # of the colour-by-sample key (F18 plates in greys). What must stay identical is checked layer
   # by layer (violins, error bars, n labels) and byte for byte on the key files of the default
   # view; the SVGs themselves are reported as BYTE_*=differ and are expected to.
-  for (f in c("layers.txt", "default_legend_key.svg", "default_legend_text.txt",
-              "default_key_on.svg", "default_key_off.svg", "coloured_framed.svg",
-              "coloured_nopoints.svg", "violin_legend_key.svg", "violin_legend_text.txt")) {
-    a <- file.path(old_dir, f); b <- file.path(new_dir, f)
-    same <- file.exists(a) && file.exists(b) && file.size(a) == file.size(b) &&
-      identical(readBin(a, "raw", file.size(a)), readBin(b, "raw", file.size(b)))
-    emit(paste0("BYTE_", sub("\\.(svg|txt)$", "", f)), if (same) "identical" else "differ")
+  # CT-R3 deliberately changes the default figure again (F7: plates in the Okabe-Ito colours, the n
+  # label "n = 70 plaques / N = 3 plates", value labels; F5/F6): layers_ntext and the default key files
+  # now differ from 1.2.0 on purpose; the violins and the error bars of the mean are still byte-identical.
+  all_files <- c("layers_violin.txt", "layers_errorbar.txt", "layers_ntext.txt", "default_legend_key.svg",
+                 "default_legend_text.txt", "default_key_on.svg", "default_key_off.svg", "coloured_framed.svg",
+                 "coloured_nopoints.svg", "violin_legend_key.svg", "violin_legend_text.txt")
+  same_bytes <- function(a, b) file.exists(a) && file.exists(b) && file.size(a) == file.size(b) &&
+    identical(readBin(a, "raw", file.size(a)), readBin(b, "raw", file.size(b)))
+  for (f in all_files) {
+    tag <- sub("\\.(svg|txt)$", "", f)
+    emit(paste0("BYTE_", tag), if (same_bytes(file.path(old_dir, f), file.path(new_dir, f))) "identical" else "differ")
+    emit(paste0("INERT_", tag), if (same_bytes(file.path(new_dir, f), file.path(inert_dir, f))) "identical" else "differ")
   }
 }
 
