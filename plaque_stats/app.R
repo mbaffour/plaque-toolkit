@@ -1147,16 +1147,24 @@ format_help <- function() {
 }
 
 # CT-R1 F22: a paste-ready text is a multi-line box with a Copy button
+# CT-R2 N9: the visible box (id "<id>_box") and the Shiny OUTPUT (id "<id>", a hidden element) have
+# different ids; one element used to be both a textarea input and a text output, and the console said
+# "Shared input/output IDs found". A line of script copies each new output value into the box.
 copy_box <- function(id, rows = 3) {
+  box <- paste0(id, "_box")
   tagList(
-    tags$textarea(id = id, class = "shiny-text-output form-control", rows = rows, readonly = NA,
+    tags$textarea(id = box, class = "form-control", rows = rows, readonly = NA,
                   style = "width: 100%; font-family: monospace; font-size: 12px; resize: vertical;"),
+    tags$span(id = id, class = "shiny-text-output", style = "display: none;"),
+    tags$script(HTML(sprintf("$(document).on('shiny:value', function(e) { if (e.name === '%s') { var b = document.getElementById('%s'); if (b) b.value = e.value; } });", id, box))),
     tags$button("Copy", type = "button", class = "btn btn-sm btn-default", style = "margin-top: 4px;",
-                onclick = sprintf("var t = document.getElementById('%s'); navigator.clipboard.writeText(t.value || t.textContent);", id)))
+                onclick = sprintf("var t = document.getElementById('%s'); navigator.clipboard.writeText(t.value || t.textContent);", box)))
 }
 scroll_box <- function(...) div(style = "overflow-x: auto; max-width: 100%;", ...)   # CT-R1 F22
 
 ui <- fluidPage(
+  # CT-R2 N9: an empty icon, so the browser's /favicon.ico request does not end in a 404 in the console
+  tags$head(tags$link(rel = "icon", href = "data:,")),
   titlePanel("Plaque Stats & Violins"),
   sidebarLayout(
     sidebarPanel(
@@ -1251,8 +1259,10 @@ server <- function(input, output, session) {
 
   raw <- reactiveVal(NULL)
   data_msg <- reactiveVal(NULL)               # list(type = "error" | "info", text = ...)
-  notify <- function(text, type = "warning", duration = 10)
-    tryCatch(showNotification(text, type = type, duration = duration, session = session),
+  # `id`: a notice with the same id REPLACES the earlier one (CT-R2 N9: every PDF download used to add
+  # another copy of the same font notice)
+  notify <- function(text, type = "warning", duration = 10, id = NULL)
+    tryCatch(showNotification(text, type = type, duration = duration, session = session, id = id),
              error = function(e) NULL)
 
   # CT-R1 F9/F10: every file goes through one reader; whatever it cannot use becomes a plain
@@ -1360,8 +1370,10 @@ server <- function(input, output, session) {
     p <- palette_parsed()$colours
     if (length(p)) p else OKABE_ITO
   })
+  # (350 ms: long enough not to flash "not a colour" at every keystroke of a hex code, short enough
+  # that the status is there as soon as the typing stops -- CT-R2 N9: it looked empty at 900 ms)
   palette_settled <- debounce(reactive(list(txt = input$palette %||% "", name = input$palette_name %||% "",
-                                            n = length(current_levels()))), 900)
+                                            n = length(current_levels()))), 350)
   output$palette_status <- renderText({
     s <- palette_settled()
     if (!identical(s$name, "")) return("")
@@ -1905,13 +1917,16 @@ server <- function(input, output, session) {
     s <- summ_group_full()
     stats_sentence(metric_name(), as.data.frame(s), stats())
   })
+  # hidden outputs feed the visible copy boxes (copy_box), so they must update while "hidden"
+  try(outputOptions(output, "sentence", suspendWhenHidden = FALSE), silent = TRUE)
+  try(outputOptions(output, "key_text", suspendWhenHidden = FALSE), silent = TRUE)
 
   # --- downloads ------------------------------------------------------------------------------
   # CT-R1 F20: a blank, zero or absurd dpi no longer fails the download; it is replaced and said
   checked_dpi <- function() {
     v <- suppressWarnings(as.numeric(input$dpi))
     if (length(v) == 1 && is.finite(v) && v >= 72 && v <= 1200) return(v)
-    notify("PNG dpi must be a number from 72 to 1200. This download used 300 dpi; correct the 'PNG dpi' box to change it.")
+    notify("PNG dpi must be a number from 72 to 1200. This download used 300 dpi; correct the 'PNG dpi' box to change it.", id = "dpi_note")
     300
   }
   failed <- function(what) function(e) {
@@ -1937,7 +1952,7 @@ server <- function(input, output, session) {
     content = function(f) tryCatch({
       fs <- fig_out()
       note <- save_pdf(f, make_plot, look()$family, fs$w, fs$h)
-      if (!is.null(note)) notify(note)
+      if (!is.null(note)) notify(note, id = "pdf_font_note")
     }, error = failed("PDF")))
   output$dl_key <- downloadHandler(
     filename = function() sprintf("violin_%s_legend_key.zip", metric_name()),
@@ -1948,7 +1963,7 @@ server <- function(input, output, session) {
       base <- file.path(tmp, sprintf("violin_%s", metric_name()))
       lk <- look()
       files <- write_key_files(e, base, checked_dpi(), lk$base_size, lk$family, annotation_text())
-      for (n in attr(files, "notes")) notify(n)
+      for (i in seq_along(attr(files, "notes"))) notify(attr(files, "notes")[[i]], id = paste0("key_note_", i))
       # the zip package needs no external program (utils::zip needs a 'zip' on the PATH, which
       # a stock Windows R lacks); fall back to utils::zip where the package is not installed
       if (requireNamespace("zip", quietly = TRUE)) zip::zipr(f, as.character(files))

@@ -461,7 +461,7 @@ testServer(app, {
   chk("F17_preview_size_follows_figure_size", identical(fig_size()$h, 12))
 })
 raw_ui <- as.character(ui)
-chk("F22_text_boxes_multiline_with_copy", grepl("<textarea[^>]*id=\"sentence\"", raw_ui) && grepl("<textarea[^>]*id=\"key_text\"", raw_ui) &&
+chk("F22_text_boxes_multiline_with_copy", grepl("<textarea[^>]*id=\"sentence_box\"", raw_ui) && grepl("<textarea[^>]*id=\"key_text_box\"", raw_ui) &&
       length(gregexpr("writeText", raw_ui)[[1]]) >= 2)
 chk("F22_tables_scroll_in_own_box", grepl("overflow-x: auto", raw_ui) && isTRUE(dt_opts_probe <- TRUE))
 chk("F5_download_statistics_button", grepl("dl_stats", raw_ui) && grepl("Download statistics \\(CSV\\)", raw_ui))
@@ -600,3 +600,44 @@ testServer(app, {
   chk("R2_N5_unrenamed_samples_keep_their_colour", identical(unname(g[["T7"]]), unname(base_cols[["T7"]])) &&
         identical(unname(g[["lambda"]]), unname(base_cols[["lambda"]])) && !anyDuplicated(g), paste(names(g), g, collapse = " "))
 })
+
+# ---- N6 + N9 (R parts) ------------------------------------------------------------------------------
+# the user's own choice is a NOTE, Levene's finding a WARNING; every p goes through p_eq
+set.seed(5)
+dU <- do.call(rbind, lapply(list(c("a", 1), c("b", 0.01), c("c", 0.01)), function(x) data.frame(group = x[1],
+        replicate = paste0("p", 1:10), value = rnorm(10, 2, as.numeric(x[2])))))
+dU$group <- factor(dU$group, levels = c("a", "b", "c"))
+stU <- plaque_run_stats(dU)
+chk("R2_N6_levene_warning_uses_p_eq", any(grepl("^Levene p < 0.001: group variances differ", stU$warnings)) && !any(grepl("0\\.000", c(stU$warnings, stU$notes))),
+    paste(stU$warnings, collapse = " | "))
+stUn <- plaque_run_stats(dU[dU$group != "c", ], equal_var = "no")
+stUn3 <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "no")
+chk("R2_N6_users_variance_choice_is_a_note_not_a_warning", any(grepl("^Variances were set to 'unequal'", stUn3$notes)) &&
+      !any(grepl("Variances were set", stUn3$warnings)) && grepl("NOTES:\n- Variances were set to 'unequal'", omnibus_text(stUn3)) &&
+      !grepl("WARNINGS:[^N]*Variances were set", omnibus_text(stUn3)))
+stY <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "yes")
+stY$levene_p <- 1e-5
+chk("R2_N6_p_eq_never_p_equals_0.000", p_eq(0.0004) == "p < 0.001" && p_eq(0.01234) == "p = 0.012" && !grepl("= 0\\.000", omnibus_text(stU)))
+# spread note: only samples that can be tested count; singular / plural
+sp1 <- spread_check(list(a = c(1, 2.1, 3.3, 4.2, 5.1), b = c(2, 2.5, 3.1, 3.9, 4.4), c = 5), "plates")
+chk("R2_N9_spread_note_ignores_untestable_sample", is.null(sp1$note), sp1$note %||% "")
+sp2 <- spread_check(list(a = c(1, 2.1, 3.3), b = c(2, 2.5, 3.1), c = 5), "plates")
+chk("R2_N9_spread_note_counts_testable_plates", grepl("With 3 plates per group", sp2$note), sp2$note %||% "")
+# the copy boxes: the textarea and the output have DIFFERENT ids, no shared input/output id
+ids_in <- regmatches(raw_ui, gregexpr("<textarea[^>]*id=\"[^\"]+\"", raw_ui))[[1]]
+ids_in <- sub(".*id=\"([^\"]+)\"", "\\1", ids_in)
+ids_out <- sub(".*id=\"([^\"]+)\".*", "\\1", regmatches(raw_ui, gregexpr("<[a-z]+ id=\"[^\"]+\" class=\"shiny-text-output\"", raw_ui))[[1]])
+chk("R2_N9_no_shared_input_output_ids", length(ids_in) >= 2 && all(c("key_text", "sentence") %in% ids_out) && !length(intersect(ids_in, ids_out)),
+    paste(c(ids_in, "|", ids_out), collapse = " "))
+# rejected colours are named in the status under the palette box (after typing settles)
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$setInputs(palette = "#12, nope"); session$flushReact()
+  session$elapse(1000)
+  chk("R2_N9_rejected_colours_named", grepl("Not a colour, left out: '#12', 'nope'\\.", output$palette_status), output$palette_status)
+})
+# repeated notices of one kind replace each other
+chk("R2_N9_notify_takes_an_id", "id" %in% names(formals(shiny::showNotification)))
+src_app <- readLines("app.R", warn = FALSE)
+chk("R2_N9_pdf_font_notice_has_a_fixed_id", any(grepl('notify\\(note, id = "pdf_font_note"\\)', src_app)))
+chk("R2_N9_no_favicon_404", grepl('rel="icon"', htmltools::renderTags(ui)$head, fixed = TRUE) &&
+      grepl('href="data:,"', htmltools::renderTags(ui)$head, fixed = TRUE))
