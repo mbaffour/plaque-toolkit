@@ -119,6 +119,34 @@ byte-identical to the frozen v1.1.0 baseline (`releases/v1.1.0/run_baseline.sh`)
   the view after a resize; small windows scroll instead of overlapping.
 * The QC column has tooltips and a tint, and `LARGE?` (see above).
 
+### Desktop app: Analyze tab
+
+* **Export everything (ZIP)** contains exactly the samples, order, 2nd-factor tags, colours and
+  statistics shown on screen. Sample names such as `None`, `NA`, `007` or `phage #3` no longer
+  close the app or vanish from the ZIP (before, the ZIP could report a different test and
+  p-value from the screen).
+* The **Legend key…** button works when clicked.
+* **Save study / Load study** reproduce the study exactly (names as typed, sample order, empty
+  plates and samples); the tab asks before replacing or closing an unsaved study; its own Long
+  export loads.
+* **Imported plate files** need a diameter-in-mm column, or you choose the column (µm / px
+  columns are never offered); semicolon files and decimal commas are read; JSON, binary files
+  and diameters ≤ 0 are refused; an empty file becomes a zero-plaque plate only if you confirm.
+* Plates are numbered plate1, plate2… within each sample (the file name is kept as the source);
+  plates can be renamed, samples reordered, and adding the same measured plate twice asks first.
+* New **Variances** (Auto / Equal / Unequal-Welch) and **Compare** (All pairs / vs one sample,
+  Dunnett) options; Brackets offers **Letters**; Median offers only IQR, 95 % CI or none; log Y
+  with values ≤ 0 explains itself and offers to hide them.
+* Statistical warnings (for example a sample with one plate) appear next to the result; the
+  Summary shows plate-level mean, SD and SEM; a sentence under the figure says what the bar,
+  whisker, n and N are; the Report lists the test choice, power, plate-to-plate variation and
+  any rows left out.
+* The palette colours the plates; controls with no effect in the current mode are greyed;
+  "Transparency" is now "Opacity".
+* Figures save at the chosen size with one DPI for every format; a typed extension wins and
+  names with dots keep them. Errors clear on the next action; a failed analysis removes the old
+  results; the figure is no longer squeezed into a second scroll box.
+
 ### Detection in the desktop app (`plaque_gui.py`, Measure / Batch / Validate)
 
 * **Plaque size: Auto / Standard / Small** on the Measure and Batch tabs (replaces Batch's "Small
