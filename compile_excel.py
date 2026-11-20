@@ -40,8 +40,13 @@ def main():
     a = ap.parse_args()
     if a.order:
         ORDER = [s.strip() for s in a.order.split(",") if s.strip()]
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    root = a.root if os.path.isabs(a.root) else os.path.join(base_dir, a.root)
+    # CT-R3 F7: a relative --root is a folder of the CURRENT directory, as for any command (it
+    # was looked for next to this program, so "--root mydata" failed from the data's folder)
+    root = os.path.abspath(a.root)
+    if not os.path.isdir(root):
+        raise SystemExit("No folder %s: give --root the folder that holds <SAMPLE>/<photo>/"
+                         "<photo>_normal.csv (a relative path is read from the current folder, %s)."
+                         % (root, os.getcwd()))
 
     # optional dish info from SUMMARY.csv
     dish = {}
@@ -99,6 +104,14 @@ def main():
             if found:
                 per_photo.append(rec)
 
+    # CT-R3 F7: a mode with no file at all (e.g. only *_normal.csv) is left out -- its columns
+    # and its sheet -- and said once (it raised KeyError 'sensitive_median_mm')
+    modes = [m for m in MODES if long[m]]
+    for m in MODES:
+        if m not in modes and per_photo:
+            print("No *_%s.csv under %s: the %s columns and sheet are left out." % (m, root, m))
+            for rec in per_photo:
+                rec.pop("%s_count" % m, None)
     photo_df = pd.DataFrame(per_photo)
     if photo_df.empty:
         raise SystemExit("No <photo>_normal.csv / <photo>_sensitive.csv found under %s\n"
@@ -114,7 +127,7 @@ def main():
         if sub.empty:
             continue
         row = {"SAMPLE": sample, "N_PLATES": len(sub)}
-        for m in MODES:
+        for m in modes:
             counts = pd.to_numeric(sub["%s_count" % m], errors="coerce").dropna()
             med = pd.to_numeric(sub["%s_median_mm" % m], errors="coerce").dropna()  # per-plate medians
             row["%s_count_mean" % m] = round(counts.mean(), 1) if len(counts) else None
@@ -140,8 +153,10 @@ def main():
     with pd.ExcelWriter(outp, engine="openpyxl") as xl:
         photo_df.to_excel(xl, sheet_name="Summary (per replicate)", index=False)
         stats_df.to_excel(xl, sheet_name="Stats (per sample)", index=False)
-        normal_all.to_excel(xl, sheet_name="Normal - all plaques", index=False)
-        sens_all.to_excel(xl, sheet_name="Sensitive - all plaques", index=False)
+        if "normal" in modes:
+            normal_all.to_excel(xl, sheet_name="Normal - all plaques", index=False)
+        if "sensitive" in modes:
+            sens_all.to_excel(xl, sheet_name="Sensitive - all plaques", index=False)
     print("WROTE", outp)
     print("  photos:", len(photo_df), "| samples:", len(stats_df),
           "| normal plaques:", len(normal_all), "| sensitive plaques:", len(sens_all))

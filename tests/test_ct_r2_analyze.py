@@ -257,8 +257,9 @@ def test_multi_image_table_is_one_plate_per_image_in_import_and_assign(win, st, 
     msg = _status(win)
     assert "Imported 1 plate(s)" in msg
     # 2 dark-centre + 1 split piece of Plate_6 only; sample.tif's CORE? is not counted
-    assert "2 outlined at the dark centre only" in msg and "1 split piece" in msg, msg
-    assert "3 outlined" not in msg
+    # (CT-R3 F8: "2 plaques outlined ..." -- the noun and a verb that agrees)
+    assert "2 plaques outlined at the dark centre only" in msg and "1 split piece" in msg, msg
+    assert "3 plaques outlined" not in msg
 
 
 def test_left_out_account_reaches_tree_report_zip_and_study_file(win, st, dialogs, tmp_path):

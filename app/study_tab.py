@@ -160,15 +160,17 @@ def _sum_counts(accounts):
 
 
 def _left_out_text(accounts):
-    """'; 26 outlined at the dark centre only and 1 split piece … were left out' over the
-    plates actually added (CT-R2 F9), or ''."""
+    """'; 26 plaques outlined at the dark centre only and 1 split piece … were left out of the
+    sizes' over the plates actually added (CT-R2 F9), or ''. CT-R3 F8: the verb agrees with the
+    number ('1 plaque outlined at the dark centre only was left out', not '1 … were')."""
     import plaque_qc
     accounts = list(accounts)
     n = sum(a.get("n", 0) for a in accounts)
     if not n:
         return ""
-    phrase = plaque_qc.left_out_phrase(_sum_counts(accounts)) or "%d flagged plaques" % n
-    return "; %s were left out of the sizes" % phrase
+    said = plaque_qc.left_out_said(_sum_counts(accounts), "left out of the sizes")
+    return "; %s" % (said or "%d flagged plaque%s %s left out of the sizes"
+                     % (n, "" if n == 1 else "s", "was" if n == 1 else "were"))
 
 
 _NO_QC_NOTE = ("%s %s no QC_FLAG column: every row was used; plaques outlined at the dark centre "
@@ -1033,6 +1035,14 @@ class StudyTab(QWidget):
         df = mt.model.dataframe()
         if df is None or len(df) == 0:
             self._warn("No measured plaques on the Measure tab. Open an image and detect first."); return
+        # CT-R3 F1: no mm scale = no millimetres. This added a plate of 0.0 mm diameters with no
+        # word (the CSV route refuses the same file); now it is refused, every time it is clicked
+        ed = getattr(mt, "editor", None)
+        if ed is not None and not getattr(ed, "ppm", None):
+            why = "the Dish size is 0" if getattr(ed, "plate", None) else "no dish was found"
+            self._warn("Not added: this plate has no millimetre scale (%s): set the dish or use the "
+                       "Ruler on the Measure tab, then add it." % why)
+            return
         dc, ac = _diam_col(df), _area_col(df)
         if dc is None:
             self._warn("Couldn't find a diameter-in-mm column on the current measurement."); return
@@ -1132,6 +1142,10 @@ class StudyTab(QWidget):
             if not ok or not item:
                 return fail("%s skipped: no diameter-in-mm column chosen." % name)
             dc = item
+        # CT-R3 F1: the app leaves the mm cells blank when a plate had no mm scale; such a file
+        # (or such an image of Batch's all_plaques.csv) used to become a "plate without sizes"
+        # or a zero-plaque plate instead of saying why. Checked per plate, below.
+        no_mm = (df[dc].astype(str).str.strip().eq("") | df[dc].isna()).tolist()
         kept = df[pd.Series(keep, index=df.index, dtype=bool)]
         d, nbad = _numbers(kept[dc])
         if nbad:
@@ -1154,6 +1168,12 @@ class StudyTab(QWidget):
         parts = []
         for key in keys:
             rows = [True] * len(df) if key is None else list(df[pcol].astype(str).str.strip() == key)
+            if any(rows) and all(b for b, r in zip(no_mm, rows) if r):          # CT-R3 F1
+                fail("%s: no millimetre sizes in this %s (it was measured without a scale). Set "
+                     "the dish or use the Ruler on the Measure tab and save it again. Skipped."
+                     % (name if key is None else "%s · %s" % (name, key),
+                        "file" if key is None else word))
+                continue
             sel = [r and k for r, k in zip(rows, keep)]
             sel_kept = pd.Series(sel, index=df.index)[pd.Series(keep, index=df.index, dtype=bool)]
             diam = d[sel_kept.values].dropna().tolist()

@@ -151,6 +151,28 @@ def plate_warnings(plaques=None, mm_per_px=None, flags=None, orig_bgr=None, plat
         return []
 
 
+def size_counts(flags):
+    """{'n_sized', 'n_core', 'n_no_size'} of a plate's QC flags: every plaque is in exactly one
+    (coordinator C; plaque_qc.size_ok decides). The Batch per_plate.csv and Measure's
+    run_metadata.json count with this one call."""
+    import plaque_qc
+    flags = ["" if f is None or (isinstance(f, float) and f != f) else f for f in list(flags)]
+    ok = [plaque_qc.size_ok(f) for f in flags]
+    core = sum(1 for f, k in zip(flags, ok) if not k and plaque_qc.has_flag(f, "CORE?"))
+    return {"n_sized": int(sum(ok)), "n_core": int(core), "n_no_size": int(len(flags) - sum(ok) - core)}
+
+
+def plate_size_record(plaques, mm_per_px, flags):
+    """CT-R3 F3: what run_metadata.json says about a plate's sizes, from the plaques NOW on it
+    (Measure's Save results and Export all): plate_warnings (plate_warnings, the one call) and
+    n_sized / n_core / n_no_size (size_counts) -- as the Batch and Compare runs and the CLI
+    record them. ``flags`` = the QC_FLAG of each plaque, as in the table."""
+    flags = list(flags)
+    rec = size_counts(flags)
+    rec["plate_warnings"] = plate_warnings(plaques, mm_per_px, flags=flags)
+    return rec
+
+
 def _eff_radius(p):
     """Area-equivalent radius (px) of a plaque, whatever its shape."""
     import math
@@ -207,8 +229,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
         rows.append({"INDEX": i, "AREA_PXL": round(p["area_pxl"], 2),
-                     "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": round(area_mm2, 2),
-                     "DIAMETER_MM": round(dia_mm, 2), "MEAN_GRAY": round(mg, 2),
+                     # CT-R3 F1: no mm scale = blank mm cells (was 0.0) in every file from here
+                     "DIAMETER_PXL": round(dia_pxl, 2), "AREA_MM2": pgui.mm_cell(area_mm2, ppm),
+                     "DIAMETER_MM": pgui.mm_cell(dia_mm, ppm), "MEAN_GRAY": round(mg, 2),
                      "TURBIDITY_REL": (round(tb, 3) if tb == tb else ""),
                      "CIRCULARITY": circs[i - 1], "OVERLAP": ("yes" if ov else "no"),
                      "SOURCE": p["source"], "QC_FLAG": qc[i - 1][0], "QC_REASON": qc[i - 1][1]})

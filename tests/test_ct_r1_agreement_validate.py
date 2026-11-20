@@ -595,16 +595,17 @@ def test_validate_scores_only_label_files_and_fails_bad_ones_with_reasons(neutra
     pp = res["per_plate_df"].set_index("label_file")
     assert pp.loc["labels_good.json", "error"] == ""
     assert "1 of 5 labelled plaques have no x_px/y_px" in pp.loc["labels_nocoords.json", "error"]
-    assert "could not locate the plate image" in pp.loc["labels_noimage.json", "error"]
+    assert "was not found next to it or in the chosen folder" in pp.loc["labels_noimage.json", "error"]   # CT-R3
     pm = res["per_mode_df"].iloc[0]
     good = pp.loc["labels_good.json"]
     assert pm["n_plates"] == 1 and pm["tp"] == good["tp"] and pm["fn"] == good["fn"]   # failed rows excluded
-    assert V.summary_status(res) == ("Scored 3 plates x 1 engine; 2 failed (see the last column). "
-                                     "Skipped 1 JSON file that is not a plaque label file.")
+    assert V.summary_status(res) == ("Scored 1 of 3 plates x 1 engine; 2 plates failed (see the last "
+                                     "column). Skipped 1 JSON file that is not a plaque label file.")
     from app import __version__
     sent = V.report_sentence(res, {"current": "Current (corrected)"}, __version__)
     assert sent.startswith("Against 1 hand-corrected plate (5 plaques), the Current (corrected) "
-                           "engine of Plaque Toolkit %s detected plaques with precision" % __version__)
+                           "engine (plaque size Auto) of Plaque Toolkit %s detected plaques with "
+                           "precision" % __version__)
 
 
 def test_validate_with_no_label_files_has_no_zero_row(tmp_path):
@@ -658,7 +659,8 @@ def test_validate_tab_run_status_sentence_and_csv(validate_tab, qt, neutral_plat
     validate_tab.labels.setText(str(d))
     validate_tab._run()
     qt.waitUntil(lambda: validate_tab._res is not None, timeout=120_000)
-    assert validate_tab.status.text().startswith("Scored 3 plates x 1 engine; 2 failed (see the last column).")
+    assert validate_tab.status.text().startswith("Scored 1 of 3 plates x 1 engine; 2 plates failed (see "
+                                                 "the last column).")
     from app import __version__
     assert "Plaque Toolkit %s" % __version__ in validate_tab.sentence.text()
     out = validate_tab._save(str(tmp_path / "res.csv"))

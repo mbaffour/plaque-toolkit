@@ -220,6 +220,55 @@ def left_out_phrase(counts):
     return " and ".join(parts)
 
 
+def left_out_plaques(counts):
+    """CT-R3 F8: the left-out plaques as a noun phrase for a sentence on a SCREEN, and how
+    many they are: ('1 plaque outlined at the dark centre only', 1), ('9 plaques outlined at
+    the dark centre only and 1 split piece whose size is not reliable', 10), ('', 0). The
+    verb goes with the number: see left_out_said. (left_out_phrase keeps its shorter wording
+    for the command line's output and run_metadata.json.)"""
+    parts = []
+    core, nos = int(counts.get("core") or 0), int(counts.get("no_size") or 0)
+    if core:
+        parts.append("%d plaque%s outlined at the dark centre only" % (core, "" if core == 1 else "s"))
+    if nos:
+        parts.append("%d split piece%s whose size is not reliable" % (nos, "" if nos == 1 else "s"))
+    return " and ".join(parts), core + nos
+
+
+def left_out_said(counts, rest, present=False):
+    """'1 plaque outlined at the dark centre only was left out of the sizes' -- the phrase, the
+    verb agreeing with the number ('was'/'were', or 'is'/'are' with ``present``) and ``rest``.
+    '' when nothing was left out."""
+    phrase, n = left_out_plaques(counts)
+    if not n:
+        return ""
+    verb = ("is" if n == 1 else "are") if present else ("was" if n == 1 else "were")
+    return "%s %s %s" % (phrase, verb, rest)
+
+
+# CT-R3 F8: why there is no dish, said once inside the no-dish sentence (the app's detection
+# looks for the dish rim as a round contour of more than 100,000 px)
+NO_DISH_REASON = "no round contour larger than 100,000 px"
+
+
+def short_dish_reason(reason):
+    """'no round contour larger than 100,000 px (the dish rim) was found; sizes are in pixels
+    unless ...' -> 'no round contour larger than 100,000 px'. None/'' -> NO_DISH_REASON."""
+    r = str(reason or "").split(";")[0].strip()
+    for tail in (" was found", " (the dish rim)"):
+        if r.endswith(tail):
+            r = r[: -len(tail)].rstrip()
+    return r or NO_DISH_REASON
+
+
+def no_dish_sentence(reason=None):
+    """CT-R3 F8: the ONE no-dish sentence of the Measure flag line, the Batch Problem column and
+    the Compare QC note: NO_DISH_WARNING with its reason said once, e.g. 'No dish found (no
+    round contour larger than 100,000 px): sizes are in pixels only; make sure the whole dish
+    is in the frame (or set the plate by hand in the app).'"""
+    return NO_DISH_WARNING.replace("No dish found:", "No dish found (%s):" % short_dish_reason(reason), 1)
+
+
 def _point_in_poly(x, y, poly):
     """Ray casting; ``poly`` is a sequence of (x, y)."""
     inside = False
