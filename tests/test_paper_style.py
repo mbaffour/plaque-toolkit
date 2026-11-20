@@ -54,20 +54,30 @@ def test_fixtures_are_the_cfu_shape():
 
 
 def test_r_shiny_defaults_byte_identical(r_output):
-    """1. With every input at its UI default the violins, error bars and n labels (layer data)
-    and the stand-alone key files of the default view are byte-identical to 1.2.0.
+    """1. With every input at its UI default the violins and the error bars of the mean (layer data)
+    are byte-identical to 1.2.0, and a paper style that changes nothing changes nothing at all.
 
-    CT-R1 deliberately changed the default FIGURE's bytes (the SVGs are NOT pinned any more):
+    CT-R1 deliberately changed the default FIGURE's bytes (the SVGs are NOT pinned to 1.2.0 any more):
     F6 the centre line is drawn (it had stroke width 0 under ggplot2 4.x), F7 brackets start
     above the tallest plaque, F23 the jitter is seeded and the n row / stars follow the base
-    size; the colour-by-sample view (F18) draws plates in greys, so its key differs too."""
+    size; the colour-by-sample view (F18) draws plates in greys, so its key differs too.
+    CT-R3 changed it again (F7): under grey violins the plates take the Okabe-Ito colours of the Python
+    engine, the n label reads "n = 70 plaques / N = 3 plates", the value sits next to every bar, and the
+    legend text starter carries the Python wording and the bar / whisker sentence; so the n-label layer
+    and the default key files (svg + text) are no longer identical to 1.2.0 (pins moved to "differ").
+    "A paper style does nothing at the defaults" is now pinned against THIS app.R rendered with an inert
+    style file (INERT_*): every output is byte-identical."""
     if "BYTE_SKIP" in r_output:
         pytest.skip("byte-identity vs 1.2.0 skipped: " + r_output["BYTE_SKIP"])
     assert r_output["BYTE_RENDER"] == "TRUE|TRUE"
-    for name in ("layers", "default_legend_key", "default_legend_text"):
+    for name in ("layers_violin", "layers_errorbar"):
         assert r_output["BYTE_" + name] == "identical", name
-    for name in ("default_key_on", "default_key_off"):      # the deliberate changes are real
+    # the deliberate changes are real (CT-R1: the figure; CT-R3 F7: the n label and the default key)
+    for name in ("layers_ntext", "default_legend_key", "default_legend_text", "default_key_on", "default_key_off"):
         assert r_output["BYTE_" + name] == "differ", name
+    assert r_output["INERT_RENDER"] == "TRUE"
+    inert = {k: v for k, v in r_output.items() if k.startswith("INERT_") and k != "INERT_RENDER"}
+    assert len(inert) == 11 and set(inert.values()) == {"identical"}, inert
 
 
 def test_r_shiny_colours_keyed_by_name(r_output):

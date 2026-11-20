@@ -16,7 +16,17 @@ pw <- st$pairwise
 keys <- vapply(seq_len(nrow(pw)), function(i) paste(sort(c(pw$group1[i], pw$group2[i]), method = "radix"), collapse = "|"), "")
 pair <- setNames(lapply(pw$p_adj, function(v) if (is.na(v)) NULL else v), keys)
 num <- function(x) if (is.null(x) || length(x) == 0 || is.na(x)) NULL else as.numeric(x)
-res <- list(test = st$test, p = num(st$p), pairwise = pair,
+# CT-R3 F5: the bar and whisker of every sample (center_table), for the Python engine's center_table()
+ctr <- function(center, error) {
+  ct <- center_table(d, st$rm, center, error)
+  setNames(lapply(seq_len(nrow(ct)), function(i) lapply(list(ct$cen[i], ct$lo[i], ct$hi[i], ct$n_units[i]),
+                                                       function(v) if (is.na(v)) NULL else as.numeric(v))),
+           as.character(ct$group))
+}
+centers <- list(mean_sem = ctr("mean", "sem"), mean_sd = ctr("mean", "sd"), mean_ci95 = ctr("mean", "ci95"),
+                mean_iqr = ctr("mean", "iqr"), mean_none = ctr("mean", "none"),
+                median_iqr = ctr("median", "iqr"), median_none = ctr("median", "none"))
+res <- list(test = st$test, centers = centers, p = num(st$p), pairwise = pair,
             posthoc = if (is.na(st$posthoc)) NULL else st$posthoc,
             unit = st$unit, parametric_used = isTRUE(st$parametric_used),
             levene_p = num(st$levene_p), min_n = as.integer(st$min_n),

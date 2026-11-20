@@ -143,3 +143,32 @@ def test_r_and_python_agree(rscript, name, parametric, equal_var):
     # numerically with different quadratures, so the adjusted pairwise p agree to ~1e-6, not to 1e-12.
     for k, v in pair.items():
         assert _close(r["pairwise"][k], v, 1e-5, 1e-9), (k, r["pairwise"][k], v)
+
+
+# ---------------------------------------------------------------------------- CT-R3 F5: the bar and whisker
+# center_table() of the Python engine is what the figure draws and the paste-ready sentence quotes. The R app
+# must put the same centre and whisker under every sample: the mean of the plate means (SD / SEM / 95 % CI /
+# IQR of the plate means) and the median of ALL plaques with its IQR. (The 95 % CI of a median is a seeded
+# numpy bootstrap R cannot reproduce, so R offers the median with IQR or none only: no such case here.)
+CENTER_CASES = [("mean", "sem"), ("mean", "sd"), ("mean", "ci95"), ("mean", "iqr"), ("mean", "none"),
+                ("median", "iqr"), ("median", "none")]
+
+
+def py_centers(path, center, error):
+    df = ps.read_table(path).rename(columns={"diameter_mm": "value"})[["group", "replicate", "value"]]
+    order = list(dict.fromkeys(df["group"]))
+    return ps.center_table(df, order, {"center": center, "error": error})
+
+
+@pytest.mark.parametrize("center,error", CENTER_CASES)
+@pytest.mark.parametrize("name", list(FIXTURES))
+def test_r_and_python_centres_agree(rscript, name, center, error):
+    py = py_centers(FIXTURES[name], center, error)
+    r = r_side(rscript, FIXTURES[name], "auto", "auto")["centers"]["%s_%s" % (center, error)]
+    assert set(r) == set(py), (sorted(r), sorted(py))
+    for g, (cen, lo, hi, n) in py.items():
+        rc, rl, rh, rn = r[g]
+        assert _close(rc, cen, 1e-6, 1e-9), (g, "centre", rc, cen)
+        assert _close(rl, lo, 1e-6, 1e-9), (g, "low", rl, lo)
+        assert _close(rh, hi, 1e-6, 1e-9), (g, "high", rh, hi)
+        assert rn == n, (g, "n", rn, n)

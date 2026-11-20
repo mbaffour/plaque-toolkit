@@ -217,9 +217,33 @@ clamp_look <- function(x, range, default, what) {
   list(value = v, note = NULL, ok = TRUE)
 }
 
-# combined centre + error-bar summary for the plate means: mean|median with sd|sem|ci95|iqr|none
-summary_fun <- function(center, error) {
+# CT-R3 F5: which error bars can be drawn around which centre, as check_center_error() in
+# plaque_stats.py: SD / SEM describe the spread around a MEAN and are refused around a median.
+# The Python engine's 95 % CI of a median is a seeded numpy bootstrap that R cannot reproduce
+# draw for draw, so with a median this app offers the IQR or no bar, and never prints an interval
+# under another name. A stale value (a stored SEM with the centre switched to median) is resolved
+# here, so the figure never draws a mean-type bar around a median.
+CENTER_ERRORS <- list(
+  mean = c("auto (SEM)" = "auto", "SD" = "sd", "SEM" = "sem", "95% CI" = "ci95", "IQR" = "iqr", "none" = "none"),
+  median = c("auto (IQR)" = "auto", "IQR" = "iqr", "none" = "none"))
+effective_error <- function(center, error) {
+  center <- if (identical(center, "median")) "median" else "mean"
+  error <- if (is.null(error) || length(error) != 1 || is.na(error) || !nzchar(error)) "auto" else error
   if (error == "auto") error <- if (center == "median") "iqr" else "sem"
+  if (center == "median" && !error %in% c("iqr", "none")) error <- "iqr"
+  error
+}
+error_note <- function(center, error) {
+  if (identical(center, "median") && !is.null(error) && length(error) == 1 && error %in% c("sd", "sem", "ci95"))
+    sprintf("%s describes the spread around a mean and cannot be drawn around a median, so the IQR is shown. Choose IQR or none with the median, or switch the centre to mean.",
+            c(sd = "SD", sem = "SEM", ci95 = "The 95% CI")[[error]])
+  else NULL
+}
+
+# combined centre + error-bar summary for the plate means: mean|median with sd|sem|ci95|iqr|none
+# (the mean path of the figure; the median is taken over the plaques, see center_table())
+summary_fun <- function(center, error) {
+  error <- effective_error(center, error)
   function(x) {
     n <- length(x); cen <- if (center == "median") median(x) else mean(x)
     if (error == "iqr")
@@ -228,6 +252,68 @@ summary_fun <- function(center, error) {
     s <- sd(x); sem <- s / sqrt(n); half <- switch(error, sd = s, ci95 = sem * qt(.975, n - 1), sem)
     data.frame(y = cen, ymin = cen - half, ymax = cen + half)
   }
+}
+
+# CT-R3 F5: the bar and whisker of every sample, exactly as center_table() in plaque_stats.py draws
+# them. With --center mean and plates the bar is the mean of the PLATE MEANS (`rm`); with --center
+# median it is the median of ALL the sample's plaques, its whisker their IQR (type-7 quantiles, as
+# numpy's percentile). `d` is what is DRAWN (values a log axis cannot show already taken out), so the
+# marks are computed from the values that are on the figure (CT-R3 F3). n_units: plates, or plaques.
+center_table <- function(d, rm = NULL, center = "mean", error = "auto") {
+  center <- if (identical(center, "median")) "median" else "mean"
+  error <- effective_error(center, error)
+  has_rep <- !is.null(rm) && !all(is.na(d$replicate))
+  one <- function(g) {
+    v <- d$value[d$group == g]
+    if (center == "median") {
+      plates <- if (has_rep) length(unique(d$replicate[d$group == g & !is.na(d$replicate)])) else 0L
+      n_units <- if (plates > 0) plates else length(v)
+      u <- v
+    } else if (has_rep) { u <- rm$value[rm$group == g]; n_units <- length(u) }
+    else { u <- v; n_units <- length(v) }
+    n <- length(u)
+    if (!n) return(data.frame(group = g, cen = NA_real_, lo = NA_real_, hi = NA_real_, n_units = n_units))
+    cen <- if (center == "median") stats::median(u) else mean(u)
+    lo <- hi <- cen
+    if (error != "none" && n >= 2) {
+      if (error == "iqr") { q <- stats::quantile(u, c(.25, .75), names = FALSE); lo <- q[1]; hi <- q[2] }
+      else {
+        s <- stats::sd(u); sem <- s / sqrt(n)
+        half <- switch(error, sd = s, ci95 = sem * stats::qt(.975, n - 1), sem)
+        lo <- cen - half; hi <- cen + half
+      }
+    }
+    data.frame(group = g, cen = cen, lo = lo, hi = hi, n_units = n_units)
+  }
+  out <- do.call(rbind, lapply(levels(d$group), one))
+  out$group <- factor(out$group, levels = levels(d$group))
+  out
+}
+# what the bar and whisker ARE, in the Python engine's words (figure_sentence())
+err_words <- c(sd = "SD", sem = "SEM", ci95 = "95 % CI", iqr = "IQR (25th to 75th percentile)")
+figure_sentence <- function(center, error, superplot, show_points = TRUE, show_n = TRUE, n_units = NULL) {
+  error <- effective_error(center, error)
+  bits <- character(0)
+  if (superplot) {
+    bits <- c("Violins: all plaques.", if (show_points) "Small points: single plaques.", "Large points: plate means.")
+    if (identical(center, "median")) {
+      bar <- "median of all plaques"
+      wh <- if (error == "iqr") "IQR of the plaques (25th to 75th percentile)" else NULL
+    } else {
+      ns <- sort(unique(as.integer(n_units[!is.na(n_units)])))
+      ntxt <- if (!length(ns)) "" else if (length(ns) == 1) paste0(ns, " ") else paste0(ns[1], " to ", ns[length(ns)], " ")
+      bar <- paste0("mean of the ", ntxt, "plate means")
+      wh <- if (error %in% names(err_words)) paste(err_words[[error]], "of the plate means") else NULL
+    }
+    bits <- c(bits, paste0("Bar: ", bar, "."), if (!is.null(wh)) paste0("Whisker: ", wh, ".") else "No whisker.")
+    if (show_n) bits <- c(bits, "n = plaques, N = plates.")
+  } else {
+    # no plates: this app draws a thin box (median and quartiles) over the violin, whatever the centre
+    bits <- c(paste0("Violins", if (show_points) " and points" else "", ": all plaques."),
+              "Box: median and IQR (25th to 75th percentile) of the plaques; its whiskers reach the furthest plaque within 1.5 x IQR.")
+    if (show_n) bits <- c(bits, "n = plaques.")
+  }
+  paste(bits, collapse = " ")
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -804,7 +890,10 @@ omnibus_text <- function(st) {
 # with the plate as unit it quotes the plate means +/- SEM that were tested (n = plates,
 # plaques in brackets), never per-plaque mean +/- SD beside a plate-level p.
 # summ: one row per group with group, n (plaques), n_plates, mean, sd (per plaque).
-stats_sentence <- function(metric, summ, st) {
+stats_sentence <- function(metric, summ, st, ct = NULL, center = "mean", error = "auto") {
+  # CT-R3 F5: with the median as centre the sentence quotes the figure's median (of all plaques) and its
+  # IQR, in the Python engine's words (paste_sentence), never "mean ± SEM of plate means"
+  if (identical(center, "median") && !is.null(ct)) return(median_sentence(metric, summ, st, ct, error))
   k <- nrow(summ)
   f2 <- function(x) if (is.na(x)) "n/a" else sprintf("%.2f", x)     # one value has no SD / SEM
   if (k < 2)
@@ -841,6 +930,65 @@ stats_sentence <- function(metric, summ, st) {
   items <- sprintf("%s %s ± %s (n=%d plaques)", summ$group, vapply(summ$mean, f2, ""), vapply(summ$sd, f2, ""), summ$n)
   sprintf("%s (mean ± SD per plaque): %s. %s across %d groups, %s%s. NOTE: the unit tested was the plaque (pseudoreplication; plaques from one plate are not independent), so add plate replicates.",
           metric, paste(items, collapse = "; "), st$test, k, p_eq(st$p), post)
+}
+
+# CT-R3 F5: the paste-ready sentence for --center median, worded as paste_sentence() in plaque_stats.py
+# ct: center_table() over every value (the statistics and the sentence use every value).
+median_sentence <- function(metric, summ, st, ct, error = "auto") {
+  error <- effective_error("median", error)
+  k <- nrow(summ)
+  if (k < 2)
+    return(sprintf("%s: only one sample (%s), so nothing was compared.", metric,
+                   if (k) summ$group[1] else "none"))
+  what <- if (error == "iqr") "median (IQR) of all plaques" else "median of all plaques"
+  repl <- identical(st$unit, "replicate")
+  on <- if (repl) "plate means" else "single plaques (pseudoreplicated: plaques of one plate are not independent)"
+  nun <- st$n_per_group
+  val <- function(g) {
+    r <- ct[as.character(ct$group) == g, ]
+    if (!nrow(r) || is.na(r$cen)) return("n/a")
+    if (error == "iqr" && is.finite(r$lo) && is.finite(r$hi) && r$hi > r$lo)
+      sprintf("%.2f (%.2f\u2013%.2f)", r$cen, r$lo, r$hi) else sprintf("%.2f", r$cen)
+  }
+  nn <- function(i) {
+    g <- as.character(summ$group[i])
+    if (repl) sprintf("N = %s, n = %s", plural_word(as.integer(nun[[g]]), "plate"), plural_word(as.integer(summ$n[i]), "plaque"))
+    else sprintf("n = %s", plural_word(as.integer(summ$n[i]), "plaque"))
+  }
+  g_ <- as.character(summ$group)
+  if (k == 2) {
+    d_txt <- ""
+    if (is.finite(st$cohens_d)) {
+      d_txt <- sprintf(", Cohen's d = %.2f", st$cohens_d)
+      if (st$min_n < 5)
+        d_txt <- paste0(d_txt, sprintf(" (a %d-vs-%d %s estimate; treat as rough)", as.integer(nun[[g_[1]]]), as.integer(nun[[g_[2]]]),
+                                       if (repl) "plate" else "plaque"))
+    }
+    res <- if (is.na(st$p)) sprintf("%s on %s could not be computed (p = n/a)", st$test, on)
+           else sprintf("%s on %s, %s", st$test, on, p_eq(st$p))
+    return(sprintf("%s in %s was %s (%s; %s) vs %s in %s (%s); %s%s.", metric, g_[1], val(g_[1]), what, nn(1),
+                   val(g_[2]), g_[2], nn(2), res, d_txt))
+  }
+  vals <- paste0(g_, " ", vapply(g_, val, ""), collapse = "; ")
+  nl <- as.integer(nun[g_]); uw <- if (repl) "plate" else "plaque"
+  nlist <- if (length(unique(nl)) == 1) sprintf("%s per sample", plural_word(nl[1], uw))
+           else paste0(paste(g_, nl, collapse = ", "), " ", uw, "s")
+  verdict <- if (is.na(st$p)) sprintf("%s was not tested across the %d samples (%s; p = n/a)", metric, k, st$test)
+    else sprintf("%s %s between the %d samples (%s on %s, %s, %s)", metric,
+                 if (st$p < 0.05) "differed" else "did not differ significantly", k, st$test, on, nlist, p_eq(st$p))
+  out <- sprintf("%s. Values are %s: %s.", verdict, what, vals)
+  pw <- st$pairwise; pw <- pw[!is.na(pw$p_adj), ]
+  if (nrow(pw)) {
+    head <- if (!is.na(st$posthoc)) sprintf("Pairwise (%s): ", st$posthoc) else "Pairwise: "
+    sig <- pw[pw$p_adj < 0.05, ]
+    txt <- function(x) paste(sprintf("%s vs %s %s", x$group1, x$group2, vapply(x$p_adj, p_eq, "")), collapse = ", ")
+    pt <- if (nrow(pw) <= 6) paste0(head, txt(pw), ".")
+      else if (!nrow(sig)) sprintf("%sno pair has adjusted p < 0.05 (%d pairs tested).", head, nrow(pw))
+      else if (nrow(sig) <= 8) sprintf("%s%s; the other %d pairs p \u2265 0.05.", head, txt(sig), nrow(pw) - nrow(sig))
+      else sprintf("%s%d of %d pairs have adjusted p < 0.05 (every pair is in the pairwise table).", head, nrow(sig), nrow(pw))
+    out <- paste(out, pt)
+  }
+  out
 }
 
 # CT-R1 F7: which comparisons get a bracket. auto = the significant ones; with more than 5
@@ -953,17 +1101,53 @@ KEY_COLOUR_NAMES <- c(
   "olive" = "#808000", "gold" = "#DAA520", "sky blue" = "#56B4E9", "vermillion" = "#D55E00",
   "bluish green" = "#009E73", "reddish purple" = "#CC79A7", "yellow-green" = "#9ACD32")
 
+# CT-R3 F7: the fixed words of every colour the toolkit ships (plaque_stats/legend_key.py
+# SHIPPED_COLOUR_WORDS), so plate1 / plate2 / plate3 read the same in all four front-ends:
+# Okabe-Ito orange is "orange" here, not the nearest-name "gold".
+SHIPPED_COLOUR_WORDS <- c(
+  "#0072B2" = "blue", "#E69F00" = "orange", "#009E73" = "bluish green", "#CC79A7" = "reddish purple",
+  "#56B4E9" = "sky blue", "#D55E00" = "vermillion", "#F0E442" = "yellow", "#999999" = "grey",
+  "#000000" = "black",
+  "#4C6E9C" = "steel blue", "#E0A458" = "light orange", "#6AAA64" = "green", "#B65C5C" = "muted red",
+  "#8A78B0" = "purple", "#4FA3A5" = "teal", "#C77CB5" = "pink", "#9A8C6B" = "olive brown",
+  "#6C6C6C" = "dark grey",
+  "#66C2A5" = "mint green", "#FC8D62" = "salmon orange", "#8DA0CB" = "lavender blue",
+  "#E78AC3" = "light pink", "#A6D854" = "yellow-green", "#FFD92F" = "golden yellow",
+  "#E5C494" = "light brown", "#B3B3B3" = "light grey",
+  "#1F77B4" = "blue", "#FF7F0E" = "orange", "#2CA02C" = "green", "#D62728" = "red",
+  "#9467BD" = "purple", "#8C564B" = "brown", "#E377C2" = "pink", "#7F7F7F" = "grey",
+  "#BCBD22" = "olive", "#17BECF" = "cyan",
+  "#B4451F" = "rust red", "#D98032" = "orange", "#E9B44C" = "gold", "#9B2226" = "dark red",
+  "#CA6702" = "dark orange", "#BB3E03" = "burnt orange", "#AE2012" = "deep red",
+  "#EE9B00" = "golden orange",
+  "#3D5A80" = "slate blue", "#5E8B9E" = "greyish blue", "#98C1D9" = "light blue", "#293241" = "navy",
+  "#6AAA9E" = "sea green", "#5C7AA0" = "dusky blue", "#7FB3C9" = "pale blue",
+  "#4D4D4D" = "dark grey", "#A6A6A6" = "silver grey", "#C9C9C9" = "pale grey",
+  "#2B2B2B" = "charcoal grey", "#8F8F8F" = "medium grey", "#606060" = "slate grey",
+  "#B8B8B8" = "ash grey",
+  "#B9C2BD" = "light grey", "#FFFFFF" = "white")
 colour_name <- function(hex) {
+  hx <- toupper(hex)
+  if (length(hx) == 1 && !is.na(hx) && hx %in% names(SHIPPED_COLOUR_WORDS)) return(unname(SHIPPED_COLOUR_WORDS[[hx]]))
   lab <- hex_to_lab(hex); ref <- hex_to_lab(KEY_COLOUR_NAMES)
   names(KEY_COLOUR_NAMES)[which.min(colSums((t(ref) - as.numeric(lab[1, ]))^2))]
+}
+# "dark red" -> "red": the word without a shade prefix (a shade is never stacked on a shade)
+base_colour_word <- function(w) {
+  m <- regmatches(w, regexec("^(light|dark|medium|pale|deep) (.+)$", w))[[1]]
+  if (length(m)) m[3] else w
 }
 
 # the plate colours and marker shapes: REP_PALETTE under grey violins (the plate colour is the
 # only hue on the figure, as it always was); greys that stay clear of every sample colour when
 # the violins are coloured by sample (CT-R1 F18). Past the end of the palette the SHAPE changes,
 # so no two plates share a colour + shape pair until palette x 5 shapes are used up.
-plate_style <- function(reps, neutral, sample_cols = character(0)) {
-  pal <- REP_PALETTE
+plate_style <- function(reps, neutral, sample_cols = character(0), neutral_pal = OKABE_ITO) {
+  # CT-R3 F7: under grey violins the plates take the CHOSEN palette (Okabe-Ito by default), in its
+  # order, exactly as the Python engine's _plate_style(); plate1 / plate2 / plate3 are blue /
+  # orange / bluish green in every front-end. Under coloured violins that palette is already the
+  # samples', so the plates stay muted (greys here, REP_PALETTE when no grey is clear of the samples).
+  pal <- if (length(neutral_pal)) neutral_pal else OKABE_ITO
   if (!neutral) {
     far <- function(p) p[vapply(p, function(x) colour_distance(x, sample_cols) > 18, TRUE)]
     pal <- far(PLATE_GREYS)
@@ -986,7 +1170,7 @@ style_map <- function(d, registry, vfill, chose_theme, superplot, pool = OKABE_I
   reps <- if (superplot) sort(unique(d$replicate[!is.na(d$replicate)])) else character(0)
   group_fill <- identical(vfill, "group") || (chose_theme && identical(vfill, "auto"))
   neutral <- identical(vfill, "neutral") || (!group_fill && superplot)
-  ps <- plate_style(reps, neutral, unname(gcol))
+  ps <- plate_style(reps, neutral, unname(gcol), pool)
   list(gcol = gcol, rcol = ps$col, rshape = ps$shape, pshape = ps$pshape, neutral = neutral,
        superplot = superplot,
        # CT-R1 F8: without plates the plaque points carry the SAMPLE colour and are keyed
@@ -1017,21 +1201,31 @@ key_entries <- function(sm) {
                                        kind = character(0), colour = character(0),
                                        edge = character(0), alpha = numeric(0),
                                        shape = integer(0), extra = logical(0), stringsAsFactors = FALSE))
-  do.call(rbind, rows)
+  out <- do.call(rbind, rows)
+  # CT-R3 F7: when the colour-coded items are plates, the text starter still names the samples
+  # (the Python key's preamble)
+  if (sm$neutral && sm$superplot && length(sm$gcol)) {
+    nm <- names(sm$gcol)
+    attr(out, "preamble") <- sprintf("%s %s shown as grey violins. Points are coloured by plate",
+      if (length(nm) == 1) nm else paste0(paste(nm[-length(nm)], collapse = ", "), " and ", nm[length(nm)]),
+      if (length(nm) == 1) "is" else "are")
+  }
+  out
 }
 
 # `annotation`: the sentence that says what the stars / brackets on the figure mean (CT-R2 N2b; only
 # the one-row-of-stars view needs it, the brackets explain themselves)
-text_starter <- function(e, annotation = "") {
+text_starter <- function(e, annotation = "", figure_note = "") {
   if (!nrow(e)) return("")
   words <- vapply(e$colour, colour_name, "")
   for (w in unique(words)) {                 # same word, different colours -> light/dark
     idx <- which(words == w); hx <- unique(e$colour[idx])
     if (length(hx) < 2) next
     L <- hex_to_lab(hx)[, 1]; ranked <- hx[order(L)]
-    shade <- setNames(ifelse(seq_along(ranked) == 1, paste("dark", w),
-                      ifelse(seq_along(ranked) == length(ranked), paste("light", w),
-                             paste("medium", w))), ranked)
+    bw <- base_colour_word(w)                # CT-R3 F7: 'dark red' is shaded from 'red', never 'dark dark red'
+    shade <- setNames(ifelse(seq_along(ranked) == 1, paste("dark", bw),
+                      ifelse(seq_along(ranked) == length(ranked), paste("light", bw),
+                             paste("medium", bw))), ranked)
     # CT-R1 F18: "light"/"dark" only when the lightness really differs; two colours of the
     # same word and much the same lightness are told apart by their hex code instead
     if (min(diff(sort(L))) < 5) shade <- setNames(paste0(w, " ", ranked), ranked)
@@ -1046,7 +1240,12 @@ text_starter <- function(e, annotation = "") {
       out <- paste0(out, " with ", colour_name(e$edge[i]), " outline")
     out
   }, "")
-  paste0(paste0(e$label, " (", desc, ")", collapse = "; "), ".",
+  body <- paste0(paste0(e$label, " (", desc, ")", collapse = "; "), ".")
+  pre <- attr(e, "preamble")
+  if (length(pre) == 1 && nzchar(pre)) body <- paste0(sub("[.: ]+$", "", pre), ": ", body)
+  # CT-R3 F5: what the bar, whisker and points ARE (the Python key's note), then what the stars mean
+  paste0(body,
+         if (length(figure_note) == 1 && !is.na(figure_note) && nzchar(figure_note)) paste0(" ", figure_note) else "",
          if (length(annotation) == 1 && !is.na(annotation) && nzchar(annotation)) paste0(" ", annotation) else "")
 }
 
@@ -1056,34 +1255,68 @@ text_starter <- function(e, annotation = "") {
 KEY_ROWS_PER_COL <- 12
 KEY_BESIDE_MAX_FRAC <- 0.28     # CT-R2 N2a: the key sits beside the plot only while it is this narrow
 KEY_GAP_IN <- 0.1               # inches between the plot and a key placed below
-key_geometry <- function(e, base_size = 14) {
+# CT-R3 F6: the real width of names in the key's font (the key text is base_size * 0.8 pt), measured on
+# a null PDF device with the nearest built-in family and padded by 15 %; the old 0.105 in per
+# character is kept as the fallback. Used only to decide how many columns a key placed BELOW the
+# plot can have: the estimate is 1.4 x too wide, which kept 12 long names from fitting twice.
+# the width in inches of strings set at `pt` points, measured on a null PDF device with the nearest
+# built-in family; NA when it cannot be measured
+str_in <- function(labels, pt, family = "", bold = FALSE) {
+  tryCatch({
+    old <- grDevices::dev.cur()
+    grDevices::pdf(NULL); on.exit({ grDevices::dev.off(); if (old > 1) grDevices::dev.set(old) }, add = TRUE)
+    fam <- pdf_base_family(family); if (is.na(fam)) fam <- "Helvetica"
+    # (the size of strwidth() is cex x the device's 12 pt; a `ps` argument would be ignored)
+    graphics::strwidth(labels, units = "inches", cex = pt / 12, family = fam, font = if (bold) 2L else 1L)
+  }, error = function(e) rep(NA_real_, length(labels)))
+}
+label_width_in <- function(labels, base_size = 14, family = "") {
+  est <- 0.105 * nchar(labels) * base_size / 14
+  w <- str_in(labels, base_size * 0.8, family) * 1.15
+  if (length(w) != length(labels) || anyNA(w)) est else pmin(est, w)
+}
+key_geometry <- function(e, base_size = 14, max_width = NULL, family = "") {
   hdr <- function(s) data.frame(label = s, section = s, kind = "header", colour = NA, edge = NA,
                                 alpha = NA, shape = NA, extra = FALSE, stringsAsFactors = FALSE)
   if (is.null(e$extra)) e$extra <- rep(FALSE, nrow(e))
   rows <- do.call(rbind, lapply(unique(e$section), function(s) rbind(hdr(s), e[e$section == s, ])))
-  n <- nrow(rows); ncols <- ceiling(n / KEY_ROWS_PER_COL); per <- ceiling(n / ncols)
-  col <- integer(n); pos <- integer(n); cc <- 1L; rr <- 0L
-  for (i in seq_len(n)) {
-    # a section header never sits alone at the foot of a column
-    if (rr >= per || (rows$kind[i] == "header" && rr == per - 1L && rr > 0L)) { cc <- cc + 1L; rr <- 0L }
-    rr <- rr + 1L; col[i] <- cc; pos[i] <- rr
+  n <- nrow(rows)
+  # CT-R3 F6: `max_width` (the figure's width, for a key placed below the plot) = as many columns as fit
+  measured <- !is.null(max_width)
+  lw <- if (measured) label_width_in(rows$label, base_size, family) else 0.105 * nchar(rows$label) * base_size / 14
+  assign_cols <- function(ncols) {
+    per <- ceiling(n / ncols)
+    col <- integer(n); pos <- integer(n); cc <- 1L; rr <- 0L
+    for (i in seq_len(n)) {
+      # a section header never sits alone at the foot of a column
+      if (rr >= per || (rows$kind[i] == "header" && rr == per - 1L && rr > 0L)) { cc <- cc + 1L; rr <- 0L }
+      rr <- rr + 1L; col[i] <- cc; pos[i] <- rr
+    }
+    list(col = col, pos = pos)
   }
+  widths <- function(col) vapply(seq_len(max(col)), function(j) 0.6 + max(lw[col == j]), 0)
+  ncols <- if (measured) n else ceiling(n / KEY_ROWS_PER_COL)
+  as_ <- assign_cols(ncols)
+  if (measured) {
+    while (ncols > 1 && sum(widths(as_$col)) > max_width) { ncols <- ncols - 1L; as_ <- assign_cols(ncols) }
+  }
+  col <- as_$col; pos <- as_$pos
   rows$col <- col; rows$pos <- pos
   nrows <- max(pos)
-  colw <- vapply(seq_len(max(col)), function(j) 0.6 + 0.105 * max(nchar(rows$label[col == j])) * base_size / 14, 0)
+  colw <- widths(col)
   pitch <- 0.24 * max(1, base_size / 14)
   rows$x0 <- c(0, cumsum(colw))[col]; rows$y <- nrows - pos + 1
   list(rows = rows, colw = colw, nrows = nrows, pitch = pitch,
        width = sum(colw), height = 0.25 + pitch * nrows)
 }
-key_size <- function(e, base_size = 14) {
-  g <- key_geometry(e, base_size)
+key_size <- function(e, base_size = 14, max_width = NULL, family = "") {
+  g <- key_geometry(e, base_size, max_width, family)
   c(width = g$width, height = g$height)
 }
 # the key as a ggplot: section headers in bold, the figure's font (theme_classic base_size and
 # family) -- used stand-alone and placed beside the figure alike
-key_plot <- function(e, base_size = 14, family = "") {
-  geo <- key_geometry(e, base_size); rows <- geo$rows
+key_plot <- function(e, base_size = 14, family = "", max_width = NULL) {
+  geo <- key_geometry(e, base_size, max_width, family); rows <- geo$rows
   tsize <- base_size * 0.8 / ggplot2::.pt
   hdr <- rows[rows$kind == "header", ]; pat <- rows[rows$kind == "patch", ]
   mk <- rows[rows$kind == "marker", ]; ent <- rows[rows$kind != "header", ]
@@ -1150,7 +1383,7 @@ save_pdf <- function(file, plot_for, family, width, height) {
 }
 # the stand-alone key in every format + the text starter. One format that fails does not lose
 # the others; attr "notes" says what happened.
-write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "", annotation = "") {
+write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "", annotation = "", figure_note = "") {
   sz <- key_size(e, base_size); kp <- key_plot(e, base_size, family)
   out <- c(png = paste0(base, "_legend_key.png"), svg = paste0(base, "_legend_key.svg"),
            pdf = paste0(base, "_legend_key.pdf"), txt = paste0(base, "_legend_text.txt"))
@@ -1162,7 +1395,7 @@ write_key_files <- function(e, base, dpi = 300, base_size = 14, family = "", ann
   pdf_note <- attempt("PDF", save_pdf(out[["pdf"]], function(fam) key_plot(e, base_size, fam), family,
                                       sz[["width"]], sz[["height"]]))
   notes <- c(notes, pdf_note)
-  writeLines(text_starter(e, annotation), out[["txt"]])
+  writeLines(text_starter(e, annotation, figure_note), out[["txt"]])
   out <- unname(out[file.exists(out)])
   attr(out, "notes") <- notes
   out
@@ -1200,6 +1433,35 @@ copy_box <- function(id, rows = 3) {
 }
 scroll_box <- function(...) div(style = "overflow-x: auto; max-width: 100%;", ...)   # CT-R1 F22
 
+# CT-R3 F7: the n label above every sample, as the Python engine words it: "n = 70 plaques" over
+# "N = 3 plates" (two lines); with many samples the compact "n=70" over "N=3". The full wording is
+# used while its widest line fits the sample's slot, shrinking from 9.5 to 7.5 pt (scaled with the
+# base font size); then the compact one (8.5 to 6.5 pt). `slot_in` = the width one sample gets.
+plural_word <- function(n, word) sprintf("%d %s%s", n, word, if (n == 1) "" else "s")
+n_label_plan <- function(n, plates, superplot, slot_in, base_size = 14, family = "") {
+  full <- if (superplot) sprintf("n = %s\nN = %s", vapply(n, plural_word, "", "plaque"), vapply(plates, plural_word, "", "plate"))
+          else sprintf("n = %s", vapply(n, plural_word, "", "plaque"))
+  short <- if (superplot) sprintf("n=%d\nN=%d", n, plates) else sprintf("n=%d", n)
+  k <- base_size / 14
+  widest <- function(txt, pt) {
+    w <- str_in(unlist(strsplit(txt, "\n", fixed = TRUE)), pt * k, family, bold = TRUE)
+    if (anyNA(w)) w <- nchar(unlist(strsplit(txt, "\n", fixed = TRUE))) * pt * k * 0.6 / 72
+    max(w)
+  }
+  pick <- function(txt, sizes) {
+    for (pt in sizes) if (widest(txt, pt) <= slot_in) return(pt)
+    NA_real_
+  }
+  pt <- pick(full, c(9.5, 8.5, 7.5)); compact <- FALSE; txt <- full
+  if (is.na(pt)) {
+    compact <- TRUE; txt <- short
+    pt <- pick(short, c(8.5, 7.5, 6.5)); if (is.na(pt)) pt <- 6.5
+  }
+  lines <- if (superplot) 2 else 1
+  list(label = txt, pt = pt * k, size = pt * k / ggplot2::.pt, compact = compact, lines = lines,
+       height_in = lines * pt * k * 1.2 / 72 + 0.08)
+}
+
 ui <- fluidPage(
   # CT-R2 N9: an empty icon, so the browser's /favicon.ico request does not end in a 404 in the console
   tags$head(tags$link(rel = "icon", href = "data:,")),
@@ -1227,8 +1489,8 @@ ui <- fluidPage(
                   c("auto (grey when plates)" = "auto", "neutral grey" = "neutral",
                     "coloured by sample" = "group")),
       selectInput("center", "Centre marker", c("mean" = "mean", "median" = "median")),
-      selectInput("error", "Error bar", c("auto" = "auto", "SD" = "sd", "SEM" = "sem",
-                                          "95% CI" = "ci95", "IQR" = "iqr", "none" = "none")),
+      # CT-R3 F5: the choices follow the centre (a median has no SD / SEM / 95% CI here)
+      selectInput("error", "Error bar", CENTER_ERRORS$mean),
       checkboxInput("show_n", "Show n on top", TRUE),
       checkboxInput("frame", "Box the plot (frame)", FALSE),
       checkboxInput("show_sig", "Significance brackets", TRUE),
@@ -1302,6 +1564,13 @@ server <- function(input, output, session) {
   notify <- function(text, type = "warning", duration = 10, id = NULL)
     tryCatch(showNotification(text, type = type, duration = duration, session = session, id = id),
              error = function(e) NULL)
+
+  # CT-R3 F5: the error-bar choices follow the centre: a median has IQR or none (see CENTER_ERRORS)
+  observeEvent(input$center, {
+    ch <- CENTER_ERRORS[[if (identical(input$center, "median")) "median" else "mean"]]
+    cur <- isolate(input$error)
+    updateSelectInput(session, "error", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "auto")
+  }, ignoreInit = TRUE)
 
   # CT-R1 F9/F10: every file goes through one reader; whatever it cannot use becomes a plain
   # message at the top of the page (and a notification), never a blank page or a raw R error
@@ -1646,17 +1915,73 @@ server <- function(input, output, session) {
   # after the first flush, so the inputs the style updates exist in the page
   session$onFlushed(function() isolate(load_paper_style()), once = TRUE)
 
-  # CT-R1 F21: values a log axis cannot show
+  # CT-R1 F21 / CT-R3 F3: values a log axis cannot show. They are REMOVED from every drawn layer
+  # (points, violins, plate means, bar, whisker); the statistics still use every value. The
+  # sentence is the Python engine's (_log_guard).
   log_dropped <- reactive({
     d <- dat()
     if (!isTRUE(input$log_y)) return(NULL)
     bad <- d$value <= 0
     if (!any(bad)) return(NULL)
     by <- table(droplevels(d$group[bad]))
-    list(n = sum(bad), total = nrow(d),
-         caption = sprintf("Log axis: %d of %d values are 0 or negative and cannot be shown (%s).", sum(bad), nrow(d),
-                           paste0(names(by), ": ", as.integer(by), collapse = ", ")))
+    nb <- sum(bad)
+    list(n = nb, total = nrow(d),
+         caption = sprintf("%d value%s \u2264 0 %s not shown on the log axis: the plotted plate means, bar and whisker leave %s out, the statistics include %s",
+                           nb, if (nb == 1) "" else "s", if (nb == 1) "is" else "are",
+                           if (nb == 1) "it" else "them", if (nb == 1) "it" else "them"),
+         by_group = paste0(names(by), ": ", as.integer(by), collapse = ", "))
   })
+  # CT-R3 F3: what is DRAWN. On a log axis the values <= 0 are taken out here, once, and the plate
+  # means, bar and whisker are computed from what is left (a plate mean of {0, 1.2} used to be
+  # drawn at 0.6, below the axis). dat() / stats() keep every value.
+  drawn <- reactive({
+    d <- dat()
+    if (isTRUE(input$log_y)) d <- d[d$value > 0, , drop = FALSE]
+    d
+  })
+  drawn_rm <- reactive({
+    dd <- drawn()
+    if (is.null(stats()$rm) || all(is.na(dd$replicate))) return(stats()$rm)
+    as.data.frame(dd %>% filter(!is.na(replicate)) %>% group_by(group, replicate) %>%
+                    summarise(value = mean(value), n_plaques = n(), .groups = "drop"))
+  })
+  centre_input <- reactive(if (identical(input$center, "median")) "median" else "mean")
+  error_used <- reactive(effective_error(centre_input(), input$error %||% "auto"))
+  # CT-R3 F5: one bar + whisker per sample, from the values that are drawn (the figure, the brackets'
+  # headroom and the value labels all read this)
+  cen_tab <- reactive({
+    if (!isTRUE(superplot())) return(NULL)
+    center_table(drawn(), drawn_rm(), centre_input(), error_used())
+  })
+  # the same numbers computed over EVERY value, for the paste-ready sentence (the statistics and the
+  # sentence use every value, as the Python engine's report does)
+  cen_tab_all <- reactive({
+    sp <- isTRUE(superplot())
+    if (!sp && !identical(centre_input(), "median")) return(NULL)
+    center_table(dat(), if (sp) stats()$rm else NULL, centre_input(), error_used())
+  })
+  figure_sentence_text <- reactive({
+    ct <- cen_tab()
+    figure_sentence(centre_input(), error_used(), isTRUE(superplot()), !identical(input$show_points, FALSE),
+                    !identical(input$show_n, FALSE), if (is.null(ct)) NULL else ct$n_units)
+  })
+
+  # CT-R3 F7: the n label of every sample (wording and size picked from the room one sample gets)
+  n_plan <- reactive({
+    d <- dat(); lk <- look(); lev <- levels(d$group)
+    n <- vapply(lev, function(g) sum(d$group == g), 0L)
+    plates <- vapply(lev, function(g) length(unique(d$replicate[d$group == g & !is.na(d$replicate)])), 0L)
+    slot <- max(0.4, (plot_w_in() - 1.0) / (length(lev) + 0.2) * 0.85)
+    n_label_plan(n, plates, isTRUE(superplot()), slot, lk$base_size, lk$family)
+  })
+  # room above the data for the n labels, as a share of the panel height: `head` (the top of the
+  # brackets / stars, in the axis' own units) is raised so the n block sits above them
+  n_headroom <- function(head, bottom) {
+    if (!isTRUE(input$show_n)) return(head)
+    panel_h <- max(1.5, fig_size()$h - 1.3)
+    frac <- min(0.4, n_plan()$height_in / panel_h)
+    head + (head - bottom) * frac / (1 - frac)
+  }
 
   # CT-R1 F7: the brackets, laid out above the tallest drawn element
   brackets <- reactive({
@@ -1667,29 +1992,28 @@ server <- function(input, output, session) {
     if (!nrow(sel$pairs) && is.null(sel$vsref)) return(out)
     logy <- isTRUE(input$log_y)
     tr <- function(v) if (logy) log10(v[v > 0]) else v
-    vals <- tr(d$value)
+    dd <- drawn()
+    vals <- tr(dd$value)
     if (!length(vals)) return(out)
     top <- max(vals); bottom <- min(vals)
-    if (isTRUE(superplot())) {                 # the error bars of the plate means can be taller
-      fd <- summary_fun(input$center %||% "mean", input$error %||% "auto"); rm <- st$rm
-      for (g in lev) {
-        v <- tr(rm$value[rm$group == g])
-        if (length(v)) top <- max(top, fd(v)$ymax, na.rm = TRUE)
-      }
+    ct <- cen_tab()
+    if (!is.null(ct)) {                        # the whiskers can be taller than the plaques (CT-R3 F3: of what is drawn)
+      hi <- tr(ct$hi[!is.na(ct$hi)])
+      if (length(hi)) top <- max(top, hi)
     }
     back <- function(v) if (logy) 10^v else v
     if (!is.null(sel$vsref)) {              # CT-R2 N2: one row of stars above the samples
       span <- top - bottom; if (!is.finite(span) || span <= 0) span <- max(abs(top), 1) * 0.1
       step <- span * 0.085 * max(1, lk$base_size / 14)
       y <- top + step * 0.9; head <- y + step * 1.3
-      if (!identical(input$show_n, FALSE)) head <- head + (head - bottom) * 0.08 * max(1, lk$base_size / 14)
+      head <- n_headroom(head, bottom)
       out$stars <- data.frame(x = seq_along(lev), label = sel$vsref$labels, y = back(y), stringsAsFactors = FALSE)
       out$top <- back(head)
       return(out)
     }
     lay <- bracket_layout(sel$pairs, top, bottom, scale = max(1, lk$base_size / 14))
     p <- lay$pairs; head <- lay$top
-    if (!identical(input$show_n, FALSE)) head <- head + (head - bottom) * 0.08 * max(1, lk$base_size / 14)
+    head <- n_headroom(head, bottom)
     p$y <- back(p$y); p$ytip <- back(p$ytip); p$ylab <- back(p$ylab)
     out$pairs <- p; out$top <- back(head)
     out
@@ -1701,7 +2025,8 @@ server <- function(input, output, session) {
     fig_size()$w - if (identical(kp$where, "beside")) kp$kw else 0
   }
   make_main <- function(family = look()$family) {
-    d <- dat(); req(nrow(d) > 0)
+    d_all <- dat(); req(nrow(d_all) > 0)
+    d <- drawn()                        # CT-R3 F3: only what can be drawn (log axis: values <= 0 are out)
     sm <- style(); lk <- look()         # colours by name; font, base size, axis colour + width
     superplot <- sm$superplot           # Violin SuperPlot: plate-coloured points + plate means
     neutral_violin <- sm$neutral
@@ -1714,7 +2039,7 @@ server <- function(input, output, session) {
                            width = 0.85, trim = TRUE, linewidth = 0.5)
     } else {
       # one layer per sample in its mapped colour: the plate means below own the fill scale
-      for (lv in levels(d$group))
+      for (lv in levels(d$group)[table(d$group) > 0])
         g <- g + geom_violin(data = d[d$group == lv, ], fill = sm$gcol[[lv]], color = NA,
                              alpha = 0.25, width = 0.85, trim = TRUE)
     }
@@ -1731,32 +2056,67 @@ server <- function(input, output, session) {
       }
     }
     if (superplot) {
-      rm <- rep_means()
+      rm <- drawn_rm()                  # CT-R3 F3: plate means of the values that are drawn
       rm$.shape <- unname(sm$rshape[rm$replicate])
-      fdata <- summary_fun(input$center %||% "mean", input$error %||% "auto")
-      cfun  <- if (identical(input$center, "median")) stats::median else base::mean
+      center <- centre_input(); logy <- isTRUE(input$log_y)
+      ct <- cen_tab()
+      if (identical(center, "mean") && !logy) {
+        # the mean of the plate means: stat_summary, as it has always been drawn
+        fdata <- summary_fun(center, error_used())
+        g <- g +
+          stat_summary(data = rm, aes(group, value), fun.data = fdata, geom = "errorbar",
+                       width = 0, linewidth = 0.7, color = "#12211d") +
+          # CT-R1 F6: the centre line. It was a crossbar with fatten = 0, which ggplot2 4.x
+          # draws with stroke width 0 (invisible in SVG, PDF and PNG); now a plain segment at
+          # the mean of the plate means, on the same (transformed) scale as the bar.
+          stat_summary(data = rm, aes(x = stage(group, after_stat = x - 0.17), y = value,
+                                      xend = after_stat(x + 0.17), yend = after_stat(y)),
+                       fun = base::mean, geom = "segment", linewidth = 0.7, color = "#12211d",
+                       inherit.aes = FALSE)
+      } else {
+        # CT-R3 F5: the median of ALL the sample's plaques with its IQR (as center_table() in
+        # plaque_stats.py), and on a log axis the mean of the plate means computed on the VALUES, not
+        # on their logarithms; a bar or whisker end <= 0 cannot be drawn (F3)
+        bar <- ct[!is.na(ct$cen), , drop = FALSE]
+        if (logy) { bar <- bar[bar$cen > 0, , drop = FALSE]; bar$lo <- ifelse(bar$lo > 0, bar$lo, bar$cen) }
+        bar$x <- as.numeric(bar$group)
+        if (nrow(bar))
+          g <- g +
+            geom_errorbar(data = bar, aes(x = x, ymin = lo, ymax = hi), width = 0, linewidth = 0.7,
+                          color = "#12211d", inherit.aes = FALSE) +
+            geom_segment(data = bar, aes(x = x - 0.17, xend = x + 0.17, y = cen, yend = cen),
+                         linewidth = 0.7, color = "#12211d", inherit.aes = FALSE)
+      }
       g <- g +
-        stat_summary(data = rm, aes(group, value), fun.data = fdata, geom = "errorbar",
-                     width = 0, linewidth = 0.7, color = "#12211d") +
-        # CT-R1 F6: the centre line. It was a crossbar with fatten = 0, which ggplot2 4.x
-        # draws with stroke width 0 (invisible in SVG, PDF and PNG); now a plain segment at
-        # the mean / median of the plate means, on the same (transformed) scale as the bar.
-        stat_summary(data = rm, aes(x = stage(group, after_stat = x - 0.17), y = value,
-                                    xend = after_stat(x + 0.17), yend = after_stat(y)),
-                     fun = cfun, geom = "segment", linewidth = 0.7, color = "#12211d",
-                     inherit.aes = FALSE) +
         geom_point(data = rm, aes(group, value, fill = replicate, shape = .shape),
                    size = 4.2, color = "#12211d", stroke = 0.9) +
         scale_fill_manual(values = sm$rcol, name = "plate", guide = "none") +
         scale_color_manual(values = sm$rcol, name = "plate", guide = "none") +
         scale_shape_identity()
+      # CT-R3 F7: the value next to every bar, drawn as the Python engine does (bold, on a white
+      # box at 75 % opacity); with more than 8 samples they would run into the next violin
+      if (nlevels(d_all$group) <= 8) {
+        lab <- ct[!is.na(ct$cen) & (!logy | ct$cen > 0), , drop = FALSE]
+        lab$x <- as.numeric(lab$group) + 0.21; lab$lab <- sprintf("%.2f", lab$cen)
+        lab_extra <- if (utils::packageVersion("ggplot2") >= "4.0.0") list(linewidth = 0) else list(label.size = 0)
+        if (nrow(lab))
+          g <- g + do.call(geom_label, c(list(data = lab, mapping = aes(x = x, y = cen, label = lab),
+                                              inherit.aes = FALSE, hjust = 0, fontface = "bold", colour = "#12211d",
+                                              fill = grDevices::adjustcolor("white", alpha.f = 0.75),
+                                              size = (if (nlevels(d_all$group) <= 5) 9 else 7.5) * lk$base_size / 14 / ggplot2::.pt,
+                                              family = family, label.padding = grid::unit(0.15, "lines")),
+                                         lab_extra))
+      }
     } else {
       # no replicates: a THIN, unfilled box (median + IQR) — lines only, not a filled rectangle
       g <- g + geom_boxplot(width = 0.12, outlier.shape = NA, fill = NA,
                             color = "#33413c", linewidth = 0.5)
     }
     br <- if (isTRUE(input$show_sig)) brackets() else NULL
-    caption <- c(br$caption, log_dropped()$caption)
+    np <- if (isTRUE(input$show_n)) n_plan() else NULL
+    caption <- c(br$caption, if (!is.null(log_dropped())) paste0(log_dropped()$caption, "."),
+                 # the compact n label says what n and N are (as the Python engine's caption does)
+                 if (!is.null(np) && np$compact && superplot) "n = plaques, N = plates.")
     g <- g +
       labs(title = if (nzchar(input$title %||% "")) input$title else NULL,
            y = if (nzchar(input$ylab %||% "")) input$ylab else metric_name(),
@@ -1785,14 +2145,27 @@ server <- function(input, output, session) {
                                     collapse = "\n")) +
         theme(plot.caption = element_text(hjust = 0, size = rel(0.7), colour = "#33413c"),
               plot.caption.position = "plot")
-    if (!is.null(br$pairs) || !is.null(br$stars))   # room above the data for the brackets / stars and the n row
+    if (!is.null(br$pairs) || !is.null(br$stars)) {  # room above the data for the brackets / stars and the n row
       g <- g + geom_blank(data = data.frame(group = factor(levels(d$group)[1], levels = levels(d$group)),
                                             value = br$top), aes(group, value))
-    if (isTRUE(input$show_n)) {
-      ns <- dplyr::count(d, group)
-      # CT-R1 F23: the n row follows the base font size (3.3 at the default 14 pt)
-      g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = paste0("n = ", n)),
-                         vjust = 1.4, size = 3.3 * (lk$base_size / 14) * min(1, 9.5 / nlevels(d$group)), fontface = "bold", color = "#33413c",
+    } else if (!is.null(np) && nrow(d)) {
+      # no brackets: still room for the (two-line) n labels above the highest mark
+      logy <- isTRUE(input$log_y); tr <- if (logy) log10 else identity
+      hi <- c(d$value, if (!is.null(cen_tab())) cen_tab()$hi)
+      hi <- tr(hi[is.finite(hi) & (!logy | hi > 0)]); lo <- min(tr(d$value[!logy | d$value > 0]))
+      if (length(hi) && is.finite(lo)) {
+        head <- n_headroom(max(hi), lo)
+        g <- g + geom_blank(data = data.frame(group = factor(levels(d$group)[1], levels = levels(d$group)),
+                                              value = if (logy) 10^head else head), aes(group, value))
+      }
+    }
+    if (!is.null(np)) {
+      # CT-R3 F7: "n = 70 plaques" over "N = 3 plates" (compact "n=70" over "N=3" when the room is short),
+      # counted over EVERY value of the sample (the statistics use them all); the size follows the base
+      # font size and the room each sample gets
+      ns <- data.frame(group = factor(levels(d_all$group), levels = levels(d_all$group)), label = np$label)
+      g <- g + geom_text(data = ns, aes(x = group, y = Inf, label = label),
+                         vjust = 1.15, lineheight = 0.95, size = np$size, fontface = "bold", color = "#33413c",
                          family = family, inherit.aes = FALSE) +
         coord_cartesian(clip = "off")
     }
@@ -1843,13 +2216,19 @@ server <- function(input, output, session) {
     # else BELOW, and the figure then GROWS by the key's height so the plot keeps the size that was
     # set. The key never takes room from the plot panel (it used to shrink it to a sliver).
     if (kw <= KEY_BESIDE_MAX_FRAC * fs$w && kh <= 0.98 * fs$h) return(list(where = "beside", kw = kw, kh = kh, note = NULL))
-    if (kw <= fs$w)
-      return(list(where = "below", kw = kw, kh = kh, grow = kh + KEY_GAP_IN,
-                  note = sprintf("The key is placed below the plot, so the figure is %.1f in tall instead of %.1f in: the plot keeps the size you set.",
-                                 fs$h + kh + KEY_GAP_IN, fs$h)))
-    list(where = "none", kw = kw, kh = kh,
-         note = sprintf("The key was not placed on the figure: at this font size it needs %.1f x %.1f in and the figure is %.1f x %.1f in. Make the figure wider or taller, lower the base font size, or use the Legend key download (it always holds the full key).",
-                        kw, kh, fs$w, fs$h))
+    # CT-R3 F6: below the plot the key is wrapped into as many columns as fit the figure width (as the
+    # Python engine does), so 12 long names no longer end as "not placed"; "not placed" stays only
+    # for a key whose single widest row is wider than the figure.
+    bg <- key_geometry(e, lk$base_size, max_width = 0.97 * fs$w, family = lk$family)
+    if (bg$width <= fs$w) {
+      grow <- bg$height + KEY_GAP_IN
+      return(list(where = "below", kw = bg$width, kh = bg$height, grow = grow, ncols = max(bg$rows$col),
+                  note = sprintf("Figure: %.1f x %.1f in: the key is below the plot, so the figure is %.1f in tall instead of %.1f in: the plot keeps the size you set.",
+                                 fs$w, fs$h + grow, fs$h + grow, fs$h)))
+    }
+    list(where = "none", kw = bg$width, kh = bg$height,
+         note = sprintf("The key was not placed on the figure: at this font size its widest row needs %.1f in and the figure is %.1f in wide. Make the figure wider, lower the base font size, or use the Legend key download (it always holds the full key).",
+                        bg$width, fs$w))
   })
   # the figure: the main plot, plus the legend key beside it when "Place key on figure" is on --
   # the very same key_plot() the "Legend key" download saves
@@ -1861,7 +2240,7 @@ server <- function(input, output, session) {
       return(ggpubr::ggarrange(g, side, widths = c(max(1, fs$w - kp$kw), kp$kw)))
     }
     if (identical(kp$where, "below")) {
-      foot <- ggpubr::ggarrange(key_plot(e, lk$base_size, family), NULL, ncol = 2,
+      foot <- ggpubr::ggarrange(key_plot(e, lk$base_size, family, max_width = 0.97 * fs$w), NULL, ncol = 2,
                                 widths = c(kp$kw, max(0.1, fs$w - kp$kw)))
       return(ggpubr::ggarrange(g, foot, ncol = 1, heights = c(fs$h, kp$grow)))
     }
@@ -1895,7 +2274,11 @@ server <- function(input, output, session) {
   try(outputOptions(output, "has_key", suspendWhenHidden = FALSE), silent = TRUE)
   annotation_text <- reactive(tryCatch(if (isTRUE(input$show_sig)) brackets()$sentence %||% "" else "",
                                        error = function(e) ""))
-  output$key_text <- renderText({ s <- text_starter(key(), annotation_text()); if (nzchar(s)) s else "(no sample colours to key)" })
+  # CT-R3 F5: the starter ends with what the bar and whisker are (median and its IQR, or mean of the plate means)
+  output$key_text <- renderText({
+    s <- text_starter(key(), annotation_text(), figure_sentence_text())
+    if (nzchar(s)) s else "(no sample colours to key)"
+  })
 
   # everything the user should know about this figure, in one visible place under it
   # (CT-R1 F2, F7, F12, F13, F21): rows left out, the unit that was tested and why, which
@@ -1905,7 +2288,10 @@ server <- function(input, output, session) {
     out <- c(attr(d, "info")$notes, st$notes, st$warnings)
     if (isTRUE(input$show_sig)) out <- c(out, brackets()$note)
     ld <- log_dropped()
-    if (!is.null(ld)) out <- c(out, paste(ld$caption, "The statistics still use every value; untick 'Log y-axis' to see them all."))
+    if (!is.null(ld))
+      out <- c(out, sprintf("%s (%s). Untick 'Log y-axis' to see them all.", ld$caption, ld$by_group))
+    en <- error_note(centre_input(), input$error)          # CT-R3 F5: a stale SD / SEM / CI with a median
+    if (!is.null(en)) out <- c(out, en)
     if (length(sm$recoloured))
       out <- c(out, sprintf("%s had the same colour as another sample here, so %s given a different shade.",
                             paste(sm$recoloured, collapse = ", "), if (length(sm$recoloured) > 1) "they were" else "it was"))
@@ -1967,7 +2353,7 @@ server <- function(input, output, session) {
   output$omni <- renderText(omnibus_text(stats()))
   output$sentence <- renderText({
     s <- summ_group_full()
-    stats_sentence(metric_name(), as.data.frame(s), stats())
+    stats_sentence(metric_name(), as.data.frame(s), stats(), cen_tab_all(), centre_input(), error_used())
   })
   # hidden outputs feed the visible copy boxes (copy_box), so they must update while "hidden"
   try(outputOptions(output, "sentence", suspendWhenHidden = FALSE), silent = TRUE)
@@ -2014,7 +2400,8 @@ server <- function(input, output, session) {
       tmp <- tempfile("key"); dir.create(tmp)
       base <- file.path(tmp, sprintf("violin_%s", metric_name()))
       lk <- look()
-      files <- write_key_files(e, base, checked_dpi(), lk$base_size, lk$family, annotation_text())
+      files <- write_key_files(e, base, checked_dpi(), lk$base_size, lk$family, annotation_text(),
+                               figure_sentence_text())
       for (i in seq_along(attr(files, "notes"))) notify(attr(files, "notes")[[i]], id = paste0("key_note_", i))
       # the zip package needs no external program (utils::zip needs a 'zip' on the PATH, which
       # a stock Windows R lacks); fall back to utils::zip where the package is not installed

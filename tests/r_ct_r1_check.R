@@ -314,8 +314,9 @@ testServer(app, {
   raw(data.frame(group = as.character(d0$group), replicate = d0$replicate, diameter_mm = d0$value, stringsAsFactors = FALSE))
   session$setInputs(log_y = TRUE)
   ld <- log_dropped()
-  chk("F21_log_drop_counted", !is.null(ld) && ld$n > 0 && grepl("0 or negative", ld$caption), if (!is.null(ld)) ld$caption else "none")
-  chk("F21_log_drop_on_figure_and_notes", any(grepl("Log axis", figure_notes())) && grepl("Log axis", build_main()$labels$caption %||% ""))
+  # CT-R3 F3 re-pin: the note is now the Python engine's sentence ("N values \u2264 0 are not shown on the log axis: ...")
+  chk("F21_log_drop_counted", !is.null(ld) && ld$n > 0 && grepl("values? \u2264 0 (is|are) not shown on the log axis", ld$caption), if (!is.null(ld)) ld$caption else "none")
+  chk("F21_log_drop_on_figure_and_notes", any(grepl("not shown on the log axis", figure_notes())) && grepl("not shown on the log axis", build_main()$labels$caption %||% ""))
   session$setInputs(log_y = FALSE); raw(example)
   # F13: one plottable group still draws, with a note
   session$setInputs(order = "T7, bogus")
@@ -327,7 +328,11 @@ testServer(app, {
   # F23: base size reaches n labels and stars; jitter seeded
   sz <- function(bs) { session$setInputs(base_size = bs); g <- build_main()
     unlist(lapply(layers_of(g, "GeomText"), function(l) l$aes_params$size)) }
-  chk("F23_text_size_follows_base", {a <- sz(7); b <- sz(28); all(b / a > 3.9) && length(a) >= 2}, paste(sz(14), collapse = ","))
+  # CT-R3 F7 re-pin: the n label is now fitted to the room each sample gets (full wording, shrinking, then the
+  # compact one), so it follows the base size linearly while it fits (7 -> 14 pt) and is never smaller when
+  # the base size doubles again; the stars still scale linearly
+  chk("F23_text_size_follows_base", {a <- sz(7); b <- sz(14); cc <- sz(28); all(b / a > 1.9) && all(cc / b > 1.2) && length(a) >= 2},
+      paste(sz(14), collapse = ","))
   session$setInputs(base_size = 14)
   j1 <- ggplot2::ggplot_build(build_main())$data; j2 <- ggplot2::ggplot_build(build_main())$data
   set.seed(99); j3 <- ggplot2::ggplot_build(build_main())$data
@@ -425,7 +430,8 @@ testServer(app, {
     colour_distance(unname(sm$rcol)[1], unname(sm$gcol)) > 18 }, "")
   tx <- text_starter(key()); chk("F18_text_starter_has_every_plate_once", sum(grepl("plate1 \\(|plate1[0-9]* \\(", tx)) >= 1 && nchar(tx) > 100)
   session$setInputs(vfill = "auto")
-  chk("F18_default_grey_view_keeps_rep_palette", identical(unname(style()$rcol[1:2]), REP_PALETTE[1:2]))
+  # CT-R3 F7 re-pin: under grey violins the plates take the chosen palette (Okabe-Ito), as the Python engine
+  chk("F18_default_grey_view_uses_the_chosen_palette", identical(unname(style()$rcol[1:2]), OKABE_ITO[1:2]))
   g <- build_plot(); ok <- !inherits(try(ggplot2::ggplot_build(g), silent = TRUE), "try-error"); chk("F18_many_plates_draws", ok)
 })
 
@@ -677,3 +683,208 @@ stars_sel <- pairs_to_draw(data.frame(group1 = c("a", "a", "a", "a", "a"), group
                            letters[1:6], "auto", "Tukey HSD")
 chk("R2_final_stars_row_na_for_untestable_pair", identical(stars_sel$vsref$labels, c("ref.", "**", "n/a", "ns", "*", "***")) &&
       grepl("itself is marked ref\\.; n/a = could not be tested, fewer than 2 plates\\)", stars_sel$sentence), stars_sel$sentence %||% "")
+
+# =================================================================================================
+# ---- CT-R3 (round 3): F3 F5 F6 F7 F8 F11 of the four-front-end comparison ----------------------
+# Every check is wrapped: a missing function is a FAIL line, not an aborted script.
+# =================================================================================================
+r3 <- function(id, expr) {
+  res <- tryCatch(expr, error = function(e) paste("ERROR:", conditionMessage(e)))
+  if (is.character(res) && startsWith(res, "ERROR:")) chk(id, FALSE, res)
+  invisible(res)
+}
+# the value column of every layer that carries data frames of values (the points, violins, plate means)
+r3_layer_values <- function(g) unlist(lapply(g$layers, function(l)
+  if (is.data.frame(l$data) && "value" %in% names(l$data)) l$data$value))
+r3_is_bar <- function(l) is.data.frame(l$data) && all(c("cen", "lo", "hi") %in% names(l$data)) &&
+  (inherits(l$geom, "GeomErrorbar") || inherits(l$geom, "GeomSegment"))
+r3_bar_values <- function(g) unlist(lapply(g$layers, function(l) if (r3_is_bar(l)) unlist(l$data[c("cen", "lo", "hi")])))
+r3_png_dim <- function(f) { b <- readBin(f, "raw", 32); c(readBin(b[17:20], "integer", 1, 4, endian = "big"),
+                                                          readBin(b[21:24], "integer", 1, 4, endian = "big")) }
+R3_PY_LOG_SENTENCE <- "8 values ≤ 0 are not shown on the log axis: the plotted plate means, bar and whisker leave them out, the statistics include them"
+
+# ---- F3: log axis: the values <= 0 are removed from every drawn layer --------------------------
+testServer(app, {
+  raw(read_plaque_table(fx("ct_r3_k_zeros.csv"))$df)
+  do.call(session$setInputs, modifyList(ui_defaults, list(log_y = TRUE))); session$flushReact()
+  r3("R3_F3_no_zero_value_in_any_drawn_layer", {
+    g <- build_main(); v <- r3_layer_values(g); bars <- r3_bar_values(g)
+    chk("R3_F3_no_zero_value_in_any_drawn_layer", length(v) > 100 && all(v > 0) && length(bars) > 0 && all(bars > 0),
+        sprintf("%d values, min %.3g, bar min %.3g", length(v), min(v), min(bars)))
+  })
+  r3("R3_F3_nothing_at_the_axis_line", {
+    b <- ggplot2::ggplot_build(build_main())
+    g <- build_main()                     # (the n labels sit at y = Inf, the top edge, on purpose)
+    ys <- unlist(lapply(seq_along(b$data), function(i) if (inherits(g$layers[[i]]$geom, "GeomText")) NULL else
+      unlist(b$data[[i]][intersect(c("y", "ymin", "ymax"), names(b$data[[i]]))])))
+    chk("R3_F3_nothing_at_the_axis_line", all(is.finite(ys)), sprintf("%d non-finite of %d y values", sum(!is.finite(ys)), length(ys)))
+  })
+  r3("R3_F3_plate_means_from_drawn_values", {
+    d <- dat(); wt1 <- d$value[d$group == "WT" & d$replicate == "plate1"]
+    want <- mean(wt1[wt1 > 0]); all_mean <- mean(wt1)
+    got <- drawn_rm(); got <- got$value[got$group == "WT" & got$replicate == "plate1"]
+    ct <- cen_tab(); pm <- drawn_rm(); w <- pm$value[pm$group == "WT"]
+    chk("R3_F3_plate_means_from_drawn_values", near(got, want) && all_mean < want && near(ct$cen[ct$group == "WT"], mean(w)) && all(w > 0),
+        sprintf("drawn %.4f want %.4f with the zeros %.4f", got, want, all_mean))
+  })
+  r3("R3_F3_statistics_and_n_use_every_value", {
+    st <- stats(); d <- dat(); rmw <- st$rm$value[st$rm$group == "WT" & st$rm$replicate == "plate1"]
+    wt1 <- d$value[d$group == "WT" & d$replicate == "plate1"]
+    chk("R3_F3_statistics_and_n_use_every_value", near(rmw, mean(wt1)) && sum(d$group == "WT") == 74 &&
+          grepl("n = 74 plaques", n_plan()$label[1], fixed = TRUE) && nrow(drawn()) == nrow(d) - 8,
+        sprintf("stats plate mean %.4f; n label '%s'", rmw, gsub("\n", " / ", n_plan()$label[1])))
+  })
+  r3("R3_F3_note_is_the_python_sentence", {
+    cap <- gsub("\n", " ", build_main()$labels$caption %||% "", fixed = TRUE)
+    chk("R3_F3_note_is_the_python_sentence", any(startsWith(figure_notes(), R3_PY_LOG_SENTENCE)) && grepl(R3_PY_LOG_SENTENCE, cap, fixed = TRUE),
+        paste(figure_notes(), collapse = " | "))
+  })
+  r3("R3_F3_violin_and_points_follow", {
+    b <- ggplot2::ggplot_build(build_main()); npts <- sum(vapply(b$data, nrow, 0L)[vapply(build_main()$layers, function(l) inherits(l$geom, "GeomPoint"), TRUE)])
+    chk("R3_F3_violin_and_points_follow", npts == 202 + 9, sprintf("%d points (202 plaque points + 9 plate means)", npts))
+  })
+})
+r3("R3_F3_singular_sentence", {
+  d1 <- read_plaque_table(fx("ct_r3_k_zeros.csv"))$df; d1$diameter_mm <- as.numeric(d1$diameter_mm)
+  d1$diameter_mm[d1$diameter_mm <= 0] <- 1.5; d1$diameter_mm[2] <- 0
+  testServer(app, {
+    raw(d1); do.call(session$setInputs, modifyList(ui_defaults, list(log_y = TRUE))); session$flushReact()
+    chk("R3_F3_singular_sentence", startsWith(log_dropped()$caption, "1 value ≤ 0 is not shown on the log axis: the plotted plate means, bar and whisker leave it out, the statistics include it"),
+        log_dropped()$caption)
+  })
+})
+
+# ---- F5: Centre = median -----------------------------------------------------------------------
+# Python (plaque_stats.py --center median, example_data_wide.csv): median of ALL plaques, IQR whisker:
+#   T4 2.63 (2.41-2.82), T7 1.78 (1.56-1.98), lambda 3.16 (2.96-3.38)
+testServer(app, {
+  raw(example); do.call(session$setInputs, modifyList(ui_defaults, list(center = "median"))); session$flushReact()
+  r3("R3_F5_centre_is_the_median_of_all_plaques", {
+    ct <- cen_tab(); d <- dat()
+    chk("R3_F5_centre_is_the_median_of_all_plaques",
+        near(ct$cen, vapply(levels(d$group), function(g) median(d$value[d$group == g]), 0)) &&
+          identical(sprintf("%.2f", ct$cen), c("2.63", "1.78", "3.16")) &&
+          identical(sprintf("%.2f-%.2f", ct$lo, ct$hi), c("2.41-2.82", "1.56-1.98", "2.96-3.38")),
+        paste(sprintf("%.4f", ct$cen), collapse = " "))
+  })
+  r3("R3_F5_the_drawn_bar_is_that_median", {
+    g <- build_main(); bars <- g$layers[vapply(g$layers, r3_is_bar, TRUE)]
+    labs_ <- g$layers[vapply(g$layers, function(l) inherits(l$geom, "GeomLabel"), TRUE)]
+    chk("R3_F5_the_drawn_bar_is_that_median", length(bars) == 2 && near(bars[[1]]$data$cen, cen_tab()$cen) &&
+          identical(labs_[[1]]$data$lab, c("2.63", "1.78", "3.16")), "")
+  })
+  r3("R3_F5_error_choices_follow_the_centre", {
+    chk("R3_F5_error_choices_follow_the_centre", identical(unname(CENTER_ERRORS$median), c("auto", "iqr", "none")) &&
+          all(c("sd", "sem", "ci95") %in% CENTER_ERRORS$mean) && !any(c("sd", "sem", "ci95") %in% CENTER_ERRORS$median) &&
+          identical(error_used(), "iqr"), error_used())
+  })
+  r3("R3_F5_stale_mean_error_is_not_drawn_around_a_median", {
+    ok <- TRUE
+    for (er in c("sd", "sem", "ci95")) {
+      session$setInputs(error = er); session$flushReact()
+      ok <- ok && identical(error_used(), "iqr") && near(cen_tab()$lo, c(2.41, 1.56, 2.96), 0.01) &&
+        any(grepl("cannot be drawn around a median", figure_notes()))
+    }
+    session$setInputs(error = "none"); session$flushReact()
+    ok <- ok && identical(error_used(), "none") && all(cen_tab()$lo == cen_tab()$cen) && !any(grepl("cannot be drawn around a median", figure_notes()))
+    session$setInputs(error = "auto")
+    chk("R3_F5_stale_mean_error_is_not_drawn_around_a_median", ok)
+  })
+  r3("R3_F5_sentence_names_the_median", {
+    s <- output$sentence
+    chk("R3_F5_sentence_names_the_median", grepl("Values are median (IQR) of all plaques: T4 2.63 (2.41–2.82); T7 1.78 (1.56–1.98); lambda 3.16 (2.96–3.38).", s, fixed = TRUE) &&
+          !grepl("mean ± SEM", s) && grepl("Pairwise (Tukey HSD): T4 vs T7 p < 0.001", s, fixed = TRUE), s)
+  })
+  r3("R3_F5_starter_names_median_and_whisker", {
+    s <- output$key_text
+    chk("R3_F5_starter_names_median_and_whisker", grepl("Bar: median of all plaques. Whisker: IQR of the plaques (25th to 75th percentile).", s, fixed = TRUE) &&
+          !grepl("SEM|mean of the", s), s)
+  })
+  r3("R3_F5_standalone_key_text_matches", {
+    base <- file.path(out_dir, "r3_med"); write_key_files(key(), base, 100, 14, "", annotation_text(), figure_sentence_text())
+    chk("R3_F5_standalone_key_text_matches", identical(trimws(paste(readLines(paste0(base, "_legend_text.txt"), warn = FALSE), collapse = " ")), trimws(output$key_text)))
+  })
+  session$setInputs(error = "none"); session$flushReact()
+  r3("R3_F5_none_says_no_whisker", chk("R3_F5_none_says_no_whisker", grepl("Whisker|No whisker", output$key_text) && grepl("No whisker.", output$key_text, fixed = TRUE) &&
+                                          grepl("Values are median of all plaques: T4 2.63;", output$sentence, fixed = TRUE), output$sentence))
+  session$setInputs(error = "auto", center = "mean"); session$flushReact()
+  r3("R3_F5_mean_is_unchanged", chk("R3_F5_mean_is_unchanged", grepl("Bar: mean of the 3 plate means. Whisker: SEM of the plate means.", output$key_text, fixed = TRUE) &&
+                                       grepl("mean ± SEM of plate means", output$sentence)))
+})
+
+# ---- F6 + F7: the figure a reader sees is the one the Python front-ends draw -------------------
+testServer(app, {
+  raw(read_plaque_table(fx("ct_r3_twelve_long.csv"))$df)
+  do.call(session$setInputs, modifyList(ui_defaults, list(vfill = "group"))); session$flushReact()
+  r3("R3_F6_twelve_samples_key_below_wrapped", {
+    kp <- key_place(); fs <- fig_size(); fo <- fig_out()
+    chk("R3_F6_twelve_samples_key_below_wrapped", identical(kp$where, "below") && kp$ncols >= 2 && fo$h > fs$h + 1 && fo$w == fs$w &&
+          near(fo$h, fs$h + kp$kh + KEY_GAP_IN, 1e-9), sprintf("%s in %d columns, %.1f -> %.2f in", kp$where, kp$ncols, fs$h, fo$h))
+  })
+  r3("R3_F6_the_app_states_the_real_size", {
+    fo <- fig_out()
+    chk("R3_F6_the_app_states_the_real_size", any(grepl(sprintf("^Figure: %.1f x %.1f in: the key is below the plot", fo$w, fo$h), figure_notes())), paste(figure_notes(), collapse = " | "))
+  })
+  r3("R3_F6_file_has_the_grown_size", {
+    f <- file.path(out_dir, "r3_grown.png"); fo <- fig_out()
+    ggsave(f, build_plot(), width = fo$w, height = fo$h, dpi = 100, device = "png", bg = "white")
+    dm <- r3_png_dim(f)
+    chk("R3_F6_file_has_the_grown_size", dm[1] == round(fo$w * 100) && abs(dm[2] - fo$h * 100) <= 1 && dm[2] > 600, paste(dm, collapse = " x "))
+  })
+  r3("R3_F6_every_entry_once_in_the_placed_key", {
+    e <- key(); geo <- key_geometry(e, 14, max_width = 0.97 * fig_size()$w, family = look()$family)
+    ent <- geo$rows[geo$rows$kind != "header", ]
+    chk("R3_F6_every_entry_once_in_the_placed_key", nrow(ent) == nrow(e) && identical(sort(paste(ent$section, ent$label)), sort(paste(e$section, e$label))) &&
+          geo$width <= fig_size()$w, sprintf("%d rows, width %.2f", nrow(ent), geo$width))
+  })
+  r3("R3_F6_not_placed_only_when_a_row_is_wider_than_the_figure", {
+    session$setInputs(base_size = 40); session$flushReact(); kp <- key_place()
+    chk("R3_F6_not_placed_only_when_a_row_is_wider_than_the_figure", identical(kp$where, "none") && grepl("widest row needs", kp$note), kp$note %||% "")
+    session$setInputs(base_size = 14, width = 16); session$flushReact()
+    chk("R3_F6_wide_figure_no_longer_squeezes", key_place()$where %in% c("beside", "below"), key_place()$where)
+    session$setInputs(width = 8); session$flushReact()
+  })
+  r3("R3_F7_compact_n_label_with_many_samples", {
+    np <- n_plan()
+    chk("R3_F7_compact_n_label_with_many_samples", np$compact && identical(np$label[1], "n=66\nN=3") && np$pt < 9.5 && np$lines == 2, gsub("\n", " / ", np$label[1]))
+  })
+  session$setInputs(vfill = "auto"); session$flushReact()
+  r3("R3_F6_grey_twelve_samples_key_lists_plates_only", {
+    # grey violins: only the three plates are keyed, so the key is short, sits beside the plot and the figure keeps its size
+    chk("R3_F6_grey_twelve_samples_key_lists_plates_only", identical(key_place()$where, "beside") && nrow(key()) == 3 &&
+          identical(fig_out()$h, fig_size()$h) && !any(grepl("^Figure:", figure_notes())), key_place()$where)
+  })
+})
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  r3("R3_F7_plate_colours_are_okabe_ito", {
+    e <- key(); pl <- e[e$section == "plate", ]
+    chk("R3_F7_plate_colours_are_okabe_ito", identical(pl$colour, c("#0072B2", "#E69F00", "#009E73")) &&
+          identical(unname(style()$rcol), c("#0072B2", "#E69F00", "#009E73")), paste(pl$colour, collapse = " "))
+  })
+  r3("R3_F7_colour_words_as_python", {
+    s <- output$key_text
+    chk("R3_F7_colour_words_as_python", startsWith(s, "T4, T7 and lambda are shown as grey violins. Points are coloured by plate: plate1 (blue, filled circles with black outline); plate2 (orange, filled circles with black outline); plate3 (bluish green, filled circles with black outline). Violins: all plaques."), s)
+  })
+  r3("R3_F7_n_label_wording", {
+    np <- n_plan()
+    chk("R3_F7_n_label_wording", identical(np$label, c("n = 70 plaques\nN = 3 plates", "n = 75 plaques\nN = 3 plates", "n = 74 plaques\nN = 3 plates")) && !np$compact,
+        gsub("\n", " / ", paste(np$label, collapse = " ; ")))
+    g <- build_main(); tx <- g$layers[vapply(g$layers, function(l) inherits(l$geom, "GeomText") && is.data.frame(l$data) && "label" %in% names(l$data) &&
+                                                  identical(as.character(l$data$label), np$label), TRUE)]
+    chk("R3_F7_n_label_is_drawn", length(tx) == 1, "")
+  })
+  r3("R3_F7_value_labels_next_to_the_bars", {
+    g <- build_main(); lb <- g$layers[vapply(g$layers, function(l) inherits(l$geom, "GeomLabel"), TRUE)]
+    chk("R3_F7_value_labels_next_to_the_bars", length(lb) == 1 && identical(lb[[1]]$data$lab, c("2.59", "1.78", "3.16")) &&
+          near(lb[[1]]$data$x, 1:3 + 0.21) && near(lb[[1]]$data$cen, c(2.59478338206628, 1.78372932330827, 3.15777038393705)), "")
+  })
+  r3("R3_F7_grey_view_pinned_the_old_palette_no_more", chk("R3_F7_grey_view_pinned_the_old_palette_no_more", !identical(unname(style()$rcol[1:2]), REP_PALETTE[1:2])))
+  r3("R3_F7_custom_palette_colours_the_plates_under_grey_violins", {
+    session$setInputs(vfill = "neutral", palette = "#112233,#445566,#778899"); session$flushReact()
+    ok <- identical(unname(style()$rcol), c("#112233", "#445566", "#778899"))
+    session$setInputs(vfill = "auto", palette = ""); session$flushReact()
+    chk("R3_F7_custom_palette_colours_the_plates_under_grey_violins", ok)
+  })
+})
+
