@@ -1520,6 +1520,7 @@ class CompareTab(QWidget):
         self.last_out = None       # output folder of the last finished run
         self._last_df = None       # its plaque table (re-drawn when the key switch changes)
         self._figures = []         # records of the figures the last run wrote (and nothing else)
+        self._overlays = []        # records of its QC overlays (re-drawn by the key switch, N8)
         self._fig_labels = []      # (QLabel, full-size QPixmap) of the figures on screen
 
         self.folder = self._pathrow("Plate folder (filename = phage)", browse_dir=True,
@@ -1581,9 +1582,10 @@ class CompareTab(QWidget):
                                 "SVG and PDF, with the legend text. (The same files are already "
                                 "beside the figures in the output folder.)")
         self.key_cb = QCheckBox("Place key on figure"); self.key_cb.setChecked(True)
-        self.key_cb.setToolTip("Draw the legend key on the figures themselves (the same entries "
-                               "as the stand-alone key from “Legend key…”). Untick for figures "
-                               "without a key; the shown figures are re-drawn at once.")
+        self.key_cb.setToolTip("Draw the legend key on the figures themselves and on every plate's "
+                               "QC overlay (overlay_<plate>.png; the same entries as the stand-alone "
+                               "keys). Untick for figures without a key; the figures and overlays "
+                               "are re-drawn at once.")
         self.key_cb.toggled.connect(self._rerender)
         keyrow = QHBoxLayout(); keyrow.setContentsMargins(4, 0, 4, 0)
         keyrow.addWidget(self.key_btn); keyrow.addWidget(self.key_cb); keyrow.addStretch()
@@ -1736,6 +1738,7 @@ class CompareTab(QWidget):
         self.last_out = out_dir
         self._last_df = res.get("df")
         self._figures = list(res.get("figures") or [])
+        self._overlays = list(res.get("overlays") or [])
         self._set_busy(False)
         self.open_btn.setEnabled(True)
         self._load_tables(out_dir)
@@ -1868,18 +1871,19 @@ class CompareTab(QWidget):
     def _rerender(self, _checked=None):
         """"Place key on figure" changed: re-draw the shown figures with / without the key
         (same data, same colours; the stand-alone key files are rewritten with them)."""
-        if self._last_df is None or not self.last_out or not self._figures:
+        if self._last_df is None or not self.last_out or not (self._figures or self._overlays):
             return                                   # nothing on screen yet: applies to the next run
         self._set_busy(True)
         self.window().statusBar().showMessage("Re-drawing the figures…")
         w = Worker(engine_api.render_compare_figures, self._last_df, self.last_out,
-                   key_on_figure=self.key_cb.isChecked())
+                   key_on_figure=self.key_cb.isChecked(), overlays=self._overlays)
         w.signals.finished.connect(self._rerendered)
         w.signals.error.connect(self.on_error)
         self.pool.start(w)
 
     def _rerendered(self, res):
         self._figures = list(res.get("figures") or [])
+        self._overlays = list(res.get("overlays") or [])
         self._set_busy(False)
         self._show_figures()
         self.window().statusBar().showMessage(
@@ -2287,6 +2291,13 @@ class BatchTab(QWidget):
         self.crops.setToolTip("For each image, also write a cropped-plate TIFF with the mm scale "
                               "baked in (plus a .fiji.txt). Opens in Fiji already scaled in mm, so "
                               "cropping a plaque keeps the scale for a scale bar.")
+        # CT-R2 N8 (standing figure rule): every annotated image gets its legend key + legend
+        # text beside it; this switch also draws the key ON each annotated image
+        self.key_cb = QCheckBox("Place key on figure")
+        self.key_cb.setToolTip("Draw the legend key (what each outline colour and line means) on "
+                               "every annotated image. The stand-alone key and the legend text are "
+                               "saved beside each annotated image either way "
+                               "(out_<name>_legend_key.*, out_<name>_legend_text.txt).")
 
         self.run_btn = QPushButton(" Run batch"); self.run_btn.setObjectName("Primary")
         self.run_btn.setIcon(_icon(QStyle.SP_MediaPlay)); self.run_btn.clicked.connect(self._run)
@@ -2313,7 +2324,9 @@ class BatchTab(QWidget):
         opt = QHBoxLayout(); opt.addWidget(QLabel("Engine")); opt.addWidget(self.mode)
         opt.addWidget(self.watershed); opt.addStretch()
         gl.addLayout(opt, 2, 1)
-        gl.addWidget(self.crops, 3, 1)
+        figrow = QHBoxLayout(); figrow.addWidget(self.crops); figrow.addWidget(self.key_cb)
+        figrow.addStretch()
+        gl.addLayout(figrow, 3, 1)
         sz = QHBoxLayout(); sz.addWidget(QLabel("Plaque size")); sz.addWidget(self.scale_box)
         sz.addStretch()
         gl.addLayout(sz, 4, 1)
@@ -2413,7 +2426,8 @@ class BatchTab(QWidget):
         self._set_busy(True); self.window().statusBar().showMessage("Batch running…")
         # only what applies to this engine is passed on (and so recorded in run_metadata.json)
         w = Worker(batch_measure.batch_measure, folder, plate_mm=self.plate.value(), mode=key,
-                   watershed=watershed, crops=self.crops.isChecked(), scale=scale)
+                   watershed=watershed, crops=self.crops.isChecked(), scale=scale,
+                   key_on_figure=self.key_cb.isChecked())
         w.kwargs["progress"] = w.signals.progress.emit
         w.signals.progress.connect(self.status.setText)
         w.signals.finished.connect(self._done); w.signals.error.connect(self._err)
@@ -2422,7 +2436,7 @@ class BatchTab(QWidget):
     def _set_busy(self, on):
         self._busy = bool(on)
         self.progress.setVisible(on)
-        for x in (self.run_btn, self.mode, self.plate, self.crops):
+        for x in (self.run_btn, self.mode, self.plate, self.crops, self.key_cb):
             x.setEnabled(not on)
         self._sync_options()                 # the two engine-dependent boxes
 

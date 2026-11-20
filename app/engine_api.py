@@ -506,6 +506,7 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
     THIS run wrote (plaque_turbidity.write_plots), which is exactly what the tab shows --
     never a glob of the folder, which also matched an earlier run's files (CT-R1 F4)."""
     import plaque_turbidity as ptb
+    overlays = []
     with _LOCK:
         pst.use_published = bool(published)
         pst.watershed_enabled = bool(watershed) and not bool(published)
@@ -516,19 +517,22 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
             blank or None, flat or None, out_dir,
             group_by_prefix=bool(group_by_prefix), dark_path=dark or None,
             core_frac=float(core), make_overlays=True,
-            dilution=dilution, volume_ul=volume_ul, make_plots=False)
+            dilution=dilution, volume_ul=volume_ul, make_plots=False,
+            key_on_figure=bool(key_on_figure), overlay_records=overlays)
     # Plotting runs here, on the caller's (worker) thread, AFTER the engine lock is released.
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
-    return {"df": df, "out_dir": out_dir, "figures": figures}
+    return {"df": df, "out_dir": out_dir, "figures": figures, "overlays": overlays}
 
 
-def render_compare_figures(df, out_dir, key_on_figure=True):
+def render_compare_figures(df, out_dir, key_on_figure=True, overlays=None):
     """Re-draw the Compare figures of the run whose plaque table is `df`, with or without
-    the legend key on the figure (the tab's "Place key on figure" switch). Same code as the
-    run itself, so the result has the same shape as run_compare's."""
+    the legend key on the figure (the tab's "Place key on figure" switch), AND the run's QC
+    overlays from their records (CT-R2 N8: the switch left the overlays' key stale). Same
+    code as the run itself, so the result has the same shape as run_compare's."""
     import plaque_turbidity as ptb
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
-    return {"df": df, "out_dir": out_dir, "figures": figures}
+    overlays = ptb.redraw_overlays(overlays, out_dir, key_on_figure=bool(key_on_figure))
+    return {"df": df, "out_dir": out_dir, "figures": figures, "overlays": overlays}
 
 
 def save_compare_keys(figures, dest_dir):

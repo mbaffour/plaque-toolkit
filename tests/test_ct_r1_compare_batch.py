@@ -137,13 +137,14 @@ def test_histograms_of_one_figure_share_one_set_of_bin_edges(tmp_path, monkeypat
     real = Axes.hist
 
     def spy(self, x, bins=None, **kw):
-        seen.append((np.asarray(x), np.asarray(bins)))
+        seen.append((x, np.asarray(bins)))
         return real(self, x, bins=bins, **kw)
 
     monkeypatch.setattr(Axes, "hist", spy)
     df = _plot_df()[["PHAGE", "PLATE", "DIAMETER_MM"]]
     ptb.write_plots(df, str(tmp_path), formats=("png",))
-    assert len(seen) == 3                                    # one call per phage
+    # CT-R2 N14: ONE call with every phage, so the bars stand side by side (no colour mixing)
+    assert len(seen) == 1 and len(seen[0][0]) == 3
     edges = seen[0][1]
     assert edges.ndim == 1 and len(edges) == 21
     assert all(np.array_equal(edges, b) for _x, b in seen)
@@ -268,9 +269,10 @@ def test_turbidity_overlay_label_equals_plate_index_of_the_csv_row(tmp_path, mon
     """F17 decision: the overlay exists to find a plaques_all.csv row on the plate, so the number
     drawn must be that row's PLATE_INDEX (engine order, frozen), not a reading-order rank."""
     import numpy as np
+    import plaque_gui as pgui
     drawn = []
-    real = ptb.cv2.putText
-    monkeypatch.setattr(ptb.cv2, "putText", lambda img, text, *a, **k: drawn.append(text) or real(img, text, *a, **k))
+    real = pgui._draw_texts          # CT-R2 N8: the overlay labels are drawn in the figure font
+    monkeypatch.setattr(pgui, "_draw_texts", lambda img, items: drawn.extend(it[0] for it in items) or real(img, items))
     def hull(cx, cy):
         return [[cx - 5, cy - 5], [cx + 5, cy - 5], [cx + 5, cy + 5], [cx - 5, cy + 5]]
     det = {"orig": np.zeros((120, 120, 3), np.uint8), "dish_center": None, "dish_r": 0,

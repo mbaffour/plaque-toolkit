@@ -119,7 +119,7 @@ def _safe_float(v):
 
 
 def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=False,
-                  out_dir=None, progress=None, crops=False, scale=None):
+                  out_dir=None, progress=None, crops=False, scale=None, key_on_figure=False):
     """Measure every image in ``folder`` and write combined CSVs.
 
     Parameters
@@ -147,6 +147,10 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
         When True, also write a Fiji/ImageJ-calibrated cropped-plate TIFF per image
         (``<name>_plate.tif`` + a ``.fiji.txt`` sidecar) into the per-image folder,
         so the same scale-bar-in-Fiji workflow applies to every photo in one run.
+    key_on_figure : bool
+        Draw the legend key on every annotated image (the Batch tab's "Place key on figure").
+        The stand-alone key (in the overlay's format, + PNG) and the legend text are written
+        beside every annotated image either way (CT-R2 N8).
 
     Returns
     -------
@@ -232,9 +236,12 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
             # ---- save annotated image + per-image CSV -------------------- #
             # save_results creates ``perimg`` itself; it writes the overlay and
             # the data-green-<name>.csv mirroring the single-image GUI output.
+            # CT-R2 N8 (the standing figure rule): every overlay ships its legend key + text,
+            # one per overlay because the outline classes present differ from plate to plate
             plaque_gui.save_results(plaques, orig_bgr, path, perimg, ppm,
                                     lawn_gray, plate=plate, published=(mode == "published"),
-                                    write_provenance=False)   # the batch writes its own below
+                                    write_provenance=False,   # the batch writes its own below
+                                    key=bool(key_on_figure), write_key=True)
 
             # ---- optional Fiji-calibrated cropped-plate TIFF ------------- #
             if crops:
@@ -348,7 +355,8 @@ def batch_measure(folder, plate_mm=100, mode="current", small=None, watershed=Fa
                                    precise=(mode == "precise")),
             {"mode": mode, "plate_size_mm": plate_mm, "small": small_used,
              "plaque_size": scale_used,
-             "watershed": watershed_used, "crops": bool(crops), "folder": folder},
+             "watershed": watershed_used, "crops": bool(crops), "folder": folder,
+             "key_on_figure": bool(key_on_figure)},
             [dict({"file": r.get("image"), "n_plaques": r.get("n_plaques"),
                    "mm_per_px": r.get("mm_per_px"), "axis_ratio": r.get("axis_ratio"),
                    "tilt_flag": r.get("tilt_flag"), "error": r.get("error")},

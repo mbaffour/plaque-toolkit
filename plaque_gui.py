@@ -791,18 +791,19 @@ def _outline_points(p):
     return np.asarray(p["contour"], dtype=float).reshape(-1, 2)
 
 
-def _draw_dashed(img, pts, bgr, thick):
-    """Closed dashed polyline: evenly spaced dashes (an integer number round the outline)."""
+def _draw_dashed(img, pts, bgr, thick, dotted=False):
+    """Closed dashed polyline: evenly spaced dashes (an integer number round the outline).
+    ``dotted`` draws short dots instead of dashes (the "size not used" class, CT-R2 N3)."""
     closed = np.vstack([pts, pts[:1]])
     seg = np.hypot(np.diff(closed[:, 0]), np.diff(closed[:, 1]))
     per = float(seg.sum())
     if per <= 0:
         return
     s = np.concatenate([[0.0], np.cumsum(seg)])
-    period = 8.0 * thick
-    n_dash = max(4, int(round(per / period)))
+    period = (3.0 if dotted else 8.0) * thick
+    n_dash = max(6 if dotted else 4, int(round(per / period)))
     period = per / n_dash
-    dash = 0.58 * period
+    dash = (0.2 if dotted else 0.58) * period
     lines = []
     for k in range(n_dash):
         t = np.linspace(k * period, k * period + dash, max(2, int(dash) + 1))
@@ -812,11 +813,13 @@ def _draw_dashed(img, pts, bgr, thick):
     cv2.polylines(img, lines, False, bgr, int(thick), cv2.LINE_AA)
 
 
-def _draw_outline(img, p, cls, thick):
-    _name, rgb, style = PLAQUE_CLASSES[cls]
+def draw_outline(img, p, rgb, style, thick):
+    """Draw one outline (plaque dict) in ``rgb`` with ``style`` 'solid' | 'dashed' | 'dotted'.
+    The ONE outline drawing of every exported figure: plate figures and the turbidity QC
+    overlays (CT-R2 N8)."""
     bgr = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
-    if style == "dashed":
-        _draw_dashed(img, _outline_points(p), bgr, thick)
+    if style in ("dashed", "dotted"):
+        _draw_dashed(img, _outline_points(p), bgr, thick, dotted=(style == "dotted"))
     elif p["kind"] == "circle":
         cv2.circle(img, (int(round(p["center"][0])), int(round(p["center"][1]))),
                    max(int(round(p["radius"])), 1), bgr, int(thick), cv2.LINE_AA)
@@ -824,23 +827,54 @@ def _draw_outline(img, p, cls, thick):
         cv2.drawContours(img, [np.asarray(p["contour"], dtype=np.int32)], -1, bgr, int(thick), cv2.LINE_AA)
 
 
+def _draw_outline(img, p, cls, thick):
+    _name, rgb, style = PLAQUE_CLASSES[cls]
+    draw_outline(img, p, rgb, style, thick)
+
+
 # ---- legend key (the standing figure rule): built by plaque_stats/legend_key.py ------------
+_KEY_LINESTYLE = {"solid": "-", "dashed": "--", "dotted": ":"}
+
+
+def outline_key(spec, title="Plaque outlines"):
+    """A legend key of outline classes: ``spec`` = [(plain name, RGB as drawn, line style)].
+    The ONE builder behind the plate figure's key (plate_key) and the turbidity QC overlay's
+    key (CT-R2 N8), so every outline figure is keyed the same way. None for an empty spec."""
+    if not spec:
+        return None
+    from plaque_stats import legend_key
+    entries = [legend_key.entry(name, "#%02X%02X%02X" % tuple(rgb), kind="line",
+                                linestyle=_KEY_LINESTYLE.get(style, "-"), linewidth=2.0)
+               for name, rgb, style in spec]
+    return legend_key.make_key(entries, title=title, fontsize=9.0, frameon=True)
+
+
 def plate_key(plaques, precise=False):
     """The legend key of a plate figure: one entry per plaque class PRESENT on this plate,
     with the colour and line style it is drawn in and a plain name. Returns a legend_key key
     dict (None when there are no plaques). Read from the current plaques every time."""
     if not plaques:
         return None
-    from plaque_stats import legend_key
     present = set(plaque_classes(plaques))
-    entries = []
+    spec = []
     for k in CLASS_ORDER:
         if k in present:
             _n, rgb, style = PLAQUE_CLASSES[k]
-            entries.append(legend_key.entry(class_name(k, precise), "#%02X%02X%02X" % tuple(rgb),
-                                            kind="line", linestyle=("--" if style == "dashed" else "-"),
-                                            linewidth=2.0))
-    return legend_key.make_key(entries, title="Plaque outlines", fontsize=9.0, frameon=True)
+            spec.append((class_name(k, precise), rgb, style))
+    return outline_key(spec)
+
+
+def write_key_files_for(key, figure_path):
+    """The stand-alone key + legend text beside a figure, in the figure's own format (plus
+    PNG, which every viewer opens). Returns the paths written ([] for no key)."""
+    if not key or not key.get("entries"):
+        return []
+    from plaque_stats import legend_key
+    ext = os.path.splitext(figure_path)[1].lower().lstrip(".") or "png"
+    if ext in ("heic", "heif"):
+        ext = "png"
+    formats = [ext] + ([] if ext == "png" else ["png"])
+    return legend_key.write_key_files(key, os.path.splitext(figure_path)[0], formats=formats)
 
 
 def key_text(plaques, precise=False):
@@ -1132,7 +1166,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     non-auto plaque) so the CLI editor, measure_samples.py and the batch runner are unchanged.
     The desktop app passes all of them: its Save used to record whatever engine another tab
     had last run. ``labels`` / ``key`` style the overlay (see annotate_plaques);
-    ``write_key=True`` also writes out_<stem>_legend_key.png + _legend_text.txt."""
+    ``write_key=True`` also writes out_<stem>_legend_key.<overlay format> (+ .png) and
+    out_<stem>_legend_text.txt."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -1170,10 +1205,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                                 "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
     pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
     if write_key and plaques:
-        try:
-            from plaque_stats import legend_key
-            legend_key.write_key_files(plate_key(plaques, precise),
-                                       os.path.splitext(img_path)[0], formats=("png",))
+        try:                                          # in the overlay's own format (CT-R2 N8)
+            write_key_files_for(plate_key(plaques, precise), img_path)
         except Exception:                             # a key must never break a save
             pass
     if write_provenance:
