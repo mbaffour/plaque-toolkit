@@ -407,7 +407,9 @@ def test_d4_dish_plausibility_rules():
     good = {"center": (1000.0, 1000.0), "radius": 900.0}
     assert q.dish_plausibility(good, (2000, 2000, 3)) == []
     small_img = q.dish_plausibility(None, (500, 700))
-    assert len(small_img) == 1 and "500 px on its short side" in small_img[0]
+    # CT-R2 detection N7: no dish now also says so (was 1 warning)
+    assert len(small_img) == 2 and "500 px on its short side" in small_img[0]
+    assert small_img[1].startswith("No dish found: sizes are in pixels only")
     w = q.dish_plausibility((1000, 1000, 200), (2000, 2000))
     assert len(w) == 1 and "20%" in w[0]
     w = q.dish_plausibility((1550, 1000, 400), (2000, 2000))

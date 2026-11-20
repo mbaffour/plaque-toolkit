@@ -13,19 +13,22 @@ Flags (several may apply, joined with `|`; `OK` when none):
 * ``EDGE``     the plaque's area-equivalent disk touches the image border or reaches the LAWN
                edge, ``rim_frac`` (0.93) of the dish radius. (Until 2026-11 it was 0.98 of the
                radius, beyond where the lawn ends, so it never fired on a real plate; CT-R1 F11.)
-* ``LARGE?``   area is more than ``merged_factor`` x the plate's median plaque area while the
-               shape is normal -- a big plaque, worth a look, not necessarily two.
+* ``LARGE?``   area is more than ``merged_factor`` x the plate's median SIZED plaque area (CORE?
+               and NO_SIZE rows left out of the median; CT-R2 N8) while the shape is normal -- a
+               big plaque, worth a look, not necessarily two.
 * ``MERGED?``  the outline is not one convex blob: solidity (raw contour area / convex-hull
                area) below ``min_solidity`` (0.9) for outlines at least 25 px across (smaller
                ones are jagged from pixelation alone), or a fitted ellipse longer than
                ``max_axis_ratio`` (1.5) x its width -- likely two plaques, or an outline that
                did not close. (The old circularity test could never fire; CT-R1 F12.) A
-               ``circularity`` below ``min_circularity`` still counts when it is given.
+               ``circularity`` below ``min_circularity`` still counts when it is given. Not on
+               SPLIT pieces or CORE? outlines (CT-R2 N9).
 * ``NESTED``   its centre lies inside a LARGER plaque's outline (a core and its halo, or a plaque
                counted inside another; CT-R1 F14).
 * ``TINY``     the outline is too few pixels for a reliable size: area-equivalent diameter below
                ``tiny_diam_px`` (12 px), where one pixel of edge error is more than 15 % of the
-               area; the reason gives px and mm. Pixel outlines only (not circles). Being found
+               area; the reason gives px and mm. Plates where many plaques are 12-16 px across
+               get a PLATE warning instead (small_plaque_warning; CT-R2 N11). Pixel outlines only (not circles). Being found
                only by the small pass is not a flag: SOURCE says so (CT-R1 detection D9).
 * ``BRIGHT``   the plaque interior is brighter than a ring around it by more than
                ``bright_margin`` grey levels: a bubble or glare, not a clearing (CT-R1 F19). Only
@@ -50,7 +53,9 @@ import math
 
 STANDARD_ENCL_DIAM_MIN = 30      # plaque_size_tool.filter_contours: green_diam_min without -small
 LAWN_EDGE_FRAC = 0.93            # where the lawn ends, as a fraction of the dish radius (F11)
-TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9)
+TINY_DIAM_PX = 12                # area-equivalent diameter below this: too few pixels (D9).
+                                 # CT-R2 N11: kept at 12. A 16 px cut flagged half of Plate_11 /
+                                 # Plate_13; the 12-16 px band is a plate warning instead.
 MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from this diameter (D9)
 
 
@@ -59,11 +64,33 @@ MIN_SOLIDITY_DIAM_PX = 25        # the solidity rule of MERGED? applies from thi
 SIZE_EXCLUDING_FLAGS = ("CORE?", "NO_SIZE")
 
 
+def flag_tokens(flag_string):
+    """The |-joined flags of one cell, upper-cased and stripped. Tolerant of a CSV a user has
+    opened and re-saved (CT-R2, Analyze tester): "core?" == "CORE?", "MERGED? | CORE?" splits
+    as "MERGED?|CORE?", and None / NaN / an empty cell mean no flags."""
+    if flag_string is None:
+        return []
+    try:
+        if flag_string != flag_string:                      # NaN
+            return []
+    except (TypeError, ValueError):                         # pandas.NA and the like
+        return []
+    return [t.strip().upper() for t in str(flag_string).split("|") if t.strip()]
+
+
 def has_flag(flag_string, name):
-    """True when ``name`` is one of the |-joined flags in ``flag_string`` (exact token)."""
-    if flag_string is None or flag_string != flag_string:      # None / NaN
-        return False
-    return name in str(flag_string).split("|")
+    """True when ``name`` is one of the |-joined flags in ``flag_string`` (whole token; case and
+    spaces around the separator do not matter)."""
+    return str(name).strip().upper() in flag_tokens(flag_string)
+
+
+def flag_column(df):
+    """The name of the QC flag column of a per-plaque table whatever its case or stray spaces
+    (QC_FLAG, qc_flag, Qc_Flag), or None. Every reader of saved tables uses it."""
+    for c in getattr(df, "columns", ()):
+        if str(c).strip().upper() == "QC_FLAG":
+            return c
+    return None
 
 
 def size_ok(flag_string):
@@ -72,6 +99,107 @@ def size_ok(flag_string):
     plate) and NO_SIZE (a split piece whose size the D10c sweep shows to be biased). The ONE
     rule; the Measure tab, the Batch summary and the Analyze hand-off all use it."""
     return not any(has_flag(flag_string, f) for f in SIZE_EXCLUDING_FLAGS)
+
+
+def sized_rows(df):
+    """Boolean list: which rows of a per-plaque table may enter a size summary, or None when
+    the table has no QC_FLAG column in any spelling (flag_column; then every row is sized, as
+    before; CT-R2 detection N1).
+    summarize_plates.py, compile_excel.py and make_figure.py all use this."""
+    col = flag_column(df) if df is not None else None
+    if col is None:
+        return None
+    return [size_ok(f) for f in df[col].tolist()]
+
+
+def sizes_from_phrase(n_sized, n_all):
+    """'sizes from 22 of 44 plaques' -- the one wording every tool prints (CT-R2 N1)."""
+    return "sizes from %d of %d plaques" % (int(n_sized), int(n_all))
+
+
+def size_summary_lines(flag_strings):
+    """Lines a run prints under a plate's count: always "sizes from N of M plaques" when some
+    rows are not sized (and why)."""
+    flags = list(flag_strings)
+    n = len(flags)
+    n_ok = sum(1 for f in flags if size_ok(f))
+    if n == 0 or n_ok == n:
+        return []
+    line = sizes_from_phrase(n_ok, n)
+    why = left_out_phrase(size_left_out_counts(flags))
+    return [line + ((" (left out: %s)" % why) if why else "")]
+
+
+# CT-R2 detection N2 / Part 3: the standard (block-231) pass outlines a haloed plaque at its
+# dark centre (-45 to -61 %) once it is about 140 px across or wider: its threshold window is
+# about the halo's size. Measured on the frozen benchmark's plate model with the CLI default
+# (validation/detection_benchmark/standard_range.py): haloed discs within +-5 % every time up to
+# 135 px, at the centre from 140 px (1 of 3 at 141 px in the benchmark's own scenes); sharp discs
+# every time only up to 225 px (failures seen at 250-350 px, depending on the layout). These come
+# from the synthetic blur model; the 135 px limit for haloed plaques is consistent with the bundled
+# plates at 2x, where medians drop, but has not been measured on real photographs with manual
+# tracing. It is the frozen engine's limit, not Auto's.
+STANDARD_HALO_MAX_PX = 135
+# warn when the plate's largest outline reaches this (a choice, not a measurement: about 3/4 of
+# the limit). Blind spot: a plate whose plaques are ALL past the limit shows only centres of
+# ~0.4 D and may not reach it.
+STANDARD_HALO_WARN_PX = 100
+
+
+def large_plaque_warning(diams_px, mm_per_px=None):
+    """[warning] when the largest plaque outline (area-equivalent diameter, px) is
+    STANDARD_HALO_WARN_PX or more, else []. Never changes a number."""
+    d = [float(x) for x in diams_px if x is not None and x == x]
+    if not d or max(d) < STANDARD_HALO_WARN_PX:
+        return []
+    where = ("" if not mm_per_px else " (%.1f mm at this image's scale)"
+             % (STANDARD_HALO_MAX_PX * float(mm_per_px)))
+    return ["Plaques wider than about %d px%s may be outlined at their dark centre (the largest "
+            "here is %.0f px); photograph at lower magnification or resize the image."
+            % (STANDARD_HALO_MAX_PX, where, max(d))]
+
+
+# CT-R2 detection N11: single sizes under 16 px across are uncertain. Real paired data
+# (validation/tiny_plaques.csv: 20 plaques of ~8-11 px, median +3.8 % against Fiji, single
+# errors -31 % to +27 %) say noisy rather than systematically too big, so this is a PLATE
+# warning, not a per-plaque flag; it fires when at least a quarter of the plaques are this small.
+SMALL_PLAQUE_WARN_PX = 16
+SMALL_PLAQUE_WARN_SHARE = 0.25
+
+
+def small_plaque_warning(diams_px):
+    """[warning] when at least a quarter of the plaques are under SMALL_PLAQUE_WARN_PX across."""
+    d = [float(x) for x in diams_px if x is not None and x == x]
+    n_small = sum(1 for x in d if x < SMALL_PLAQUE_WARN_PX)
+    if not d or n_small < SMALL_PLAQUE_WARN_SHARE * len(d):
+        return []
+    return ["%d of %d plaques are under %d px across: single sizes are uncertain at this size "
+            "(about +-30 %% against manual tracing); report the group mean, or photograph at "
+            "higher magnification." % (n_small, len(d), SMALL_PLAQUE_WARN_PX)]
+
+
+def few_sized_warning(flag_strings):
+    """[warning] when fewer than half of the counted plaques are sized (CT-R2 detection N3:
+    a quarter to a third of haloed plates was left out of sizing, not at random), else []."""
+    flags = list(flag_strings)
+    n = len(flags)
+    n_ok = sum(1 for f in flags if size_ok(f))
+    if n == 0 or 2 * n_ok >= n:
+        return []
+    why = left_out_phrase(size_left_out_counts(flags))
+    return ["%s: the size summary may not represent the plate%s."
+            % (sizes_from_phrase(n_ok, n), (" (left out: %s)" % why) if why else "")]
+
+
+def plate_warnings(diams_px, mm_per_px=None, flag_strings=None):
+    """Per-plate warnings about the plaque sizes, for the app's flag line, the CLI's stdout and
+    run_metadata.json: the large-plaque limit of the standard pass (Part 3), many plaques under
+    16 px across (N11) and, when QC flags
+    are given, fewer than half of the plaques sized (Part 4). One call for every front end."""
+    out = large_plaque_warning(diams_px, mm_per_px) + small_plaque_warning(diams_px)
+    if flag_strings is not None:
+        out += few_sized_warning(flag_strings)
+    return out
 
 
 def size_left_out_counts(flag_strings):
@@ -120,7 +248,11 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         a = max(float(p.get("area_px", 0.0) or 0.0), 0.0)
         r = math.sqrt(a / math.pi) if a > 0 else 0.0
         geo.append((float(p["x"]), float(p["y"]), r, a))
-    areas = sorted(g[3] for g in geo if g[3] > 0)
+    # CT-R2 detection N8: LARGE? compares with the median of the SIZED plaques only -- CORE?
+    # outlines (dark centres) and NO_SIZE pieces pulled the median down, so 26 % of Plate_6
+    # was "LARGE?"
+    areas = sorted(g[3] for g, p in zip(geo, plaques)
+                   if g[3] > 0 and not p.get("core_only") and not p.get("size_unreliable"))
     median_area = areas[len(areas) // 2] if areas else 0.0
 
     # pairwise overlap of area-equivalent disks (O(n^2); plates have at most a few hundred)
@@ -173,7 +305,9 @@ def flag_plaques(plaques, image_shape, dish=None, merged_factor=2.5, min_circula
         if circ is not None and circ == circ and float(circ) < min_circularity:
             shape_why.append("circularity %.2f" % float(circ))
         split = p.get("source") == "split"
-        if shape_why and not split:          # a split piece's shape is the cut, not a merge
+        # a split piece's shape is the cut, not a merge; a CORE? outline is a dark centre whose
+        # shape says nothing about merging (CT-R2 detection N9: MERGED? fired on them)
+        if shape_why and not split and not p.get("core_only"):
             why_m = "; ".join(shape_why)
             if big:
                 why_m = "area %.1fx the plate median; " % (a / median_area) + why_m
@@ -258,6 +392,8 @@ DISH_MIN_FRAC = 0.30        # dish diameter below this fraction of the short sid
 DISH_OFFCENTRE_FRAC = 0.25  # dish centre further than this fraction of the short side from the centre
 DISH_CLIPPED_FRAC = 0.02    # dish circle past the frame by more than this fraction of its diameter
 MIN_SHORT_SIDE_PX = 600     # below this the pixel size gates swallow most plaques (CT-R1 F23)
+NO_DISH_WARNING = ("No dish found: sizes are in pixels only; make sure the whole dish is in the "
+                   "frame (or set the plate by hand in the app).")
 
 
 def _dish_tuple(dish):
@@ -294,6 +430,9 @@ def dish_plausibility(dish, image_shape):
                    "detected and the dish may be missed. Use a higher-resolution photo." % short)
     d = _dish_tuple(dish)
     if d is None:
+        # CT-R2 detection N7: a 3 % crop or a dark border lost the dish with no word at all
+        # (Batch then wrote a median of 0.0 mm)
+        out.append(NO_DISH_WARNING)
         return out
     cx, cy, r = d
     if dish_too_small(d, image_shape):
