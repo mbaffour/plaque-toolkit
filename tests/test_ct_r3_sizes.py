@@ -588,3 +588,46 @@ def test_f6_validate_status_counts_plates_and_save_follows(neutral_plate_tif, tm
     tab._done(res3)
     assert tab.status.text() == "No plate could be scored: all 4 plates failed (see the last column)."
     assert not tab.save_btn.isEnabled() and tab.sentence.text() == ""
+
+
+# =========================================================================== F7
+def _compile_tree(root, modes=("normal",)):
+    for sample, diams in (("WT", [1.0, 1.2, 1.4]), ("mut", [2.0, 2.2, 2.6])):
+        for rep in (1, 2):
+            pdir = root / sample / ("p%d" % rep); pdir.mkdir(parents=True)
+            for m in modes:
+                pd.DataFrame({"INDEX_COL": [1, 2, 3], "DIAMETER_MM": diams,
+                              "QC_FLAG": ["OK", "OK", "CORE?"]}).to_csv(
+                    pdir / ("p%d_%s.csv" % (rep, m)), index=False)
+
+
+def _run_compile(cwd, *args):
+    import subprocess
+    return subprocess.run([sys.executable, os.path.join(ROOT, "compile_excel.py")] + list(args),
+                          cwd=str(cwd), capture_output=True, text=True)
+
+
+def test_f7_compile_excel_relative_root_and_a_missing_mode(tmp_path):
+    pytest.importorskip("openpyxl")
+    _compile_tree(tmp_path / "mydata")
+    p = _run_compile(tmp_path, "--root", "mydata", "--order", "WT,mut")
+    assert p.returncode == 0, p.stderr
+    assert ("No *_sensitive.csv under %s: the sensitive columns and sheet are left out."
+            % (tmp_path / "mydata")) in p.stdout.splitlines()
+    assert p.stdout.count("No *_sensitive.csv") == 1
+    out = tmp_path / "mydata" / "Plaque_data_compiled.xlsx"
+    xl = pd.read_excel(out, sheet_name=None)
+    assert set(xl) == {"Summary (per replicate)", "Stats (per sample)", "Normal - all plaques"}
+    summ = xl["Summary (per replicate)"]
+    assert not [c for c in summ.columns if c.startswith("sensitive")]
+    assert list(summ["normal_median_mm"]) == [1.1, 1.1, 2.1, 2.1]       # CORE? left out
+    assert list(xl["Stats (per sample)"]["normal_diam_mm_mean_of_plate_medians"]) == [1.1, 2.1]
+    # both modes present: unchanged layout, no line
+    _compile_tree(tmp_path / "both", modes=("normal", "sensitive"))
+    p = _run_compile(tmp_path, "--root", "both")
+    assert p.returncode == 0 and "No *_" not in p.stdout
+    assert "Sensitive - all plaques" in pd.read_excel(tmp_path / "both" / "Plaque_data_compiled.xlsx",
+                                                      sheet_name=None)
+    # a relative root that does not exist is named, with the folder it was read from
+    p = _run_compile(tmp_path, "--root", "nothere")
+    assert p.returncode != 0 and "No folder %s" % (tmp_path / "nothere") in p.stderr
