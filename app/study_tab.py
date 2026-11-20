@@ -1280,6 +1280,7 @@ class StudyTab(QWidget):
         empty-plate / empty-sample rows), the Wide or Long compiled-data export, or any table with
         a group column and a diameter-in-mm (or area) column. Labels stay exactly as typed
         (CT-R1 F5: None / NA / 007 / 1.0 used to become nan / 7.0 / 1.0)."""
+        src_df = df                      # keeps the file line numbers (attrs) for messages
         df = df.copy()
         df.columns = [str(c).strip().lower() for c in df.columns]
         if "group" not in df.columns:
@@ -1290,6 +1291,8 @@ class StudyTab(QWidget):
         scol = "subgroup" if "subgroup" in df.columns else None
         rcol = "replicate" if "replicate" in df.columns else None
         long_mode = "metric" in df.columns and "value" in df.columns
+        df = df.reset_index(drop=True)
+        bad = []                       # CT-R2 F5: (row, column, cell, why) -- refused, never analysed
         if long_mode:
             # CT-R1 F25: the tab's own "Long" export loads too
             met = df["metric"].astype(str).str.strip().str.lower()
@@ -1297,7 +1300,9 @@ class StudyTab(QWidget):
             is_a = met.map(lambda m: "area" in m and not _NOT_MM_RE.search(m))
             if not (is_d.any() or is_a.any()):
                 self._warn("The long-format file has no diameter or area metric."); return
-            vals, nbad = _numbers(df["value"])
+            size_rows = is_d | is_a        # other metrics (turbidity …) may be 0: not checked here
+            vals, _n = _numbers(df["value"].where(size_rows, ""))
+            bad += self._bad_sizes(df["value"], vals, size_rows, "value")
             df = df.assign(_d=vals.where(is_d), _a=vals.where(is_a))
             dcol, acol = "_d", "_a"
         else:
@@ -1306,10 +1311,19 @@ class StudyTab(QWidget):
                 self._warn("The study file needs a diameter_mm (or area_mm2) column."); return
             for c in (dcol, acol):
                 if c is not None:
-                    num, nbad = _numbers(df[c])
-                    if nbad:
-                        self._warn("%d cell(s) of '%s' are not numbers." % (nbad, c)); return
+                    num, _n = _numbers(df[c])
+                    bad += self._bad_sizes(df[c], num, None, c)
                     df[c] = num
+        if bad:
+            # the same rule as Add CSV(s): a size must be a positive number. Nothing is loaded,
+            # so the current study stays as it was.
+            where = ["%s: %s '%s' (%s)" % (_row_line(src_df, i), col, cell, why)
+                     for i, col, cell, why in sorted(bad)[:8]]
+            self._warn("Not loaded: %s has %d cell(s) that are not plaque sizes — %s%s. A diameter or "
+                       "area must be a positive number (leave the cell empty for a plate without "
+                       "plaques). Fix these cells and load the file again."
+                       % (source, len(bad), "; ".join(where), "; …" if len(bad) > 8 else ""))
+            return
         samples, plates, index = [], [], {}
         for _, r in df.iterrows():
             g = str(r["group"]).strip()
@@ -1340,6 +1354,25 @@ class StudyTab(QWidget):
         self._dirty = False
         self._status("Loaded %d sample(s) · %d plate(s) from %s"
                      % (len(self._samples), len(self._plates), source), 5000)
+
+    @staticmethod
+    def _bad_sizes(raw, num, mask, col):
+        """CT-R2 F5: [(row, column, cell, why)] for the non-empty cells of a size column that are
+        not a positive number (Load study used to drop text silently and analyse 0 and -1.0)."""
+        out = []
+        txt = raw.astype(str).str.strip()
+        for i in range(len(raw)):
+            if mask is not None and not bool(mask.iloc[i]):
+                continue
+            cell = txt.iloc[i]
+            if not cell or pd.isna(raw.iloc[i]):
+                continue
+            v = num.iloc[i]
+            if v != v:
+                out.append((i, col, cell, "not a number"))
+            elif v <= 0:
+                out.append((i, col, cell, "zero or negative"))
+        return out
 
     # ================================================================ ANALYSIS
     @staticmethod
