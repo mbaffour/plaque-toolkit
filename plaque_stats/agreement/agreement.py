@@ -41,8 +41,8 @@ from scipy import stats as scstats
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib.figure import Figure
-# keep text EDITABLE in SVG/PDF (Illustrator / Inkscape)
-matplotlib.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+# Text stays EDITABLE in SVG/PDF: figures are drawn and saved inside figure_rc() (FIG_RC sets the
+# font types); nothing is set globally (CT-R2 group 8 d: it leaked into every later figure).
 
 __version__ = "1.1.0"
 
@@ -79,6 +79,34 @@ _lk = _load_legend_key()
 # plaque_stats/agreement/agreement.py (CLI + web app); tests/test_ct_r1_agreement_validate.py
 # compares the two copies text-for-text. Edit one, paste into the other.
 # (The two packages are frozen separately, so one cannot import the other.)
+AGREEMENT_VERSION = "1.1.0"   # the stand-alone agreement tool's own version (frozen / no toolkit)
+
+
+def version_label():
+    """'Plaque Toolkit 1.3.0 (agreement.py)' when the toolkit's _version.py can be found (CT-R2
+    web (f): the report said 'agreement.py v1.1.0' beside a 'Plaque Toolkit 1.3.0' statistics
+    report), else 'agreement.py v<AGREEMENT_VERSION>' for the stand-alone / frozen tool."""
+    try:
+        from _version import __version__ as v                 # repo root on sys.path
+        return "Plaque Toolkit %s (agreement.py)" % v
+    except Exception:                                         # noqa: BLE001
+        pass
+    import os as _os
+    d = _os.path.dirname(_os.path.abspath(__file__))
+    for _ in range(3):
+        d = _os.path.dirname(d)
+        vp = _os.path.join(d, "_version.py")
+        if _os.path.isfile(vp) and _os.path.isfile(_os.path.join(d, "plaque_size_tool.py")):
+            try:
+                ns = {}
+                with open(vp, encoding="utf-8") as fh:
+                    exec(compile(fh.read(), vp, "exec"), ns)
+                return "Plaque Toolkit %s (agreement.py)" % ns["__version__"]
+            except Exception:                                 # noqa: BLE001
+                break
+    return "agreement.py v%s" % AGREEMENT_VERSION
+
+
 def _mean(a):
     return sum(a) / len(a)
 
@@ -328,6 +356,17 @@ def icc_grade(icc):
             else "good" if icc < 0.90 else "excellent")
 
 
+def icc_grade_interval(lo, hi):
+    """Koo & Li (2016) grade of the 95% CI of ICC(A,1), as Koo & Li advise (CT-R2 N8: the point
+    estimate was graded, "0.949 (95% CI 0.709-0.986) (excellent agreement)" at n = 15): one word
+    when both limits fall in one band, "moderate to excellent" when they span bands, "" when
+    there is no interval."""
+    if not (_finite(lo) and _finite(hi)):
+        return ""
+    a, b = icc_grade(lo), icc_grade(hi)
+    return a if a == b else "%s to %s" % (a, b)
+
+
 # --- Honest wording bands (PT-4) ------------------------------------------- #
 # The adjectives in the "paste-ready" sentence are derived from the statistics they describe
 # (a committed artefact once read "closely agreed ... ICC(A,1) = -0.012 (poor agreement)").
@@ -378,6 +417,7 @@ def icc_interval_note(s, unit="mm"):
 
 
 SMALL_N = 10               # below this the sentence says the estimates rest on few pairs
+VERDICT_MIN_N = 5          # below this no verdict at all: numbers only (CT-R2 N8)
 
 
 def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
@@ -393,32 +433,43 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
     phrase = agreement_phrase(icc)
     what = str(what).strip() or "measurements"
     lead = what[:1].upper() + what[1:]
-    if n < SMALL_N:
-        phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
-                       .replace("agreed", "appeared to agree")
-        lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
-    out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
+    verdict = n >= VERDICT_MIN_N
+    if not verdict:
+        # CT-R2 N8: "cannot be used interchangeably" was printed from 3 pairs
+        out = ("With only %d pairs (too few pairs for a verdict), %s measured with %s were compared "
+               "with %s (n = %d)" % (n, what, label_tool, label_manual, n))
+    else:
+        if n < SMALL_N:
+            phrase = phrase.replace("did NOT agree", "did NOT appear to agree") \
+                           .replace("agreed", "appeared to agree")
+            lead = "With only %d pairs (too few for precise estimates), %s" % (n, what)
+        out = "%s measured with %s %s %s (n = %d)" % (lead, label_tool, phrase, label_manual, n)
     # correlation
     if _finite(r):
         p = s.get("pearson_p")
         corr = "Pearson r = %.3f, R² = %.3f" % (r, s.get("r2", r * r))
         if "pearson_p" in s:
             corr += ", " + _pstr(p)
-        out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
+        if verdict:
+            out += ": %s (%s)" % (correlation_phrase(r, p if p is not None else nan), corr)
+        else:
+            out += ": %s" % corr
     else:
         out += ": Pearson r could not be computed"
-    # ICC (+ CI) and CCC
+    # ICC (+ CI, graded on the CI) and CCC
     if _finite(icc):
-        if _finite(s.get("icc_lo")) and _finite(s.get("icc_hi")):
-            ci = " (95%% CI %.3f-%.3f)" % (s["icc_lo"], s["icc_hi"])
+        grade = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
+        if grade:
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (95%% CI %.3f-%.3f): "
+                    "%s agreement, graded on the interval (Koo & Li 2016)"
+                    % (icc, s["icc_lo"], s["icc_hi"], grade))
         elif "icc_lo" in s and n < ICC_CI_MIN_N:
-            ci = " (n too small for an interval)"
+            out += (", with an intraclass correlation coefficient ICC(A,1) = %.3f (n too small for an "
+                    "interval, so no agreement grade)" % icc)
         else:
-            ci = ""
-        out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f%s (%s agreement)" \
-               % (icc, ci, icc_grade(icc))
+            out += ", with an intraclass correlation coefficient ICC(A,1) = %.3f" % icc
         if _finite(s.get("ccc")):
-            out += " and Lin's concordance correlation CCC = %.3f" % s["ccc"]
+            out += ", and Lin's concordance correlation CCC = %.3f" % s["ccc"]
     out += "."
     # Bland-Altman bias
     bits = []
@@ -439,7 +490,9 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
     loa = "with 95%% limits of agreement of %+.3f to %+.3f %s" % (s["loa_lo"], s["loa_hi"], unit)
     extra = []
     if _finite(s.get("loa_ci_halfwidth")):
-        extra.append("each limit ±%.3f %s, 95%% CI" % (s["loa_ci_halfwidth"], unit))
+        # CT-R2 N11: the interval of each limit covers ~0.92 at n <= 5: approximate below 10 pairs
+        extra.append("each limit ±%.3f %s, %s95%% CI" % (s["loa_ci_halfwidth"], unit,
+                                                         "approximate " if n < SMALL_N else ""))
     if extra:
         loa += " (%s)" % "; ".join(extra)
     out += " " + loa
@@ -456,9 +509,11 @@ def report_sentence(s, unit="mm", what="diameters", label_tool="Plaque Toolkit",
                     "a proportional bias, so a single bias value does not describe the whole range."
                     % (bs, unit, unit, _pstr(bp)))
         else:
-            out += (" The difference did not depend on plaque size (Bland-Altman slope %+.3f, %s)."
-                    % (bs, _pstr(bp)))
-    if _finite(icc) and icc < 0.5:
+            # CT-R2 N8: a non-significant slope is no evidence of no bias, least of all at small n
+            out += (" No proportional bias was detected (Bland-Altman slope %+.3f, %s%s)."
+                    % (bs, _pstr(bp), "; with %d pairs there is little power to detect one" % n
+                       if n < SMALL_N else ""))
+    if verdict and _finite(icc) and icc < 0.5:
         out += (" These two methods therefore cannot be used interchangeably for "
                 "individual %s; a similar group MEAN does not imply agreement, and any "
                 "per-plaque claim needs a method that does agree." % what)
@@ -830,20 +885,22 @@ def run(args):
                              "icc", "icc_lo", "icc_hi", "ccc", "slope", "intercept",
                              "ba_slope", "ba_slope_p", "loa_ci_halfwidth", "pred_lo", "pred_hi")}
     row["icc_grade"] = icc_grade(s["icc"])
+    row["icc_grade_ci"] = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))   # CT-R2 N8
     pd.DataFrame([row]).to_csv(os.path.join(out, "agreement_stats_%s.csv" % suf), index=False)
 
     # report + paste-ready sentence
     sent = report_sentence(s, unit, what, lt, lm)
     with open(os.path.join(out, "agreement_report_%s.md" % suf), "w", encoding="utf-8") as f:
-        f.write("# Method-comparison report - %s\n\n_Generated %s | agreement.py v%s_\n\n"
-                % (what, stamp, __version__))
+        f.write("# Method-comparison report - %s\n\n_Generated %s | %s_\n\n"
+                % (what, stamp, version_label()))
         f.write("**%s vs %s**  (bias = %s - %s)\n\n" % (lt, lm, lt, lm))
         f.write("| statistic | value |\n|---|---|\n")
         f.write("| n pairs | %d |\n" % s["n"])
         f.write("| Pearson r (p) | %.3f (%s) |\n" % (s["r"], _pfmt(s["pearson_p"])))
         f.write("| R^2 | %.3f |\n" % s["r2"])
-        f.write("| ICC(A,1) | %.3f (%s; %s) |\n"
-                % (s["icc"], _icc_ci_text(s), icc_grade(s["icc"])))
+        gci = icc_grade_interval(s.get("icc_lo"), s.get("icc_hi"))
+        f.write("| ICC(A,1) | %.3f (%s%s) |\n"
+                % (s["icc"], _icc_ci_text(s), ("; %s, graded on the interval" % gci) if gci else ""))
         f.write("| Lin's CCC | %.3f |\n" % s["ccc"])
         f.write("| mean bias (%s) | %+.3f (%.1f%%) |\n" % (unit, s["bias"], s["pct_bias"]))
         f.write("| bias vs 0 (paired t) | t = %.2f, %s |\n" % (s["t_stat"], _pstr(s["t_p"])))
@@ -852,8 +909,8 @@ def run(args):
         if _finite(s.get("pred_lo")):
             f.write("| 95%% prediction interval, one new difference (n < %d) | %+.3f to %+.3f %s "
                     "(bias ± t·SD·√(1+1/n)) |\n" % (PRED_N, s["pred_lo"], s["pred_hi"], unit))
-        f.write("| 95%% CI of each limit | ±%.3f %s (Bland & Altman 1999) |\n"
-                % (s["loa_ci_halfwidth"], unit))
+        f.write("| %s95%% CI of each limit | ±%.3f %s (Bland & Altman 1999) |\n"
+                % ("approximate " if s["n"] < SMALL_N else "", s["loa_ci_halfwidth"], unit))
         f.write("| proportional bias (difference ~ mean) | slope %+.4f, %s |\n"
                 % (s["ba_slope"], _pstr(s["ba_slope_p"])))
         f.write("| RMSE / MAE (%s) | %.3f / %.3f |\n" % (unit, s["rmse"], s["mae"]))
@@ -867,7 +924,8 @@ def run(args):
                 "- **Pearson r / R^2** measure *association*, not agreement - two methods can correlate "
                 "perfectly yet disagree systematically, so never report r alone.\n"
                 "- **ICC(A,1)** (Koo & Li 2016) is the agreement statistic (it penalises bias): "
-                "<0.5 poor, 0.5-0.75 moderate, 0.75-0.90 good, >0.90 excellent.\n"
+                "<0.5 poor, 0.5-0.75 moderate, 0.75-0.90 good, >0.90 excellent, graded on its 95% CI "
+                "(one word when both limits fall in one band).\n"
                 "- **Lin's CCC** captures accuracy *and* precision together (a common method-validation metric).\n"
                 "- **Bias** = the systematic offset (tool minus reference); state it, don't hide it. The "
                 "paired t-test says whether it differs from zero.\n"
@@ -881,7 +939,7 @@ def run(args):
              s["bias"], unit, s["pct_bias"], s["loa_lo"], s["loa_hi"], out))
 
     json.dump({"data": args["data"], "tool_col": tcol, "manual_col": mcol, "unit": unit,
-               "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": __version__,
+               "what": what, "converted_area_to_diameter": convert, "stamp": stamp, "version": version_label(),
                "numpy": np.__version__, "pandas": pd.__version__, "stats": row},
               open(os.path.join(out, "run_config_%s.json" % suf), "w"), indent=2, default=float)
     return s

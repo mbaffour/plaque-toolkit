@@ -199,14 +199,85 @@ def read_bgr(path):
 # --------------------------------------------------------------------------- #
 #  Detection (reuse the validated plaque_size_tool pipeline)
 # --------------------------------------------------------------------------- #
-def detect_plate(path, plate_size, small, transfer=None):
+PLAQUE_SIZES = ("auto", "standard", "small")
+
+
+def detect_plate_scaled(path, plate_size, scale, transfer=None):
+    """detect_plate with the desktop app's plaque-size detection (CT-R2 N1): the plaques, the
+    dish and the mm scale come from plaque_gui.run_detection -- the SAME call the Measure and
+    Batch tabs make for engine Current with this Plaque size ("auto" = both scales,
+    "standard", "small"), numbered in their reading order (#1 = topmost) -- so the plaque list
+    of an image is the one Measure and Batch show. Each plaque also carries its QC flag
+    (plaque_gui.qc_flags, the Measure table's own), and ``size_ok`` (plaque_qc.size_ok): a
+    CORE? / NO_SIZE plaque counts (and enters the titer) but not the size or turbidity
+    summaries. OPT-IN only: the default detect_plate path is unchanged."""
+    import plaque_gui as pgui
+    import plaque_qc
+    if scale not in PLAQUE_SIZES:
+        raise ValueError("plaque size must be one of %s (got %r)" % (", ".join(PLAQUE_SIZES), scale))
+    pst.debug_mode = False
+    pst.sensitive = False
+    raw, read_info = read_bgr_raw(path)
+    read_info["transfer"] = choose_transfer(raw, transfer)
+    read_info["transfer_source"] = "explicit" if (transfer and transfer != "auto") else "auto"
+    info = {}
+    prev = pst.small_plaques
+    try:
+        (_rgb, orig, _proc, found, ppm, _cand, _lawn,
+         plate) = pgui.run_detection(path, str(plate_size) if plate_size else None,
+                                     scale == "small", False, scale=scale, info=info)
+    finally:
+        pst.small_plaques = prev
+    if orig.shape[:2] != raw.shape[:2]:
+        raise ValueError("the image could not be read the same way twice: %s" % path)
+    found = sorted(found, key=lambda p: (p["center"][1], p["center"][0]))   # Measure's order
+    shape = orig.shape[:2]
+    flags = pgui.qc_flags(found, orig, ppm, plate)
+    plaques, plaque_masks = [], []
+    for p, (flag, _why) in zip(found, flags):
+        m = pgui._plaque_mask(shape, p)
+        plaque_masks.append(m)
+        hull = (np.asarray(p["contour"], dtype=np.int32).reshape(-1, 2) if p["kind"] != "circle"
+                else cv2.ellipse2Poly((int(round(p["center"][0])), int(round(p["center"][1]))),
+                                      (int(round(p["radius"])),) * 2, 0, 0, 360, 5))
+        plaques.append({"hull": hull, "area_pxl": float(p["area_pxl"]),
+                        "diameter_mm": round(pgui.measure(p["area_pxl"], ppm, False)[2], 2),
+                        "qc_flag": flag, "size_ok": plaque_qc.size_ok(flag)})
+    dish_center = dish_r = dish_mask = None
+    if plate is not None:
+        dish_center = tuple(float(c) for c in plate["center"])
+        dish_r = float(plate["diam_px"]) / 2.0
+        dish_mask = pst._mask_from_contour(shape, np.asarray(plate["hull"], dtype=np.int32))
+    lawn_mask = None
+    if dish_mask is not None:
+        er = max(int(round(dish_r * 0.06)), 3)
+        lawn_mask = cv2.erode(dish_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (er, er)))
+        if plaque_masks:
+            union = np.zeros(shape, dtype="uint8")
+            for m in plaque_masks:
+                union = cv2.bitwise_or(union, m)
+            union = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+            lawn_mask[union > 0] = 0
+    read_info["plaque_size"] = scale
+    return {"orig": orig, "raw": raw, "read_info": read_info,
+            "shape": shape, "plaques": plaques, "plaque_masks": plaque_masks,
+            "dish_center": dish_center, "dish_r": dish_r, "dish_mask": dish_mask,
+            "lawn_mask": lawn_mask, "scale": scale}
+
+
+def detect_plate(path, plate_size, small, transfer=None, scale=None):
     """Return dict with plaque hulls, dish geometry, dish & lawn masks.
 
     `orig` is the 8-bit image used for DETECTION, overlays and MEAN_GRAY (the
     validated pipeline is 8-bit and stays 8-bit). `raw` is the same image at its
     NATIVE bit depth and is what the photometric OD path linearises, so a 16-bit
     TIFF is no longer silently truncated (PT-2). `read_info` records the choice.
+
+    ``scale`` (opt-in, CT-R2 N1): "auto" / "standard" / "small" runs the desktop app's
+    plaque-size detection instead (detect_plate_scaled). None = this tool's own pass, as ever.
     """
+    if scale is not None:
+        return detect_plate_scaled(path, plate_size, scale, transfer=transfer)
     pst.small_plaques = bool(small)
     pst.debug_mode = False
     # This tool has no sensitive mode. plaque_gui.run_detection sets pst.sensitive as a
@@ -500,6 +571,8 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
             "TURBIDITY": ("" if turb is None or (isinstance(turb, float) and turb != turb) else turb),
             "CLARITY": clarity,
         })
+        if "qc_flag" in p:                 # the app's plaque-size detection only (CT-R2 N1)
+            rows[-1]["QC_FLAG"] = p["qc_flag"]
 
     illum_cv = ""
     if i0_map is not None and det["dish_mask"] is not None:
@@ -544,6 +617,11 @@ def measure_plate(det, phage, plate, flat, blank_lin, blank_geo, dark=None, core
         "FLAT_APPLIED": flat is not None,
         "DARK_APPLIED": dark is not None,
     }
+    if det.get("scale"):
+        # CT-R2 N1: plaques whose size (and so turbidity) enters the summaries; every plaque
+        # still counts in N_PLAQUES and the titer
+        qc["PLAQUE_SIZE"] = det["scale"]
+        qc["N_SIZED"] = int(sum(1 for p in det["plaques"] if p.get("size_ok", True)))
     return rows, qc
 
 
@@ -588,6 +666,14 @@ PLAQUE_COLUMNS = ["PHAGE", "PLATE", "PLATE_INDEX", "AREA_PXL", "DIAMETER_MM", "M
 PER_PHAGE_COLUMNS = ["PHAGE", "N_PLATES", "N_PLAQUES"]
 
 
+def sized_rows(df):
+    """The rows whose size and turbidity enter a summary or a plot: all of them, unless the
+    frame carries the app's QC_FLAG column (detect_plate_scaled), then plaque_qc.size_ok's."""
+    import plaque_qc
+    ok = plaque_qc.sized_rows(df) if df is not None else None   # any spelling of QC_FLAG
+    return df if ok is None else df[ok]
+
+
 def summarise(df):
     """Per-phage summary. Reports BOTH plaque-level pooled stats and plate-level
     stats (mean of per-plate means). For cross-phage stats use the plate-level
@@ -597,10 +683,15 @@ def summarise(df):
         return pd.DataFrame(columns=PER_PHAGE_COLUMNS)   # header-only, like PT-3
     metrics = [c for c in ("TRANSMITTANCE", "OD", "TURBIDITY") if c in df.columns]
     rows = []
-    for phage, g in df.groupby("PHAGE"):
+    for phage, g_all in df.groupby("PHAGE"):
+        # CT-R2 N1: with the app's plaque-size detection (a QC_FLAG column) every plaque counts
+        # but only size_ok ones enter the turbidity summary; without it nothing changes
+        g = sized_rows(g_all)
         rec = {"PHAGE": phage,
-               "N_PLATES": g["PLATE"].nunique() if "PLATE" in g else 1,
-               "N_PLAQUES": len(g)}
+               "N_PLATES": g_all["PLATE"].nunique() if "PLATE" in g_all else 1,
+               "N_PLAQUES": len(g_all)}
+        if g is not g_all:                  # a QC flag column (any spelling) was found
+            rec["N_SIZED"] = len(g)
         for col in metrics:
             vals = pd.to_numeric(g[col], errors="coerce").dropna()
             if "PLATE" in g:
@@ -625,25 +716,132 @@ def phage_label(stem, group_by_prefix):
     return stem
 
 
-def annotate_plate(det, rows, out_dir, plate):
-    """Save a QC overlay: dish outline + plaque hulls coloured green(clear)->red(turbid)."""
-    img = det["orig"].copy()
-    if det["dish_center"] is not None:
-        cv2.circle(img, (int(round(det["dish_center"][0])), int(round(det["dish_center"][1]))),
-                   int(round(det["dish_r"])), (0, 200, 255), 3)
-    for p, r in zip(det["plaques"], rows):
-        hull = np.asarray(p["hull"], dtype=np.int32)
-        val = r.get("TURBIDITY")
-        if isinstance(val, (int, float)):
-            v = min(max(float(val), 0.0), 1.0)
-            col = (0, int(255 * (1 - v)), int(255 * v))    # BGR: green=clear, red=turbid
-        else:
-            col = (0, 200, 0)
-        cv2.drawContours(img, [hull], -1, col, 2)
-        (cx, cy), _ = cv2.minEnclosingCircle(hull)
-        cv2.putText(img, str(r["PLATE_INDEX"]), (int(cx), int(cy)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    pst.imwrite_checked(os.path.join(out_dir, f"overlay_{plate}.png"), img)
+# The QC overlay's outline classes (CT-R2 N8, the standing figure rule): DISCRETE classes, so
+# the legend key can show every colour exactly as drawn (the old green-to-red ramp could not be
+# keyed). class -> (plain name, RGB as drawn, line style). The bins are the CLARITY column's.
+OVERLAY_DISH = ("dish rim", (255, 200, 0), "solid")
+OVERLAY_CLASSES = {
+    "clear": ("clear plaque (turbidity below 0.33)", (40, 220, 70), "solid"),
+    "intermediate": ("intermediate plaque (turbidity 0.33 to 0.66)", (255, 140, 0), "solid"),
+    "turbid": ("turbid plaque (turbidity above 0.66)", (230, 30, 30), "solid"),
+    "unmeasured": ("plaque (no turbidity: needs a blank-agar image)", (30, 144, 255), "solid"),
+    # CT-R2 N1: a plaque that counts but whose outline is not this plate's edge (CORE? /
+    # NO_SIZE, plaque_qc.size_ok): left out of the size AND turbidity summaries
+    "nosize": ("counted; size and turbidity not used", (0, 230, 230), "dotted"),
+}
+OVERLAY_ORDER = ("clear", "intermediate", "turbid", "unmeasured", "nosize")
+
+
+def overlay_class(row, size_ok=True):
+    """The overlay class of one plaques_all.csv row."""
+    if not size_ok:
+        return "nosize"
+    c = row.get("CLARITY")
+    return c if c in ("clear", "intermediate", "turbid") else "unmeasured"
+
+
+def overlay_record(det, rows, plate, path=None, size_ok=None):
+    """Everything needed to (re-)draw one plate's QC overlay without re-detecting: the plaque
+    outlines, their class, their label (the row's PLATE_INDEX: the overlay exists to find a
+    plaques_all.csv row on the plate) and the dish ring. The Compare tab keeps these so its
+    "Place key on figure" switch can re-draw the overlays it shows (CT-R2 N8)."""
+    oks = list(size_ok) if size_ok is not None else [True] * len(rows)
+    plaques, classes, labels = [], [], []
+    for p, r, ok in zip(det["plaques"], rows, oks):
+        hull = np.asarray(p["hull"], dtype=np.int32).reshape(-1, 2)
+        m = cv2.moments(hull.reshape(-1, 1, 2))
+        c = ((m["m10"] / m["m00"], m["m01"] / m["m00"]) if m["m00"]
+             else (float(hull[:, 0].mean()), float(hull[:, 1].mean())))
+        plaques.append({"kind": "contour", "contour": hull.reshape(-1, 1, 2),
+                        "area_pxl": float(p.get("area_pxl") or cv2.contourArea(hull)), "center": c})
+        classes.append(overlay_class(r, ok))
+        labels.append(str(r["PLATE_INDEX"]))
+    dish = None
+    if det.get("dish_center") is not None and det.get("dish_r"):
+        dish = (tuple(float(v) for v in det["dish_center"]), float(det["dish_r"]))
+    return {"plate": plate, "path": path, "plaques": plaques, "classes": classes,
+            "labels": labels, "dish": dish}
+
+
+def overlay_key(rec):
+    """The legend key of one QC overlay: the dish ring and every plaque class PRESENT, with
+    the colour and line style drawn (plaque_gui.outline_key: the plate figure's own builder)."""
+    import plaque_gui as pgui
+    spec = [OVERLAY_DISH] if rec.get("dish") else []
+    present = set(rec.get("classes") or [])
+    spec += [OVERLAY_CLASSES[k] for k in OVERLAY_ORDER if k in present]
+    return pgui.outline_key(spec, title="QC overlay")
+
+
+def render_overlay(orig, rec, out_dir, key_on_figure=True):
+    """Draw and write overlay_<plate>.png from a record (overlay_record) on the 8-bit image
+    `orig`, with the stand-alone key + legend text beside it. Outlines, labels (sized to the
+    image, in the figure font, placed off the outline) and the embedded key are drawn by the
+    plate figure's own functions (plaque_gui), so the key on the overlay is the stand-alone
+    key picture. Returns {"png", "key_files", "legend_text"}."""
+    import plaque_gui as pgui
+    img = orig.copy()
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    m = pgui.figure_metrics(img.shape)
+    if rec.get("dish"):
+        (dcx, dcy), dr = rec["dish"]
+        rgb = OVERLAY_DISH[1]
+        cv2.circle(img, (int(round(dcx)), int(round(dcy))), int(round(dr)),
+                   (rgb[2], rgb[1], rgb[0]), int(m["line"]) + 1, cv2.LINE_AA)
+    for p, cls in zip(rec["plaques"], rec["classes"]):
+        _n, rgb, style = OVERLAY_CLASSES[cls]
+        pgui.draw_outline(img, p, rgb, style, m["line"])
+    try:
+        key = overlay_key(rec)
+    except Exception as e:                       # noqa: BLE001 -- a key never stops the overlay
+        print("  (legend key skipped for %s: %s)" % (rec.get("plate"), e))
+        key = None
+    patch, avoid = None, []
+    if key_on_figure and key:
+        patch = pgui.key_image_for(img.shape, key)
+        if patch is not None:
+            kx, ky = pgui.key_origin(img.shape, patch.shape)
+            avoid.append((kx, ky, kx + patch.shape[1], ky + patch.shape[0]))
+    if rec["plaques"]:
+        sizes = [pgui.text_size(s, m["font_px"], m["stroke"]) for s in rec["labels"]]
+        placed = pgui.layout_labels(rec["plaques"], sizes, img.shape, m["gap"], avoid=avoid)
+        pgui._draw_texts(img, [(s, r[0], r[1], m["font_px"], (255, 255, 255), m["stroke"])
+                               for s, (_side, r) in zip(rec["labels"], placed)])
+    if patch is not None:
+        pgui._paste_key(img, patch)
+    path = os.path.join(out_dir, "overlay_%s.png" % rec["plate"])
+    pst.imwrite_checked(path, img)
+    try:
+        key_files = pgui.write_key_files_for(key, path) if key else []
+    except Exception as e:                       # noqa: BLE001
+        print("  (legend key files skipped for %s: %s)" % (rec.get("plate"), e))
+        key_files = []
+    lk = _legend_key_module()
+    return {"png": path, "key_files": key_files,
+            "legend_text": lk.text_starter(key) if (lk is not None and key) else ""}
+
+
+def annotate_plate(det, rows, out_dir, plate, key_on_figure=True, size_ok=None, path=None):
+    """Save a QC overlay: dish ring + plaque outlines in their clarity class, numbered by
+    PLATE_INDEX, with its legend key (CT-R2 N8). Returns the overlay record."""
+    rec = overlay_record(det, rows, plate, path=path, size_ok=size_ok)
+    rec.update(render_overlay(det["orig"], rec, out_dir, key_on_figure=key_on_figure))
+    return rec
+
+
+def redraw_overlays(records, out_dir, key_on_figure=True):
+    """Re-draw the QC overlays of a run from their records (the image is read again; nothing
+    is re-detected) with / without the key on the figure. Returns the updated records."""
+    out = []
+    for rec in records or []:
+        r = dict(rec)
+        try:
+            r.update(render_overlay(read_bgr(rec["path"]), rec, out_dir, key_on_figure=key_on_figure))
+        except Exception as e:                       # noqa: BLE001 -- one overlay never stops the rest
+            print("  (overlay failed for %s: %s)" % (rec.get("plate"), e))
+        out.append(r)
+    return out
 
 
 def write_metadata(out_dir, args_dict, images, qc_rows, errors, labels=None):
@@ -832,6 +1030,9 @@ def write_plots(df, out_dir, legend_key=True, key_on_figure=True, formats=FIGURE
     written = []
     if df is None or df.empty or "PHAGE" not in df.columns:
         return written
+    df = sized_rows(df)                     # CT-R2 N1: CORE? / NO_SIZE stay out of the plots
+    if df.empty:
+        return written
     try:
         # Use bare Figure objects (NOT pyplot / matplotlib.use) so this is thread-safe and
         # never switches the global backend -- important when called from inside a Qt app.
@@ -915,8 +1116,10 @@ def write_plots(df, out_dir, legend_key=True, key_on_figure=True, formats=FIGURE
             # ONE set of bin edges from every phage's values: with per-phage bins=20 a narrow
             # distribution got narrow bins and looked taller than a wide one (CT-R1 F21).
             edges = np.histogram_bin_edges(np.concatenate([groups[p] for p in phages]), bins=20)
-            for p in phages:
-                ax.hist(groups[p], bins=edges, alpha=_HIST_ALPHA, label=str(p), color=pcol[p])
+            # CT-R2 N14: the phages' bars stand SIDE BY SIDE within each bin. Overlaid
+            # translucent bars mixed into a third colour (brown) that no key entry explained.
+            ax.hist([groups[p] for p in phages], bins=edges, alpha=_HIST_ALPHA,
+                    label=[str(p) for p in phages], color=[pcol[p] for p in phages])
             ax.set_xlabel(metric_label(metric, df))
             ax.set_ylabel("Number of plaques")
             ax.set_title(title)
@@ -971,8 +1174,18 @@ def poisson_ci95(n, alpha=0.05):
 
 def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
               group_by_prefix=False, dark_path=None, core_frac=1.0, make_overlays=True,
-              dilution=None, volume_ul=None, make_plots=True, transfer="auto"):
-    images = list_images(directory)
+              dilution=None, volume_ul=None, make_plots=True, transfer="auto",
+              key_on_figure=True, overlay_records=None, scale=None, images=None):
+    """Turbidity of every plate in `directory`. ``key_on_figure`` draws the legend key on each
+    QC overlay (its stand-alone key and legend text are written beside it either way); ``overlay_records``, a list, receives one
+    record per overlay drawn (overlay_record) so a caller can re-draw them (CT-R2 N8).
+    ``scale`` (opt-in, CT-R2 N1; the CLI's --multiscale = "auto"): detect with the desktop
+    app's Plaque size ("auto" / "standard" / "small"), so the plaques of an image are the ones
+    the Measure and Batch tabs find with engine Current; plaques_all.csv then gains QC_FLAG,
+    qc.csv PLAQUE_SIZE and N_SIZED, per_phage.csv N_SIZED. None = this tool's own detection.
+    ``images`` (CT-R2 N11): the exact list to analyse (the app passes the Batch tab's
+    non-recursive list); None = list_images(directory), recursive, as the CLI always did."""
+    images = list(images) if images is not None else list_images(directory)
     if not images:
         raise SystemExit(f"No images found in {directory}")
     if dilution is not None and float(dilution) < 1:
@@ -1017,7 +1230,7 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
         plate = labels[path]
         phage = phage_label(plate, group_by_prefix)
         try:
-            det = detect_plate(path, plate_size, small, transfer=transfer)
+            det = detect_plate(path, plate_size, small, transfer=transfer, scale=scale)
             rows, qc = measure_plate(det, phage, plate, flat, blank_lin, blank_geo,
                                      dark=dark, core_frac=core_frac)
         except Exception as e:
@@ -1042,7 +1255,11 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
         qc_rows.append(qc)
         if make_overlays:
             try:
-                annotate_plate(det, rows, out_dir, plate)
+                rec = annotate_plate(det, rows, out_dir, plate, key_on_figure=key_on_figure,
+                                     path=path, size_ok=[p.get("size_ok", True)
+                                                         for p in det["plaques"]])
+                if overlay_records is not None:
+                    overlay_records.append(rec)
             except Exception as e:
                 print(f"  (overlay failed for {plate}: {e})")
         mode = "OD" if qc["ABSOLUTE_OD"] else "lawn-relative"
@@ -1054,7 +1271,7 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
 
     # Fixed column lists so a run with zero plaques still writes a header (a 1-byte file
     # made pandas raise EmptyDataError in the app's Compare tab; AUDIT-2026-10.md).
-    df = pd.DataFrame(all_rows, columns=PLAQUE_COLUMNS)
+    df = pd.DataFrame(all_rows, columns=PLAQUE_COLUMNS + (["QC_FLAG"] if scale else []))
     df.to_csv(os.path.join(out_dir, "plaques_all.csv"), index=False)
     summarise(df).to_csv(os.path.join(out_dir, "per_phage.csv"), index=False)
     pd.DataFrame(qc_rows).to_csv(os.path.join(out_dir, "qc.csv"), index=False)
@@ -1068,7 +1285,8 @@ def run_batch(directory, plate_size, small, blank_path, flat_path, out_dir,
                              "flat": flat_path, "dark": dark_path, "core_frac": core_frac,
                              "group_by_prefix": group_by_prefix, "dilution": dilution,
                              "volume_ul": volume_ul, "published": pst.use_published,
-                             "watershed": pst.watershed_enabled, "transfer": transfer},
+                             "watershed": pst.watershed_enabled, "transfer": transfer,
+                             **({"plaque_size": scale} if scale else {})},
                    images, qc_rows, errors, labels=labels)
 
     # consolidated QC summary so problems can't be missed
@@ -1150,6 +1368,13 @@ def parse_args():
                     help="use exact published Plaque Size Tool detection/sizing behaviour")
     ap.add_argument("--watershed", action="store_true",
                     help="split touching/merged plaques via watershed before measuring OD")
+    ap.add_argument("--multiscale", action="store_true",
+                    help="detect plaques as the desktop app's Auto plaque size does (both "
+                         "scales, halo edges; = plaque_size_tool.py --multiscale), so the plaque "
+                         "list equals the app's Measure / Batch tabs (engine Current). Adds "
+                         "QC_FLAG; plaques outlined at the dark centre only or too overlapped "
+                         "to size count, but stay out of the size and turbidity summaries. "
+                         "Ignored with --published")
     return ap.parse_args()
 
 
@@ -1161,7 +1386,8 @@ def main():
               group_by_prefix=a.group_by_prefix, dark_path=a.dark,
               core_frac=a.core, make_overlays=not a.no_overlay,
               dilution=a.dilution, volume_ul=a.volume_ul, make_plots=not a.no_plots,
-              transfer=a.transfer)
+              transfer=a.transfer,
+              scale=("auto" if (a.multiscale and not a.published) else None))
 
 
 if __name__ == "__main__":

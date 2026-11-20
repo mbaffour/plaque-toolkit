@@ -15,6 +15,11 @@ import plaque_gui as pgui
 
 _LOCK = threading.Lock()
 
+# The default "Plaque size" of the Current / Sensitive engines, in ONE place (an open owner
+# decision, CT-R2 coordinator note A): the Measure, Batch and Compare tabs' Plaque size box,
+# app/batch_measure.py and app/validate.py all read it. One of plaque_gui.SCALES.
+DEFAULT_PLAQUE_SIZE = "auto"
+
 
 def numpy_version():
     return np.__version__
@@ -71,13 +76,7 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
          ppm, candidates, lawn_gray, plate) = pgui.run_detection(
              path, plate_size, scale == "small", bool(sensitive),
              scale=(None if legacy else scale), info=info)
-    # CT-R1 detection D4: plain warnings about the dish / image size, for every engine
-    # (informational only: no number changes)
-    try:
-        import plaque_qc
-        info["dish_warnings"] = plaque_qc.dish_plausibility(plate, orig_bgr.shape)
-    except Exception:                         # a warning must never break a detection
-        pass
+    embedded = False
     if not ppm:
         # No dish to calibrate from (e.g. an already-cropped plate). If the image carries
         # an embedded ImageJ/Fiji mm scale — like our own "Cropped plate for Fiji" export —
@@ -85,7 +84,21 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         import plate_crop
         emb = plate_crop.read_mm_per_px(path)
         if emb:
-            ppm = emb
+            ppm, embedded = emb, True
+    # CT-R1 detection D4: plain warnings about the dish / image size, for every engine
+    # (informational only: no number changes). CT-R2: built AFTER the embedded-scale fallback,
+    # so a cropped image that carries its own scale is not told "pixels only".
+    try:
+        import plaque_qc
+        dw = plaque_qc.dish_plausibility(plate, orig_bgr.shape)
+        if embedded:
+            dw = [EMBEDDED_SCALE_NOTE if w == plaque_qc.NO_DISH_WARNING else w for w in dw]
+        info["dish_warnings"] = dw
+    except Exception:                         # a warning must never break a detection
+        pass
+    # CT-R2: the plate's size warnings (large plaques outlined at the core, few sized, many
+    # tiny), from the ONE call every tab uses
+    info["plate_warnings"] = plate_warnings(plaques, ppm, orig_bgr=orig_bgr, plate=plate)
     return {
         "display_rgb": display_rgb,
         # which engine produced this -- carried with the result so sizing/provenance
@@ -98,6 +111,7 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         "n_outside_dish": int(info.get("n_outside_dish") or 0),
         "n_small_added": int(info.get("n_small_added") or 0),
         "dish_warnings": list(info.get("dish_warnings") or []),
+        "plate_warnings": list(info.get("plate_warnings") or []),
         # Auto only (CT-R1 detection D8): plaques by edge source and how clusters were resolved
         "sources": info.get("sources"),
         "halo_resolution": info.get("halo_resolution"),
@@ -111,6 +125,30 @@ def detect_single(path, plate_mm=None, small=False, watershed=False, published=F
         "plate": plate,
         "n_plaques": len(plaques),
     }
+
+
+EMBEDDED_SCALE_NOTE = "No dish found: the scale embedded in the image file is used."
+
+
+def plate_warnings(plaques=None, mm_per_px=None, flags=None, orig_bgr=None, plate=None,
+                   diams_px=None):
+    """The plate's size warnings (plaque_qc.plate_warnings) -- the ONE place the app calls it,
+    for the Measure flag line, the Batch Notes column and run_metadata.json, and the Compare
+    QC note (CT-R2). Give the plaque dicts (their area-equivalent diameters are used; their QC
+    flags are computed with plaque_gui.qc_flags when ``flags`` is None and the image is given)
+    or ``diams_px`` directly. Never raises."""
+    import math
+    try:
+        import plaque_qc
+        if diams_px is None:
+            diams_px = [2.0 * math.sqrt(max(float(p["area_pxl"]), 0.0) / math.pi)
+                        for p in (plaques or [])]
+            if flags is None and orig_bgr is not None and plaques:
+                flags = [f for f, _w in pgui.qc_flags(plaques, orig_bgr, mm_per_px, plate=plate)]
+        return list(plaque_qc.plate_warnings(list(diams_px), mm_per_px,
+                                             list(flags) if flags is not None else None))
+    except Exception:                         # a warning must never break a detection
+        return []
 
 
 def _eff_radius(p):
@@ -162,13 +200,9 @@ def measure_table(plaques, orig_bgr, ppm, lawn_gray, published=None, plate=None,
     turb = pst.turbidity_indices(means, lg)
     over = overlap_flags(plaques)
     circs = [_circularity(p) for p in plaques]
-    try:
-        import plaque_qc
-        # CT-R1 detection D5: the grey image (BRIGHT) and the scale (TINY in mm) go in too
-        qc = plaque_qc.flags_for_plaque_dicts(plaques, orig_bgr.shape[:2], plate=plate, circularities=circs,
-                                              gray=gray, mm_per_px=ppm)
-    except Exception:                        # never let QC break the table
-        qc = [("", "")] * len(plaques)
+    # CT-R1 detection D5 / CT-R2 N2: the one shared flag call (Save results and the Compare
+    # tab flag with it too)
+    qc = pgui.qc_flags(plaques, orig_bgr, ppm, plate=plate, circularities=circs)
     rows = []
     for i, (p, mg, tb, ov) in enumerate(zip(plaques, means, turb, over), start=1):
         dia_pxl, area_mm2, dia_mm = pgui.measure(p["area_pxl"], ppm, published)
@@ -491,21 +525,27 @@ def reading_order(plaques):
 
 
 def compare_images(directory):
-    """The images a Compare run would analyse in `directory` -- the turbidity engine's own
-    list (recursive, skipping the toolkit's output folders), so the tab's "no images" check
-    can never disagree with the engine (CT-R1 F2)."""
-    import plaque_turbidity as ptb
-    return ptb.list_images(directory)
+    """The images a Compare run analyses in `directory`: the images directly in it, by the
+    SAME rule as the Batch tab (batch_measure.find_images: sub-folders are not searched,
+    CT-R2 N11), and the list the run itself is given, so the tab's "no images" check can
+    never disagree with the engine (CT-R1 F2)."""
+    from app import batch_measure
+    return batch_measure.find_images(directory)
 
 
 def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, dark=None,
                 core=1.0, group_by_prefix=False, dilution=None, volume_ul=None,
-                watershed=False, published=False, out_dir="out_turbidity", key_on_figure=True):
+                watershed=False, published=False, out_dir="out_turbidity", key_on_figure=True,
+                scale=None):
     """Batch cross-phage turbidity. Writes per_phage.csv/qc.csv/figures into out_dir and
     returns the plaque-level DataFrame, out_dir and `figures`: the records of the figures
     THIS run wrote (plaque_turbidity.write_plots), which is exactly what the tab shows --
-    never a glob of the folder, which also matched an earlier run's files (CT-R1 F4)."""
+    never a glob of the folder, which also matched an earlier run's files (CT-R1 F4).
+
+    ``scale`` = the tab's Plaque size ("auto" / "standard" / "small", CT-R2 N1): the plaques
+    are detected exactly as the Measure and Batch tabs detect them with engine Current."""
     import plaque_turbidity as ptb
+    overlays = []
     with _LOCK:
         pst.use_published = bool(published)
         pst.watershed_enabled = bool(watershed) and not bool(published)
@@ -516,19 +556,66 @@ def run_compare(directory, plate_mm=None, small=False, blank=None, flat=None, da
             blank or None, flat or None, out_dir,
             group_by_prefix=bool(group_by_prefix), dark_path=dark or None,
             core_frac=float(core), make_overlays=True,
-            dilution=dilution, volume_ul=volume_ul, make_plots=False)
+            dilution=dilution, volume_ul=volume_ul, make_plots=False,
+            key_on_figure=bool(key_on_figure), overlay_records=overlays,
+            images=compare_images(directory),
+            scale=(pgui.resolve_scale(scale, small) if (scale and not published) else None))
+    warnings = compare_plate_warnings(df)
+    if warnings:
+        _add_to_metadata(out_dir, {"plate_warnings": warnings})
     # Plotting runs here, on the caller's (worker) thread, AFTER the engine lock is released.
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
-    return {"df": df, "out_dir": out_dir, "figures": figures}
+    return {"df": df, "out_dir": out_dir, "figures": figures, "overlays": overlays,
+            "plate_warnings": warnings}
 
 
-def render_compare_figures(df, out_dir, key_on_figure=True):
+def compare_plate_warnings(df):
+    """{plate: [warning]} for a Compare run's plaque table (plate_warnings, the one call; the
+    diameters in px from AREA_PXL, the scale from DIAMETER_MM, the QC flags when present)."""
+    import math
+    import plaque_qc
+    out = {}
+    if df is None or not len(df) or "PLATE" not in df.columns:
+        return out
+    fcol = plaque_qc.flag_column(df)
+    for plate, g in df.groupby("PLATE", sort=False):
+        dpx = [2.0 * math.sqrt(max(float(a), 0.0) / math.pi) for a in g["AREA_PXL"]]
+        mm = None
+        try:
+            ratios = [float(d) / p for d, p in zip(g["DIAMETER_MM"], dpx) if p > 0 and float(d) > 0]
+            mm = (sum(ratios) / len(ratios)) if ratios else None
+        except (TypeError, ValueError):
+            mm = None
+        w = plate_warnings(diams_px=dpx, mm_per_px=mm,
+                           flags=(g[fcol].tolist() if fcol is not None else None))
+        if w:
+            out[str(plate)] = w
+    return out
+
+
+def _add_to_metadata(out_dir, extra):
+    """Merge `extra` into out_dir/run_metadata.json (best effort)."""
+    import json
+    path = os.path.join(out_dir, "run_metadata.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        meta.update(extra)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, indent=2)
+    except (OSError, ValueError):
+        pass
+
+
+def render_compare_figures(df, out_dir, key_on_figure=True, overlays=None):
     """Re-draw the Compare figures of the run whose plaque table is `df`, with or without
-    the legend key on the figure (the tab's "Place key on figure" switch). Same code as the
-    run itself, so the result has the same shape as run_compare's."""
+    the legend key on the figure (the tab's "Place key on figure" switch), AND the run's QC
+    overlays from their records (CT-R2 N8: the switch left the overlays' key stale). Same
+    code as the run itself, so the result has the same shape as run_compare's."""
     import plaque_turbidity as ptb
     figures = ptb.write_plots(df, out_dir, key_on_figure=bool(key_on_figure))
-    return {"df": df, "out_dir": out_dir, "figures": figures}
+    overlays = ptb.redraw_overlays(overlays, out_dir, key_on_figure=bool(key_on_figure))
+    return {"df": df, "out_dir": out_dir, "figures": figures, "overlays": overlays}
 
 
 def save_compare_keys(figures, dest_dir):

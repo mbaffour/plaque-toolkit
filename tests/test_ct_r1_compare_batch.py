@@ -137,13 +137,14 @@ def test_histograms_of_one_figure_share_one_set_of_bin_edges(tmp_path, monkeypat
     real = Axes.hist
 
     def spy(self, x, bins=None, **kw):
-        seen.append((np.asarray(x), np.asarray(bins)))
+        seen.append((x, np.asarray(bins)))
         return real(self, x, bins=bins, **kw)
 
     monkeypatch.setattr(Axes, "hist", spy)
     df = _plot_df()[["PHAGE", "PLATE", "DIAMETER_MM"]]
     ptb.write_plots(df, str(tmp_path), formats=("png",))
-    assert len(seen) == 3                                    # one call per phage
+    # CT-R2 N14: ONE call with every phage, so the bars stand side by side (no colour mixing)
+    assert len(seen) == 1 and len(seen[0][0]) == 3
     edges = seen[0][1]
     assert edges.ndim == 1 and len(edges) == 21
     assert all(np.array_equal(edges, b) for _x, b in seen)
@@ -268,9 +269,10 @@ def test_turbidity_overlay_label_equals_plate_index_of_the_csv_row(tmp_path, mon
     """F17 decision: the overlay exists to find a plaques_all.csv row on the plate, so the number
     drawn must be that row's PLATE_INDEX (engine order, frozen), not a reading-order rank."""
     import numpy as np
+    import plaque_gui as pgui
     drawn = []
-    real = ptb.cv2.putText
-    monkeypatch.setattr(ptb.cv2, "putText", lambda img, text, *a, **k: drawn.append(text) or real(img, text, *a, **k))
+    real = pgui._draw_texts          # CT-R2 N8: the overlay labels are drawn in the figure font
+    monkeypatch.setattr(pgui, "_draw_texts", lambda img, items: drawn.extend(it[0] for it in items) or real(img, items))
     def hull(cx, cy):
         return [[cx - 5, cy - 5], [cx + 5, cy - 5], [cx + 5, cy + 5], [cx - 5, cy + 5]]
     det = {"orig": np.zeros((120, 120, 3), np.uint8), "dish_center": None, "dish_r": 0,
@@ -316,11 +318,11 @@ def test_batch_csv_has_whole_counts_flag_counts_and_only_applied_options(neutral
     res = batch_measure.batch_measure(str(folder), plate_mm=90, mode="published", watershed=True)
     text = open(os.path.join(res["out_dir"], "per_plate.csv")).read().splitlines()
     assert text[0] == ("image,n_plaques,n_sized,mm_per_px,median_diam_mm,mean_diam_mm,axis_ratio,"
-                       "tilt_flag,n_edge,n_overlap,n_merged,n_split,n_core,error")   # + D8 / D10a
-    bad, good = text[1].split(",", 13), text[2].split(",")
-    assert bad[0] == "bad.png" and bad[1:13] == [""] * 12         # blanks, not "nan"
-    assert bad[13].strip('"').startswith("bad.png: not a readable image")
-    assert bad[13].strip('"').endswith("[%s]" % (folder / "bad.png"))
+                       "tilt_flag,n_edge,n_overlap,n_merged,n_split,n_core,n_no_size,error")   # + D8 / D10a / CT-R2
+    bad, good = text[1].split(",", 14), text[2].split(",")
+    assert bad[0] == "bad.png" and bad[1:14] == [""] * 13         # blanks, not "nan"
+    assert bad[14].strip('"').startswith("bad.png: not a readable image")
+    assert bad[14].strip('"').endswith("[%s]" % (folder / "bad.png"))
     assert good[0] == "P_2.tif" and good[1] == "5" and good[2] == "5"   # "5", not "5.0"
     assert [int(v) for v in good[8:11]] == [0, 0, 0]
     allp = pd.read_csv(os.path.join(res["out_dir"], "all_plaques.csv"))
@@ -453,23 +455,25 @@ def test_compare_tab_plots_a_folder_with_plaques_on_the_worker(window, qtbot, ph
 
     # per-phage table: only columns that hold something, short labels, ascending by phage
     hdr, rows = _table(tab.table)
-    assert hdr == ["Phage", "Plates", "Plaques", "Transm. pooled", "Transm. plate mean", "Transm. plate SD"]
+    # CT-R2 N1: "Sized" (the app's Plaque size detection) after the count
+    assert hdr == ["Phage", "Plates", "Plaques", "Sized", "Transm. pooled", "Transm. plate mean",
+                   "Transm. plate SD"]
     assert [r[:3] for r in rows] == [["T4", "2", "10"], ["T7", "1", "5"]]
     per = pd.read_csv(out / "per_phage.csv")
     assert "OD_PLAQUE_MEAN" in per.columns and "TURBIDITY_PLATE_SD" in per.columns   # CSV unchanged
     t4 = per[per["PHAGE"] == "T4"].iloc[0]
-    assert rows[0][3] == "%.4g" % t4["TRANSMITTANCE_PLAQUE_MEAN"]
-    assert rows[1][5] == ""                                     # one plate: no SD, and not "nan"
+    assert rows[0][4] == "%.4g" % t4["TRANSMITTANCE_PLAQUE_MEAN"]
+    assert rows[1][6] == ""                                     # one plate: no SD, and not "nan"
     assert not [c for r in rows for c in r if "nan" in c.lower()]
-    tip = tab.model.headerData(4, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.model.headerData(5, Qt.Horizontal, Qt.ToolTipRole)
     assert "TRANSMITTANCE_PLATE_MEAN" in tip and "per-plate means" in tip
 
     # per-plate table from qc.csv
     hdr, rows = _table(tab.plate_table)
-    assert hdr == ["Plate", "Phage", "Plaques", "Countable (30–300)", "OD reference"]
-    assert rows == [["T4_1", "T4", "5", "no", "lawn-relative"],
-                    ["T4_2", "T4", "5", "no", "lawn-relative"],
-                    ["T7_1", "T7", "5", "no", "lawn-relative"]]
+    assert hdr == ["Plate", "Phage", "Plaques", "Sized", "Countable (30–300)", "OD reference"]
+    assert rows == [["T4_1", "T4", "5", "5", "no", "lawn-relative"],
+                    ["T4_2", "T4", "5", "5", "no", "lawn-relative"],
+                    ["T7_1", "T7", "5", "5", "no", "lawn-relative"]]
 
 
 # ----------------------------------------------------------------------------- F2
@@ -592,18 +596,18 @@ def test_compare_tab_shows_the_titer_per_plate(window, qtbot, phage_folder, dial
     _run_compare(tab, qtbot, phage_folder, dil="10^6", vol="100")
     assert not dialogs
     hdr, rows = _table(tab.plate_table)
-    assert hdr == ["Plate", "Phage", "Plaques", "PFU/mL", "95 % low", "95 % high",
+    assert hdr == ["Plate", "Phage", "Plaques", "Sized", "PFU/mL", "95 % low", "95 % high",
                    "Countable (30–300)", "OD reference"]
     lo, hi = ptb.poisson_ci95(5)
     per_ml = 1e6 / 0.1
-    assert rows[0] == ["T4_1", "T4", "5", "%.2e" % (5 * per_ml), "%.2e" % (lo * per_ml),
+    assert rows[0] == ["T4_1", "T4", "5", "5", "%.2e" % (5 * per_ml), "%.2e" % (lo * per_ml),
                        "%.2e" % (hi * per_ml), "no", "lawn-relative"]
     assert [r[0] for r in rows] == ["T4_1", "T4_2", "T7_1"]
     assert "No titer" not in tab.qc.text()
     q = pd.read_csv(phage_folder / "out_turbidity" / "qc.csv")       # the CSV keeps full numbers
     assert q["PFU_PER_ML"].tolist() == [5 * per_ml] * 3
     assert {"COUNT", "PFU_PER_ML_CI95_LO", "PFU_PER_ML_CI95_HI", "COUNT_IN_RANGE_30_300"} <= set(q.columns)
-    tip = tab.plate_model.headerData(4, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.plate_model.headerData(5, Qt.Horizontal, Qt.ToolTipRole)
     assert "PFU_PER_ML_CI95_LO" in tip and "Poisson" in tip
 
 
@@ -624,7 +628,7 @@ def test_a_zero_plaque_rerun_shows_no_figures_and_names_the_empty_plates(window,
     _run_compare(tab, qtbot, phage_folder)
     assert "0 plaques: T7_1." in tab.qc.text()
     assert [r[0] for r in _table(tab.table)[1]] == ["T4"]
-    assert ["T7_1", "T7", "0", "no", "lawn-relative"] in _table(tab.plate_table)[1]
+    assert ["T7_1", "T7", "0", "0", "no", "lawn-relative"] in _table(tab.plate_table)[1]
     assert all("T7" not in f["legend_text"] for f in tab._figures)
 
     # now nothing has plaques: no figure on screen, none left in the folder
@@ -748,20 +752,21 @@ def test_batch_table_is_readable(window, qtbot, neutral_plate_tif, tmp_path, dia
     tab._run()
     qtbot.waitUntil(lambda: tab.last_out is not None, timeout=TIMEOUT)
     hdr, rows = _table(tab.table)
-    assert hdr == ["Image", "Plaques", "Sized", "mm/pixel", "Median (mm)", "Mean (mm)", "Axis ratio",
-                   "Tilted?", "Edge", "Overlap", "Merged?", "Split", "Core only",   # + CT-R1 D8/D10a
-                   "Problem"]
+    # CT-R2 N14: the Problem column right after the image (visible at 1024 px); + No size (C)
+    assert hdr == ["Image", "Problem", "Plaques", "Sized", "mm/pixel", "Median (mm)", "Mean (mm)",
+                   "Axis ratio", "Tilted?", "Edge", "Overlap", "Merged?", "Split", "Core only",
+                   "No size"]
     assert [r[0] for r in rows] == ["bad.png", "Plate_2.tif", "Plate_10.tif"]     # natural, ascending
-    assert rows[0][1:13] == [""] * 12
-    assert rows[0][13].startswith("not a readable image")                          # reason first
-    assert rows[1][1] == "5" and rows[1][2] == "5" and rows[1][7] == "no" and rows[1][8:13] == ["0"] * 5
-    assert rows[1][13] == ""
+    assert rows[0][2:15] == [""] * 13
+    assert rows[0][1].startswith("not a readable image")                           # reason first
+    assert rows[1][2] == "5" and rows[1][3] == "5" and rows[1][8] == "no" and rows[1][9:15] == ["0"] * 6
+    assert rows[1][1] == ""
     per = pd.read_csv(os.path.join(tab.last_out, "per_plate.csv"))
     good = per[per["image"] == "Plate_2.tif"].iloc[0]
-    assert rows[1][3] == "%.4g" % good["mm_per_px"] and len(rows[1][3]) <= 8      # 4 significant digits
-    assert rows[1][4] == "%.4g" % good["median_diam_mm"]
+    assert rows[1][4] == "%.4g" % good["mm_per_px"] and len(rows[1][4]) <= 8      # 4 significant digits
+    assert rows[1][5] == "%.4g" % good["median_diam_mm"]
     assert not [c for r in rows for c in r if c.lower() in ("nan", "none", "<na>") or c.endswith(".0")]
-    tip = tab.model.headerData(9, Qt.Horizontal, Qt.ToolTipRole)
+    tip = tab.model.headerData(10, Qt.Horizontal, Qt.ToolTipRole)
     assert "n_overlap" in tip and "OVERLAP" in tip
     # every header is shown in full: each column is at least as wide as its header text needs
     hv = tab.table.horizontalHeader()

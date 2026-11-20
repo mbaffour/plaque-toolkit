@@ -439,6 +439,23 @@ def measure(area_pxl, pxl_per_mm, published=None):
     return dia_pxl, area_mm2, dia_mm
 
 
+def qc_flags(plaques, orig_bgr, pxl_per_mm, plate=None, circularities=None):
+    """[(QC_FLAG, QC_REASON)] per plaque -- the ONE call behind the Measure table
+    (engine_api.measure_table), Save results' data-green CSV, the Batch CSVs and the Compare
+    tab's plaque list (CT-R2 N1/N2), so every one of them flags (and leaves out of the size
+    summaries, plaque_qc.size_ok) the same plaques. Never raises: a QC failure gives blanks."""
+    try:
+        import plaque_qc
+        import plaque_scales
+        if circularities is None:
+            circularities = [plaque_scales.circularity(p) for p in plaques]
+        return plaque_qc.flags_for_plaque_dicts(
+            plaques, orig_bgr.shape[:2], plate=plate, circularities=circularities,
+            gray=cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY), mm_per_px=pxl_per_mm)
+    except Exception:                        # never let QC break a table or a save
+        return [("", "")] * len(plaques)
+
+
 def trace_by_contour(candidates, x, y):
     """Snap to the smallest detector contour that contains (x, y). None if no hit."""
     best, best_area = None, None
@@ -529,8 +546,11 @@ PLAQUE_CLASSES = {
     "region":    ("detect-area",     (255, 170, 0),   "solid"),
     "watershed": ("watershed split", (180, 120, 255), "solid"),
     "overlap":   ("overlapping",     (255, 40, 150),  "dashed"),
+    # CT-R2 N3: counted, but its size is not used (plaque_qc.size_ok False: CORE? / NO_SIZE).
+    # Wins over "overlap": its size is left out whatever the overlap switch says.
+    "nosize":    ("size not used",   (0, 230, 230),   "dotted"),
 }
-CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap")
+CLASS_ORDER = ("auto", "manual", "region", "watershed", "overlap", "nosize")
 # a plaque's SOURCE -> its class (a freehand outline is "added by hand" like a circle or trace)
 # "small" = found only by the small-scale pass of the Auto plaque size (CT-R1 detection D1):
 # a detector result like "auto", drawn and keyed as such; only the SOURCE column tells them apart
@@ -578,16 +598,103 @@ def overlap_flags(plaques, margin=1.0):
 
 
 def plaque_class(p, overlap=False):
-    """Class key of one plaque: 'overlap' wins over its source, as on the canvas."""
+    """Class key of one plaque: 'nosize' (its size is not used, CT-R2 N3) wins, then
+    'overlap' over its source, as on the canvas. 'nosize' is read from p["qc_flag"] (set by
+    tag_qc) through plaque_qc.size_ok, the one rule."""
+    if not size_used(p):
+        return "nosize"
     if overlap:
         return "overlap"
     return _SOURCE_CLASS.get(p.get("source") or "auto", "auto")
+
+
+def size_used(p):
+    """False when the plaque counts but its size is left out (plaque_qc.size_ok of its
+    QC flag, as tagged by tag_qc); True when it carries no flag."""
+    f = p.get("qc_flag")
+    if not f:
+        return True
+    import plaque_qc
+    return plaque_qc.size_ok(f)
+
+
+def tag_qc(plaques, orig_bgr, pxl_per_mm, plate=None):
+    """Store each plaque's QC flag in p["qc_flag"] (qc_flags, the table's own call), so the
+    figure, its key and the canvas can draw the plaques whose size is not used in their own
+    style. Returns the [(flag, reason)] list."""
+    qc = qc_flags(plaques, orig_bgr, pxl_per_mm, plate=plate)
+    for p, (f, _w) in zip(plaques, qc):
+        p["qc_flag"] = f
+    return qc
+
+
+def size_note(p):
+    """Why a plaque's size is not used, as the label word: 'core' (CORE?: outlined at the dark
+    centre only), 'split' (NO_SIZE: a split piece too overlapped to size), or 'size not used'
+    for any other reason plaque_qc.size_ok gives; None when the size is used."""
+    if size_used(p):
+        return None
+    import plaque_qc
+    f = p.get("qc_flag")
+    if plaque_qc.has_flag(f, "CORE?"):
+        return "core"
+    if plaque_qc.has_flag(f, "NO_SIZE"):
+        return "split"
+    return "size not used"
+
+
+_NOSIZE_REASON = {"core": "outlined at the dark centre only", "split": "split piece too overlapped",
+                  "size not used": "size not reliable"}
 
 
 def plaque_classes(plaques):
     """Class key per plaque. The overlap test is recomputed here rather than read from a tag,
     so Batch and CLI callers (whose plaques carry no tag) get the same picture as the app."""
     return [plaque_class(p, ov) for p, ov in zip(plaques, overlap_flags(plaques))]
+
+
+def source_counts_now(plaques):
+    """How the plaques NOW on the plate were found, by their stored SOURCE value (CT-R2 N5/N9:
+    the flag line and run_metadata `sources` used detection-time counts, which edits made
+    stale): auto (the standard pass), split, standard-relaxed, small, watershed, region
+    (Detect area), manual, freehand; 'core' = how many of the small ones are outlined at the
+    dark centre only (CORE?), 'no_size' = NO_SIZE pieces (from p["qc_flag"], see tag_qc)."""
+    import plaque_qc
+    out = {k: 0 for k in ("auto", "split", "standard-relaxed", "small", "watershed", "region",
+                          "manual", "freehand", "other")}
+    out["core"] = out["no_size"] = 0
+    for p in plaques:
+        s = p.get("source") or "auto"
+        out[s if s in out else "other"] += 1
+        f = p.get("qc_flag")
+        out["core"] += plaque_qc.has_flag(f, "CORE?")
+        out["no_size"] += plaque_qc.has_flag(f, "NO_SIZE") and not plaque_qc.has_flag(f, "CORE?")
+    return {k: int(v) for k, v in out.items()}
+
+
+def edges_sentence(counts):
+    """'Edges: 15 auto (standard pass), 12 split, 14 small (10 of them outlined at the dark
+    centre only), 2 region (Detect area), 1 manual (added by hand).' -- the SOURCE values,
+    each with what it means (CT-R2 N9)."""
+    def n(k):
+        return int(counts.get(k) or 0)
+    parts = ["%d auto (standard pass)" % n("auto")]
+    if n("split"):
+        parts.append("%d split" % n("split"))
+    if n("standard-relaxed"):
+        parts.append("%d standard-relaxed" % n("standard-relaxed"))
+    sm = "%d small" % n("small")
+    if n("core"):
+        sm += (" (%s outlined at the dark centre only)"
+               % ("it is" if n("small") == 1 and n("core") == 1 else
+                  ("all of them" if n("core") == n("small") else "%d of them" % n("core"))))
+    parts.append(sm)
+    for k, what in (("watershed", "watershed (split by watershed)"),
+                    ("region", "region (Detect area)"), ("manual", "manual (added by hand)"),
+                    ("freehand", "freehand (drawn by hand)"), ("other", "other")):
+        if n(k):
+            parts.append("%d %s" % (n(k), what))
+    return "Edges: " + ", ".join(parts) + "."
 
 
 def figure_metrics(image_shape):
@@ -602,14 +709,18 @@ def figure_metrics(image_shape):
             "gap": max(2, int(round(font_px / 5.0)))}         # label <-> outline distance
 
 
-def label_text(index, area_pxl, pxl_per_mm, mode="numbers", published=None):
+def label_text(index, area_pxl, pxl_per_mm, mode="numbers", published=None, note=None):
     """The text beside plaque #index for a label mode ('numbers', 'numbers + mm', 'none').
     `published` must be the flag of the engine that made the result, so the diameter printed
-    on the figure is the diameter in the table."""
+    on the figure is the diameter in the table. ``note`` (size_note) marks a plaque whose size
+    is not used: 'numbers + mm' then prints '7 (core)' instead of a size the summaries leave
+    out (CT-R2 N3)."""
     if mode == "none":
         return ""
     if mode != "numbers + mm":
         return str(index)
+    if note:
+        return "%d (%s)" % (index, note)
     dia_pxl, _area_mm2, dia_mm = measure(area_pxl, pxl_per_mm, published)
     if pxl_per_mm:
         return "%d: %.2f mm" % (index, dia_mm)
@@ -791,18 +902,19 @@ def _outline_points(p):
     return np.asarray(p["contour"], dtype=float).reshape(-1, 2)
 
 
-def _draw_dashed(img, pts, bgr, thick):
-    """Closed dashed polyline: evenly spaced dashes (an integer number round the outline)."""
+def _draw_dashed(img, pts, bgr, thick, dotted=False):
+    """Closed dashed polyline: evenly spaced dashes (an integer number round the outline).
+    ``dotted`` draws short dots instead of dashes (the "size not used" class, CT-R2 N3)."""
     closed = np.vstack([pts, pts[:1]])
     seg = np.hypot(np.diff(closed[:, 0]), np.diff(closed[:, 1]))
     per = float(seg.sum())
     if per <= 0:
         return
     s = np.concatenate([[0.0], np.cumsum(seg)])
-    period = 8.0 * thick
-    n_dash = max(4, int(round(per / period)))
+    period = (3.0 if dotted else 8.0) * thick
+    n_dash = max(6 if dotted else 4, int(round(per / period)))
     period = per / n_dash
-    dash = 0.58 * period
+    dash = (0.2 if dotted else 0.58) * period
     lines = []
     for k in range(n_dash):
         t = np.linspace(k * period, k * period + dash, max(2, int(dash) + 1))
@@ -812,11 +924,13 @@ def _draw_dashed(img, pts, bgr, thick):
     cv2.polylines(img, lines, False, bgr, int(thick), cv2.LINE_AA)
 
 
-def _draw_outline(img, p, cls, thick):
-    _name, rgb, style = PLAQUE_CLASSES[cls]
+def draw_outline(img, p, rgb, style, thick):
+    """Draw one outline (plaque dict) in ``rgb`` with ``style`` 'solid' | 'dashed' | 'dotted'.
+    The ONE outline drawing of every exported figure: plate figures and the turbidity QC
+    overlays (CT-R2 N8)."""
     bgr = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
-    if style == "dashed":
-        _draw_dashed(img, _outline_points(p), bgr, thick)
+    if style in ("dashed", "dotted"):
+        _draw_dashed(img, _outline_points(p), bgr, thick, dotted=(style == "dotted"))
     elif p["kind"] == "circle":
         cv2.circle(img, (int(round(p["center"][0])), int(round(p["center"][1]))),
                    max(int(round(p["radius"])), 1), bgr, int(thick), cv2.LINE_AA)
@@ -824,23 +938,62 @@ def _draw_outline(img, p, cls, thick):
         cv2.drawContours(img, [np.asarray(p["contour"], dtype=np.int32)], -1, bgr, int(thick), cv2.LINE_AA)
 
 
+def _draw_outline(img, p, cls, thick):
+    _name, rgb, style = PLAQUE_CLASSES[cls]
+    draw_outline(img, p, rgb, style, thick)
+
+
 # ---- legend key (the standing figure rule): built by plaque_stats/legend_key.py ------------
+_KEY_LINESTYLE = {"solid": "-", "dashed": "--", "dotted": ":"}
+
+
+def outline_key(spec, title="Plaque outlines"):
+    """A legend key of outline classes: ``spec`` = [(plain name, RGB as drawn, line style)].
+    The ONE builder behind the plate figure's key (plate_key) and the turbidity QC overlay's
+    key (CT-R2 N8), so every outline figure is keyed the same way. None for an empty spec."""
+    if not spec:
+        return None
+    from plaque_stats import legend_key
+    entries = [legend_key.entry(name, "#%02X%02X%02X" % tuple(rgb), kind="line",
+                                linestyle=_KEY_LINESTYLE.get(style, "-"), linewidth=2.0)
+               for name, rgb, style in spec]
+    return legend_key.make_key(entries, title=title, fontsize=9.0, frameon=True)
+
+
 def plate_key(plaques, precise=False):
     """The legend key of a plate figure: one entry per plaque class PRESENT on this plate,
     with the colour and line style it is drawn in and a plain name. Returns a legend_key key
     dict (None when there are no plaques). Read from the current plaques every time."""
     if not plaques:
         return None
-    from plaque_stats import legend_key
     present = set(plaque_classes(plaques))
-    entries = []
+    spec = []
     for k in CLASS_ORDER:
         if k in present:
             _n, rgb, style = PLAQUE_CLASSES[k]
-            entries.append(legend_key.entry(class_name(k, precise), "#%02X%02X%02X" % tuple(rgb),
-                                            kind="line", linestyle=("--" if style == "dashed" else "-"),
-                                            linewidth=2.0))
-    return legend_key.make_key(entries, title="Plaque outlines", fontsize=9.0, frameon=True)
+            name = class_name(k, precise)
+            if k == "nosize":                 # say why, for the reasons on THIS plate
+                why = []
+                for p in plaques:
+                    r = _NOSIZE_REASON.get(size_note(p))
+                    if r and r not in why:
+                        why.append(r)
+                name = "%s: %s" % (name, " / ".join(why))
+            spec.append((name, rgb, style))
+    return outline_key(spec)
+
+
+def write_key_files_for(key, figure_path):
+    """The stand-alone key + legend text beside a figure, in the figure's own format (plus
+    PNG, which every viewer opens). Returns the paths written ([] for no key)."""
+    if not key or not key.get("entries"):
+        return []
+    from plaque_stats import legend_key
+    ext = os.path.splitext(figure_path)[1].lower().lstrip(".") or "png"
+    if ext in ("heic", "heif"):
+        ext = "png"
+    formats = [ext] + ([] if ext == "png" else ["png"])
+    return legend_key.write_key_files(key, os.path.splitext(figure_path)[0], formats=formats)
 
 
 def key_text(plaques, precise=False):
@@ -937,6 +1090,10 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
     annotated = orig_bgr.copy()
     if annotated.ndim == 2:
         annotated = cv2.cvtColor(annotated, cv2.COLOR_GRAY2BGR)
+    # CT-R2 N3: flag the plaques (the table's own call) so those whose size is not used are
+    # drawn, labelled and keyed as such; tagged on copies, the caller's dicts are untouched
+    plaques = [dict(p) for p in plaques]
+    tag_qc(plaques, annotated, pxl_per_mm, plate=plate)
     m = figure_metrics(annotated.shape)
     for p, cls in zip(plaques, plaque_classes(plaques)):
         _draw_outline(annotated, p, cls, m["line"])
@@ -975,7 +1132,7 @@ def annotate_plaques(orig_bgr, plaques, pxl_per_mm, draw_numbers=True, scalebar=
 
     mode = labels if (draw_numbers and labels in LABEL_MODES) else ("numbers" if draw_numbers else "none")
     if mode != "none" and plaques:
-        strs = [label_text(i, p["area_pxl"], pxl_per_mm, mode, published)
+        strs = [label_text(i, p["area_pxl"], pxl_per_mm, mode, published, note=size_note(p))
                 for i, p in enumerate(plaques, start=1)]
         sizes = [text_size(s, m["font_px"], m["stroke"]) for s in strs]
         placed = layout_labels(plaques, sizes, annotated.shape, m["gap"], avoid=avoid)
@@ -1119,7 +1276,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
                  sensitive=None, small=None, watershed=None, precise=False, plate_mm=None,
                  edited=None, edits=None, source_image=None, orientation=None,
                  labels="numbers", key=False, write_key=False, detection=None):
-    """Write data-green-<stem>.csv + out_<stem>.<ext>, and (by default) a run_metadata.json
+    """Write data-green-<stem>.csv (the measurements, SOURCE, then QC_FLAG and QC_REASON as
+    the last two columns, CT-R2 N2) + out_<stem>.<ext>, and (by default) a run_metadata.json
     sibling saying which engine and edits produced them (PT-9 never covered the editor or
     the app's Save; AUDIT-2026-10.md, PT-31).
 
@@ -1132,7 +1290,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     non-auto plaque) so the CLI editor, measure_samples.py and the batch runner are unchanged.
     The desktop app passes all of them: its Save used to record whatever engine another tab
     had last run. ``labels`` / ``key`` style the overlay (see annotate_plaques);
-    ``write_key=True`` also writes out_<stem>_legend_key.png + _legend_text.txt."""
+    ``write_key=True`` also writes out_<stem>_legend_key.<overlay format> (+ .png) and
+    out_<stem>_legend_text.txt."""
     os.makedirs(out_dir, exist_ok=True)
     gray = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -1142,6 +1301,10 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
         lawn_gray = pst.estimate_lawn_gray(gray)
     turb = pst.turbidity_indices(means, lawn_gray)
 
+    # CT-R2 N2: the same QC flags as the app's table (one shared call), appended as the last
+    # two columns exactly as plaque_size_tool.py --qc appends them, so the Analyze tab's
+    # CORE? / NO_SIZE rule (plaque_qc.size_ok) works on this file too
+    qc = qc_flags(plaques, orig_bgr, pxl_per_mm, plate=plate)
     rows = []
     for i, (p, mg, tb) in enumerate(zip(plaques, means, turb), start=1):
         dia_pxl, area_mm2, dia_mm = measure(p["area_pxl"], pxl_per_mm, published)
@@ -1154,6 +1317,8 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
             "MEAN_GRAY": round(mg, 2),
             "TURBIDITY_REL": round(tb, 3),
             "SOURCE": p["source"],
+            "QC_FLAG": qc[i - 1][0],
+            "QC_REASON": qc[i - 1][1],
         })
     annotated = annotate_plaques(orig_bgr, plaques, pxl_per_mm, plate=plate,    # outlines + numbers + scale bar
                                  scalebar_mm=scalebar_mm, scalebar_anchor=scalebar_anchor,
@@ -1167,13 +1332,13 @@ def save_results(plaques, orig_bgr, image_path, out_dir, pxl_per_mm, lawn_gray=N
     csv_path = os.path.join(out_dir, f"data-green-{name}.csv")
     img_path = os.path.join(out_dir, f"out_{name}{ext}")
     pd.DataFrame(rows, columns=["INDEX_COL", "AREA_PXL", "DIAMETER_PXL", "AREA_MM2",
-                                "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE"]).to_csv(csv_path, index=False)
+                                "DIAMETER_MM", "MEAN_GRAY", "TURBIDITY_REL", "SOURCE",
+                                "QC_FLAG", "QC_REASON"]).to_csv(csv_path, index=False)
     pst.imwrite_checked(img_path, annotated)          # PT-20: never a silent False
     if write_key and plaques:
-        try:
-            from plaque_stats import legend_key
-            legend_key.write_key_files(plate_key(plaques, precise),
-                                       os.path.splitext(img_path)[0], formats=("png",))
+        try:                                          # in the overlay's own format (CT-R2 N8)
+            tagged = [dict(p, qc_flag=f) for p, (f, _w) in zip(plaques, qc)]
+            write_key_files_for(plate_key(tagged, precise), img_path)
         except Exception:                             # a key must never break a save
             pass
     if write_provenance:

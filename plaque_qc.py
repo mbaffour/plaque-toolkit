@@ -214,8 +214,9 @@ def left_out_phrase(counts):
     parts = []
     if counts.get("core"):
         parts.append("%d outlined at the dark centre only" % counts["core"])
-    if counts.get("no_size"):
-        parts.append("%d split pieces whose size is not reliable" % counts["no_size"])
+    if counts.get("no_size"):                  # singular / plural (CT-R2 N5)
+        n = counts["no_size"]
+        parts.append("%d split piece%s whose size is not reliable" % (n, "" if n == 1 else "s"))
     return " and ".join(parts)
 
 
