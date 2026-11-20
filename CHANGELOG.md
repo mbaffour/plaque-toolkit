@@ -365,6 +365,18 @@ what they found:
   columns with such values are refused on loading, so it could never act.
 * On a small window the Measure tab folds its results column behind a "Results" button so the
   image keeps a usable height.
+* **R Shiny app: the same figure as the other front-ends. The default figure changed
+  (deliberately):** plates under grey violins are blue, orange and bluish green (Okabe-Ito, as in
+  Python); the n label reads "n = 70 plaques / N = 3 plates"; the value is printed beside each bar;
+  with many or long sample names the key goes below the plot and the figure grows (the app states
+  the new size). With the median as centre the app draws the median of all plaques with an IQR or
+  no whisker, and the sentence, legend text and caption say so (the Python bootstrap interval of
+  the median is not offered in R). On a log axis, values ≤ 0 are removed from every drawn layer,
+  not only from the note. R warns about zero or negative sizes, says "n/a" instead of "Inf" when no
+  sample has any spread, and writes Mann–Whitney / Kruskal–Wallis as Python does. The R-vs-Python
+  parity test now also compares the centre values (98 more cases). Remaining difference: under
+  coloured violins R chooses plate colours that stay clear of the sample colours, so they can
+  differ from Python's.
 
 ### Statistics engine and CLI (`plaque_stats/plaque_stats.py`)
 
