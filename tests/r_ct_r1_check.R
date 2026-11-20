@@ -641,3 +641,15 @@ src_app <- readLines("app.R", warn = FALSE)
 chk("R2_N9_pdf_font_notice_has_a_fixed_id", any(grepl('notify\\(note, id = "pdf_font_note"\\)', src_app)))
 chk("R2_N9_no_favicon_404", grepl('rel="icon"', htmltools::renderTags(ui)$head, fixed = TRUE) &&
       grepl('href="data:,"', htmltools::renderTags(ui)$head, fixed = TRUE))
+
+# N2: a tilted-name figure whose names leave less than 1.5 in for the plot says so
+testServer(app, {
+  caps <- paste(c("ESCHERICHIA PHAGE T4 WILD TYPE", "BACILLUS PHAGE SPP1 MUTANT", "ENTEROBACTERIA PHAGE LAMBDA CI857", "WWWW MMMM WWWW MMMM WWWW"), "X")
+  dc <- do.call(rbind, lapply(seq_along(caps), function(i) data.frame(group = caps[i], replicate = rep(paste0("p", 1:3), each = 4),
+                                                                      diameter_mm = rnorm(12, 2 + 0.3 * i, 0.1))))
+  raw(dc); do.call(session$setInputs, modifyList(ui_defaults, list(base_size = 24))); session$flushReact()
+  chk("R2_N2_long_names_at_large_font_say_the_panel_is_small", any(grepl("sample names are long for this font size", figure_notes())), paste(figure_notes(), collapse = " | "))
+  raw(example); session$setInputs(base_size = 14); session$flushReact()
+  chk("R2_N2_no_such_note_for_the_shipped_example", !any(grepl("sample names are long", figure_notes())))
+})
+chk("R2_N2c_capitals_are_wider_than_lowercase", name_width_in("WWWWWWWW", 14) > 1.3 * name_width_in("wwwwwwww", 14))

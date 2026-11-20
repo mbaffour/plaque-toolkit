@@ -890,15 +890,24 @@ bracket_layout <- function(pairs, top, bottom, scale = 1) {
 # CT-R2 N2c: left margin (points) that keeps the tilted (45 degrees, right-aligned) sample names inside
 # the figure. A name hangs left of its tick by length * cos(45) (+ half a line); the panel starts about
 # (title + tick labels) from the figure edge, and tick j sits (j - 0.4) slots inside the panel.
-# Lengths are estimated (bold sans ~ 0.52 em per character, calibrated on 8-12 long names) because measuring needs an open graphics
-# device, and the estimate errs on the wide side.
+# Lengths are ESTIMATED (measuring needs an open graphics device): bold sans, 0.52 em per mixed-case
+# character, 0.72 em per capital, 0.56 em per digit -- checked on rendered 8 and 12 long names and on
+# an all-capitals set -- plus 6 pt of margin.
+name_width_in <- function(labels, base_size) {
+  vapply(as.character(labels), function(x) {
+    ch <- strsplit(x, "")[[1]]
+    sum(ifelse(grepl("[A-Z]", ch), 0.72, ifelse(grepl("[0-9]", ch), 0.56, 0.52))) * base_size / 72
+  }, 0, USE.NAMES = FALSE)
+}
 tilted_left_margin_pt <- function(labels, base_size, fig_w_in) {
-  k <- length(labels); len <- nchar(labels) * base_size * 0.52 / 72
+  k <- length(labels); len <- name_width_in(labels, base_size)
   off <- base_size * 3.3 / 72 + 0.08
   slot <- max(1, fig_w_in - off - 0.2) / (k + 0.2)
   need <- len * cos(pi / 4) + base_size / 72 * 0.5 - (seq_len(k) - 0.4) * slot
   max(6, (max(need) - off) * 72 + 6)
 }
+# the height (inches) the tilted names take below the axis
+tilted_label_height_in <- function(labels, base_size) max(name_width_in(labels, base_size)) * sin(pi / 4) + base_size / 72
 
 # ---------------------------------------------------------------------------------------------
 # Legend key (the owner's rule: every figure ships one). The R twin of plaque_stats/legend_key.py:
@@ -1142,7 +1151,7 @@ format_help <- function() {
     "(avoids pseudoreplication).</li>",
     "<li><b>value</b> / numeric columns: the measurement(s).</li></ul>",
     "<p>Comma-, semicolon- and tab-separated files are read; the separator is detected. Numbers ",
-    "use a decimal point (2.34); decimal commas (2,34) are read in semicolon- or tab-separated files. ",
+    "use a decimal point (2.34); decimal commas (2,34) are read too (in a comma-separated file the cell must be quoted, \"2,34\"). ",
     "Column names are matched without regard to case.</p>"))
 }
 
@@ -1156,7 +1165,7 @@ copy_box <- function(id, rows = 3) {
     tags$textarea(id = box, class = "form-control", rows = rows, readonly = NA,
                   style = "width: 100%; font-family: monospace; font-size: 12px; resize: vertical;"),
     tags$span(id = id, class = "shiny-text-output", style = "display: none;"),
-    tags$script(HTML(sprintf("$(document).on('shiny:value', function(e) { if (e.name === '%s') { var b = document.getElementById('%s'); if (b) b.value = e.value; } });", id, box))),
+    tags$script(HTML(sprintf("$(document).on('shiny:value', function(e) { if (e.name === '%s') { var b = document.getElementById('%s'); if (b) b.value = e.value; } }); $(document).on('shiny:error', function(e) { if (e.name === '%s') { var b = document.getElementById('%s'); if (b) b.value = ''; } });", id, box, id, box))),
     tags$button("Copy", type = "button", class = "btn btn-sm btn-default", style = "margin-top: 4px;",
                 onclick = sprintf("var t = document.getElementById('%s'); navigator.clipboard.writeText(t.value || t.textContent);", box)))
 }
@@ -1370,10 +1379,10 @@ server <- function(input, output, session) {
     p <- palette_parsed()$colours
     if (length(p)) p else OKABE_ITO
   })
-  # (350 ms: long enough not to flash "not a colour" at every keystroke of a hex code, short enough
+  # (250 ms: long enough not to flash "not a colour" at every keystroke of a hex code, short enough
   # that the status is there as soon as the typing stops -- CT-R2 N9: it looked empty at 900 ms)
   palette_settled <- debounce(reactive(list(txt = input$palette %||% "", name = input$palette_name %||% "",
-                                            n = length(current_levels()))), 350)
+                                            n = length(current_levels()))), 250)
   output$palette_status <- renderText({
     s <- palette_settled()
     if (!identical(s$name, "")) return("")
@@ -1657,6 +1666,11 @@ server <- function(input, output, session) {
     out
   })
 
+  # the width the main plot really gets: the figure width, less the key when it sits beside the plot
+  plot_w_in <- function() {
+    kp <- key_place()
+    fig_size()$w - if (identical(kp$where, "beside")) kp$kw else 0
+  }
   make_main <- function(family = look()$family) {
     d <- dat(); req(nrow(d) > 0)
     sm <- style(); lk <- look()         # colours by name; font, base size, axis colour + width
@@ -1735,10 +1749,10 @@ server <- function(input, output, session) {
     if (sum(nchar(levels(d$group))) * lk$base_size / 14 > 55 || nlevels(d$group) > 8)
       g <- g + theme(axis.text.x = element_text(face = "bold", angle = 45, hjust = 1, vjust = 1),
                  plot.margin = margin(t = 16, r = 12, b = 6,
-                                      l = tilted_left_margin_pt(levels(d$group), lk$base_size, fig_size()$w)))
+                                      l = tilted_left_margin_pt(levels(d$group), lk$base_size, plot_w_in())))
     if (length(caption))                 # only when there is something the figure must say
       # CT-R2 N2: a long caption is wrapped to the figure width instead of running off the right edge
-      g <- g + labs(caption = paste(strwrap(caption, width = max(30, floor(0.6 * fig_size()$w * 72 / (0.7 * lk$base_size * 0.5)))),
+      g <- g + labs(caption = paste(strwrap(caption, width = max(30, floor(0.6 * plot_w_in() * 72 / (0.7 * lk$base_size * 0.5)))),
                                     collapse = "\n")) +
         theme(plot.caption = element_text(hjust = 0, size = rel(0.7), colour = "#33413c"),
               plot.caption.position = "plot")
@@ -1866,6 +1880,15 @@ server <- function(input, output, session) {
     if (length(sm$recoloured))
       out <- c(out, sprintf("%s had the same colour as another sample here, so %s given a different shade.",
                             paste(sm$recoloured, collapse = ", "), if (length(sm$recoloured) > 1) "they were" else "it was"))
+    # CT-R2 N2: long sample names at a large font eat the panel (the names are tilted and need height
+    # of their own); say so instead of leaving a figure with no plot in it
+    tilted <- sum(nchar(levels(d$group))) * look()$base_size / 14 > 55 || nlevels(d$group) > 8
+    if (tilted) {
+      room <- fig_size()$h - tilted_label_height_in(levels(d$group), look()$base_size) - 4.5 * look()$base_size / 72
+      if (room < 1.5)
+        out <- c(out, sprintf("The sample names are long for this font size and figure size, so the plot itself is only about %.1f in tall. Make the figure taller, lower the base font size, or shorten the names.",
+                              max(room, 0)))
+    }
     unique(c(out, key_place()$note, look()$notes))
   })
   output$plot_notes <- renderUI({
