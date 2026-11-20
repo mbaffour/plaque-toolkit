@@ -154,3 +154,44 @@ def test_hash_row_after_the_header_is_data_and_before_it_a_comment(st, dialogs, 
     st.load_study_btn.click()
     assert [(s["group"], [p["diam"] for p in st._plates_of(s)]) for s in st._samples] == \
         [("#3 phage", [[1.0, 1.1]]), ("WT", [[2.0], [2.1]])]
+
+
+# --------------------------------------------------------------------------- F5
+@pytest.mark.parametrize("name,text,lines", [
+    ("long_bad.csv",
+     "group,subgroup,replicate,metric,value\nA,,p1,diameter_mm,1.2\nA,,p2,diameter_mm,abc\n"
+     "A,,p2,diameter_mm,2.4\nB,,p1,diameter_mm,-1.0\nB,,p1,diameter_mm,1.0\nB,,p2,diameter_mm,0\n"
+     "B,,p2,diameter_mm,2.2\nB,,p2,turbidity,0\n",
+     ["line 3", "line 5", "line 7"]),
+    ("wide_neg.csv",
+     "group,replicate,diameter_mm\nA,p1,1.2\nA,p2,-0.5\nA,p3,1.4\n\nB,p1,0\nB,p2,2.1\nB,p3,2.3\n",
+     ["line 3", "line 6"]),
+])
+def test_load_study_refuses_text_zero_and_negative_sizes(st, dialogs, tmp_path, name, text, lines):
+    """CT-R2 F5: Load study applies Add CSV(s)'s value rules. Text, zero and negative sizes
+    are refused with the file, the line and the cell named, and the study on screen is kept
+    (a turbidity 0 in a Long file is not a size and is not refused)."""
+    _fill(st, [("keep", "", [1.0, 1.1])])
+    before = _snap(st)
+    f = tmp_path / name
+    f.write_text(text)
+    st._dirty = False
+    dialogs["open"].append((str(f), ""))
+    st.load_study_btn.click()
+    msg = st.err.text()
+    assert msg.startswith("Not loaded: %s" % name), msg
+    for ln in lines:
+        assert ln in msg, msg
+    assert "turbidity" not in msg
+    assert _snap(st) == before                              # nothing replaced
+    assert st._last is None
+
+
+def test_load_study_keeps_blank_placeholder_rows(st, dialogs, tmp_path):
+    """Blank value cells (an empty plate, an empty sample) stay legal."""
+    f = tmp_path / "ok.csv"
+    f.write_text("group,subgroup,replicate,diameter_mm,area_mm2,source\nA,,p1,1.0,0.8,\nA,,p2,,,\nB,,,,,\n")
+    dialogs["open"].append((str(f), ""))
+    st.load_study_btn.click()
+    assert st.err.text() == ""
+    assert _snap(st) == [("A", "", [("p1", [1.0], [0.8]), ("p2", [], [])]), ("B", "", [])]
