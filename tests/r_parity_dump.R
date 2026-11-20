@@ -19,5 +19,6 @@ num <- function(x) if (is.null(x) || length(x) == 0 || is.na(x)) NULL else as.nu
 res <- list(test = st$test, p = num(st$p), pairwise = pair,
             posthoc = if (is.na(st$posthoc)) NULL else st$posthoc,
             unit = st$unit, parametric_used = isTRUE(st$parametric_used),
-            levene_p = num(st$levene_p), min_n = as.integer(st$min_n))
+            levene_p = num(st$levene_p), min_n = as.integer(st$min_n),
+            p_method = if (is.null(st$p_method)) NULL else st$p_method)
 cat(jsonlite::toJSON(res, auto_unbox = TRUE, null = "null", digits = NA), "\n")

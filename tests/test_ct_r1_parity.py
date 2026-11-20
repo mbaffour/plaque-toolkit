@@ -51,11 +51,25 @@ FIXTURES = {
     "unequalvar_3x8": os.path.join(FX, "ct_r1_parity_unequalvar_3x8.csv"),
     "skewed_3x10": os.path.join(FX, "ct_r1_parity_skewed_3x10.csv"),
     "skewed_2x9": os.path.join(FX, "ct_r1_parity_skewed_2x9.csv"),
+    # CT-R2: a sample with zero variance (Welch undefined -> classic ANOVA + Tukey) and tied plate means
+    # (R and pandas differ in the last bits of a mean; the rank tests must see the same ties)
+    "zerovar": os.path.join(FX, "ct_r2_zerovar.csv"),
+    "ties": os.path.join(FX, "ct_r2_ties.csv"),
+    # samples called NA, 007 and #1 (a # line is a comment only BEFORE the header)
+    # 8 plates x 3 samples: the smallest Shapiro p (0.048) lies between 0.05/3 and 0.05 -> stays parametric
+    "gate_between": os.path.join(FX, "ct_r2_gate_between.csv"),
+    # two samples, 5 vs 6 plates: Mann-Whitney EXACT without ties; with ties (plate means equal on paper)
+    # the normal approximation
+    "mwu_5v6_noties": os.path.join(FX, "ct_r2_mwu_5v6_noties.csv"),
+    "mwu_ties": os.path.join(FX, "ct_r2_mwu_ties.csv"),
+    "names2": os.path.join(FX, "ct_r2_names2.csv"),   # (samples NA, 007, #1: # is a comment only before the header)
 }
 # Expected family under parametric=auto, equal_var=auto (guards against both sides drifting together)
 EXPECT_AUTO = {"example_wide_3x3": "anova", "B_unequal": "welch_anova", "D_two_12v14": "welch_t",
                "E_oneplate_group": "anova", "equalvar_3x8": "anova", "unequalvar_3x8": "welch_anova",
-               "skewed_3x10": "kruskal", "skewed_2x9": "mannwhitney"}
+               "skewed_3x10": "kruskal", "skewed_2x9": "mannwhitney",
+               "zerovar": "anova", "ties": "anova", "names2": "anova", "gate_between": "welch_anova",
+               "mwu_5v6_noties": "welch_t", "mwu_ties": "welch_t"}
 COMBOS = list(itertools.product(("auto", "parametric", "nonparametric"), ("auto", "yes", "no")))
 
 FAMILY = {"one-way anova": "anova", "welch anova": "welch_anova", "kruskal-wallis": "kruskal",
@@ -116,6 +130,8 @@ def test_r_and_python_agree(rscript, name, parametric, equal_var):
     r = r_side(rscript, FIXTURES[name], parametric, equal_var)
     assert family(r["test"]) == family(omni["test"]), (r["test"], omni["test"], r["parametric_used"])
     assert r["unit"] == unit
+    if omni.get("p_method") is not None:       # exact vs asymptotic Mann-Whitney / KW: the SAME method
+        assert r.get("p_method") == omni["p_method"], (r.get("p_method"), omni["p_method"])
     assert r["parametric_used"] == omni["parametric_used"]
     assert r["min_n"] == omni["min_n"]
     assert _close(r.get("levene_p"), omni["levene_p"], 1e-6, 1e-12)

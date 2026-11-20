@@ -142,8 +142,9 @@ chk("F3_semicolon_decimal_comma", !inherits(r, "error") && all(is.finite(as.nume
       max(as.numeric(r$df$diameter_mm)) < 5 && any(grepl("decimal comma", r$notes)))
 q <- mk(",", ","); q[-1] <- vapply(strsplit(q[-1], ","), function(x) paste0(x[1], ",", x[2], ',"', x[3], ",", x[4], '"'), "")
 r <- read_ok(tmp("eu_quoted.csv", q))
-chk("F3_ambiguous_comma_stops", inherits(r, "plaque_data_problem") && grepl("decimal point", conditionMessage(r)) &&
-      grepl("nothing was loaded", conditionMessage(r)), if (inherits(r, "error")) conditionMessage(r) else "was read")
+# CT-R2: a comma inside a cell of a comma file can only come from quotes, so it is a decimal comma (Python reads it so)
+chk("F3_quoted_decimal_comma_is_read", !inherits(r, "error") && all(is.finite(as.numeric(r$df$diameter_mm))) &&
+      max(as.numeric(r$df$diameter_mm)) < 5 && any(grepl("decimal comma", r$notes)), if (inherits(r, "error")) conditionMessage(r) else "")
 bad <- list(
   empty = raw(0), header_only = "group,replicate,diameter_mm",
   binary = as.raw(c(0:255, 0:255)), cp1252 = NULL,
@@ -167,7 +168,7 @@ mv <- mk(","); mv[5] <- sub("[0-9.]+$", "2.5mm", mv[5]); mv[7] <- sub("[0-9.]+$"
 r <- read_ok(tmp("missing.csv", mv))
 chk("F9_text_cell_keeps_column", !inherits(r, "error") && "diameter_mm" %in% numeric_cols(r$df))
 d <- tidy_plaque_data(r$df, "group", "replicate", "diameter_mm", NULL, "")
-chk("F9_rows_dropped_reported", nrow(d) == 70 && any(grepl("2 of 72 rows were left out", attr(d, "info")$notes)), paste(attr(d, "info")$notes, collapse = " "))
+chk("F9_rows_dropped_reported", nrow(d) == 70 && any(grepl("^2 rows dropped: no numeric diameter_mm value \\(2 not a number, 0 empty\\)\\.$", attr(d, "info")$notes)), paste(attr(d, "info")$notes, collapse = " "))
 lv <- mk(","); lv[1] <- "group,replicate,value"; r <- read_ok(tmp("long_nometric.csv", lv))
 chk("F9_value_without_metric", is.null(long_cols(r$df)) && "value" %in% numeric_cols(r$df))
 r <- read_ok(tmp("upper.csv", mk(",", head = c("GROUP", "REPLICATE", "DIAMETER_MM"))))
@@ -395,7 +396,8 @@ testServer(app, {
   chk("F15_style_colours_applied_by_name", identical(unname(style()$gcol["T4"]), "#000000") && !style()$neutral)
   session$setInputs(palette_name = "set2"); session$flushReact()
   chk("F15_theme_replaces_colours", !identical(unname(style()$gcol["T4"]), "#000000"))
-  chk("F15_status_says_theme_replaced", grepl("colour theme was changed", output$paper_style_status), output$paper_style_status)
+  chk("F15_status_says_theme_replaced", grepl("Colour theme Set2 replaced the paper style's sample colours \\(choose 'Paper style' to bring them back\\)", output$paper_style_status) &&
+        !grepl("of the style's", output$paper_style_status), output$paper_style_status)
   session$setInputs(palette_name = "paper"); session$flushReact()
   chk("F15_paper_style_choice_brings_it_back", identical(unname(style()$gcol["T4"]), "#000000") && identical(unname(style()$gcol["T7"]), "#D55E00"))
   session$setInputs(palette_name = "okabe"); session$flushReact(); session$setInputs(palette_name = "paper"); session$flushReact()
@@ -459,7 +461,7 @@ testServer(app, {
   chk("F17_preview_size_follows_figure_size", identical(fig_size()$h, 12))
 })
 raw_ui <- as.character(ui)
-chk("F22_text_boxes_multiline_with_copy", grepl("<textarea[^>]*id=\"sentence\"", raw_ui) && grepl("<textarea[^>]*id=\"key_text\"", raw_ui) &&
+chk("F22_text_boxes_multiline_with_copy", grepl("<textarea[^>]*id=\"sentence_box\"", raw_ui) && grepl("<textarea[^>]*id=\"key_text_box\"", raw_ui) &&
       length(gregexpr("writeText", raw_ui)[[1]]) >= 2)
 chk("F22_tables_scroll_in_own_box", grepl("overflow-x: auto", raw_ui) && isTRUE(dt_opts_probe <- TRUE))
 chk("F5_download_statistics_button", grepl("dl_stats", raw_ui) && grepl("Download statistics \\(CSV\\)", raw_ui))
@@ -467,3 +469,211 @@ chk("F1_variances_select", grepl('id="equal_var"', raw_ui) && grepl("Welch ANOVA
 chk("F6_annotate_select", grepl('id="annotate"', raw_ui) && grepl("all pairs", raw_ui))
 bat <- readLines(file.path("..", "plaque_stats", "Run R App.bat"), warn = FALSE)
 chk("F24_bat_install_line_has_jsonlite", any(grepl("install.packages", bat) & grepl("jsonlite", bat)))
+
+# =================================================================================================
+# CT-R2 (round 2) -- checks named R2_*. Python numbers below were produced by plaque_stats.py.
+# =================================================================================================
+# ---- N1: a sample with zero variance: Welch is undefined -> classic ANOVA + Tukey, as Python -------
+stZ <- plaque_run_stats(tidy(fx("ct_r2_zerovar.csv")))
+chk("R2_N1_zerovar_falls_back_to_anova_tukey", stZ$test == "one-way ANOVA" && stZ$posthoc == "Tukey HSD" &&
+      near(stZ$p, 3.321225932616643e-10, 1e-14) && !is.na(stZ$p), paste(stZ$test, stZ$p))
+chk("R2_N1_zerovar_pairwise_p", near(unname(pw_p(stZ)), c(1.3558213241005035e-07, 2.2230062235450987e-10, 3.0756279285615307e-06), 3e-9),
+    paste(sprintf("%.6g", pw_p(stZ)), collapse = " "))
+chk("R2_N1_zerovar_note_and_spread_warning", any(grepl("^Welch's ANOVA could not be computed \\(a sample has zero variance\\); classic ANOVA \\+ Tukey HSD were used instead\\.$", stZ$notes)) &&
+      any(grepl("SD ratio Inf, adjusted p < 0.001", stZ$warnings)), paste(stZ$notes, stZ$warnings, collapse = " | "))
+stZn <- plaque_run_stats(tidy(fx("ct_r2_zerovar.csv")), equal_var = "no")
+chk("R2_N1_zerovar_forced_unequal_also_falls_back", stZn$test == "one-way ANOVA" && near(stZn$p, stZ$p, 1e-14))
+chk("R2_N1_omnibus_text_has_p", grepl("one-way ANOVA: p < 0.001", omnibus_text(stZ)) && grepl("NOTES:", omnibus_text(stZ)))
+
+# ---- N3: ties: rank the plate means rounded to 12 digits, as the pandas means are -----------------
+stT <- plaque_run_stats(tidy(fx("ct_r2_ties.csv")), parametric = "nonparametric")
+chk("R2_N3_ties_kruskal_p", stT$test == "Kruskal–Wallis" && near(stT$p, 0.0020555124291379706, 1e-12), sprintf("%.12g", stT$p))
+chk("R2_N3_ties_dunn_p", near(unname(pw_p(stT)), c(0.001695575267088922, 0.03978406477923671, 0.26296416821519575), 1e-9),
+    paste(sprintf("%.10g", pw_p(stT)), collapse = " "))
+stTp <- plaque_run_stats(tidy(fx("ct_r2_ties.csv")))
+chk("R2_N3_parametric_p_unchanged", near(stTp$p, 0.000721407841790418, 1e-12), sprintf("%.12g", stTp$p))
+
+# ---- N7 + N8 + F3: reading as Python does ----------------------------------------------------------
+rN <- read_plaque_table(fx("ct_r2_names2.csv"))
+chk("R2_N7_no_comment_note_when_no_comments", !any(grepl("comment", rN$notes)), paste(rN$notes, collapse = "|"))
+cm <- tmp("comments_head.csv", c("# validation set", "# exported 2026", "", "# third", "group,replicate,diameter_mm", "A,p1,2.1", "A,p2,2.2", "#B,p1,3.1", "#B,p2,3.3"))
+rC <- read_plaque_table(cm)
+chk("R2_N7_comments_only_before_header_counted", any(grepl("^3 comment lines before the header skipped$", rC$notes)) && nrow(rC$df) == 4 &&
+      "#B" %in% rC$df$group, paste(rC$notes, collapse = "|"))
+dN2 <- tidy_plaque_data(rN$df, "group", "replicate", "diameter_mm", NULL, "")
+chk("R2_N7_NA_007_hash1_are_sample_names", identical(levels(dN2$group), c("NA", "007", "#1")) && nrow(dN2) == 72, paste(c(levels(dN2$group), nrow(dN2)), collapse = "|"))
+stN2 <- plaque_run_stats(dN2)
+# plaque_stats.py gives 0.00011934370062079558 (parity test: names2)
+chk("R2_N7_names2_three_samples_anova", stN2$test == "one-way ANOVA" && near(stN2$p, 0.00011934370062079558, 1e-9), sprintf("%s %.12g", stN2$test, stN2$p))
+nm <- tmp("names_words.csv", c("group,replicate,diameter_mm", paste0(rep(c("None", "nan", "null", "NA"), each = 4), ",p", rep(1:2, 8), ",", c(2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.4, 2.7, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.4, 3.7)),
+                                   ",p1,2.2"))
+dW <- tidy_plaque_data(read_plaque_table(nm)$df, "group", "replicate", "diameter_mm", NULL, "")
+chk("R2_N7_None_nan_null_NA_are_names_empty_is_blank", identical(levels(dW$group), c("None", "nan", "null", "NA")) &&
+      any(grepl("^1 row dropped: no group label\\.$", attr(dW, "info")$notes)), paste(levels(dW$group), collapse = "|"))
+rU <- read_plaque_table(fx("ct_r2_upper_missing.csv"))
+dU <- tidy_plaque_data(rU$df, "GROUP", "REPLICATE", "DIAMETER_MM", NULL, "")
+chk("R2_N8_not_a_number_vs_empty_wording", identical(attr(dU, "info")$notes, "7 rows dropped: no numeric DIAMETER_MM value (5 not a number, 2 empty)."),
+    paste(attr(dU, "info")$notes, collapse = "|"))
+stU <- plaque_run_stats(dU)
+chk("R2_N8_upper_missing_same_p_as_python", stU$test == "one-way ANOVA" && near(stU$p, 0.0013102525378786152, 1e-9), sprintf("%.12g", stU$p))
+
+# ---- rule change: normality gate at 8+ plates is Bonferroni across the tested samples ---------------
+mk8 <- function(seed, k = 3) { set.seed(seed)
+  d <- do.call(rbind, lapply(seq_len(k), function(i) data.frame(group = LETTERS[i], replicate = paste0("p", 1:8),
+         value = if (i == 1) rexp(8) + 2 else rnorm(8, 2, 0.3))))
+  d$group <- factor(d$group, levels = LETTERS[seq_len(k)]); d }
+shap_a <- function(d) shapiro.test(d$value[d$group == "A"])$p.value
+seed_mid <- Filter(function(sd) { p <- shap_a(mk8(sd)); p > 0.0167 && p < 0.05 &&
+                    all(vapply(c("B", "C"), function(g) shapiro.test(mk8(sd)$value[mk8(sd)$group == g])$p.value > 0.05, TRUE)) }, 1:400)[1]
+seed_low <- Filter(function(sd) shap_a(mk8(sd)) < 0.0167, 1:400)[1]
+dm <- mk8(seed_mid); stm <- plaque_run_stats(dm)
+chk("R2_gate_p_between_0.05_over_m_and_0.05_stays_parametric", is.na(seed_mid) == FALSE && isTRUE(stm$parametric_used) && stm$test %in% c("one-way ANOVA", "Welch ANOVA") &&
+      any(grepl("Bonferroni over 3 samples) does not reject normality", stm$notes)), sprintf("seed %s p_A %.4f %s | %s", seed_mid, shap_a(dm), stm$test, paste(stm$notes, collapse = " ")))
+dl <- mk8(seed_low); stl <- plaque_run_stats(dl)
+chk("R2_gate_p_below_0.05_over_m_goes_rank_based", !is.na(seed_low) && !isTRUE(stl$parametric_used) && stl$test == "Kruskal–Wallis" &&
+      any(grepl("rejects normality", stl$notes)), sprintf("seed %s p_A %.4f %s", seed_low, shap_a(dl), stl$test))
+
+# ---- N2: key below GROWS the figure; one row of stars with > 5 samples; left margin from the names --
+m12L <- m12; m12L$group <- paste(m12L$group, "dRecA::kan pBAD33 wide")
+m12L$replicate <- paste0("rep", match(m12L$group, unique(m12L$group)), "-", m12L$replicate)   # a plate row per sample x plate in the key
+m12L$diameter_mm <- m12L$diameter_mm + 0.15 * match(m12L$group, unique(m12L$group))   # all clearly different
+testServer(app, {
+  raw(m12L); do.call(session$setInputs, ui_defaults); session$flushReact()
+  kp <- key_place(); fo <- fig_out(); fs <- fig_size()
+  chk("R2_N2a_key_below_grows_figure_panel_keeps_size", identical(kp$where, "below") && near(fo$h, fs$h + kp$kh + KEY_GAP_IN, 1e-9) &&
+        fo$w == fs$w && fs$h == 5.2, sprintf("%s %.2f -> %.2f", kp$where, fs$h, fo$h))
+  chk("R2_N2a_note_says_figure_is_taller", grepl("figure is [0-9.]+ in tall instead of 5.2 in", kp$note %||% ""), kp$note %||% "")
+  chk("R2_N2a_download_uses_grown_size", identical(fig_out()$h, fo$h))
+  br <- brackets()
+  chk("R2_N2b_many_samples_one_row_of_stars", is.null(br$pairs) && nrow(br$stars) == 12 && br$stars$label[1] == "ref." &&
+        length(unique(br$stars$y)) == 1 && all(br$stars$label[-1] %in% c("ns", "*", "**", "***", "n/a")), paste(br$stars$label, collapse = " "))
+  chk("R2_N2b_caption_and_sentence", identical(br$caption, "Stars above each sample: its comparison with Strain 01 long name dRecA::kan pBAD33 wide (ref.)") &&
+        grepl("^With 12 samples each sample is compared with Strain 01 long name dRecA::kan pBAD33 wide only: the stars above each sample give that comparison \\([0-9]+ of 11 with adjusted p < 0.05; Strain 01 long name dRecA::kan pBAD33 wide itself is marked ref\\.\\)\\. Every pair is in the pairwise table\\. Stars: \\* p < 0.05", br$sentence),
+      br$sentence)
+  chk("R2_N2b_legend_text_carries_annotation_sentence", grepl("compared with Strain 01 long name dRecA", annotation_text()) &&
+        grepl("compared with Strain 01 long name dRecA", output$key_text))
+  chk("R2_N2b_figure_draws_without_brackets", !inherits(try(ggplot2::ggplot_build(build_plot()), silent = TRUE), "try-error"))
+  session$setInputs(annotate = "all"); br <- brackets()
+  chk("R2_N2b_all_pairs_still_gives_brackets", !is.null(br$pairs) && is.null(br$stars) && nrow(br$pairs) == 66)
+  session$setInputs(annotate = "auto")
+})
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  br <- brackets()
+  chk("R2_N2b_three_samples_keep_brackets_and_size", !is.null(br$pairs) && is.null(br$stars) && key_place()$where == "beside" &&
+        identical(fig_out()$h, 5.2))
+})
+chk("R2_N2c_left_margin_grows_with_name_length", tilted_left_margin_pt(rep("x", 9), 14, 8) == 6 &&
+      tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8) > 60 &&
+      tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 28, 8) >
+        tilted_left_margin_pt(paste("Strain", 1:12, "long name pBAD33 delta recA"), 14, 8))
+
+# ---- N4 + N5: one colour rule ---------------------------------------------------------------------
+Sys.setenv(CFU_PAPER_STYLE = sty("t4black2.json", list(sample_palette = list(T4 = "#000000", T7 = "#D55E00", lambda = "#0072B2"))))
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$flushReact()
+  session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("R2_N4_status_before_theme_names_style", grepl("3 of the style's 3 names", output$paper_style_status))
+  session$setInputs(palette_name = "cool"); session$flushReact()
+  chk("R2_N4_theme_after_style_replaces_and_status_says_so", !identical(unname(style()$gcol["T4"]), "#000000") &&
+        grepl("Colour theme Cool replaced the paper style's sample colours \\(choose 'Paper style' to bring them back\\)\\.", output$paper_style_status) &&
+        !grepl("3 of the style's", output$paper_style_status), output$paper_style_status)
+  session$setInputs(palette_name = ""); session$flushReact()
+  chk("R2_N4_custom_hex_replaces_too", grepl("Colour theme \\(custom hex below\\) replaced", output$paper_style_status), output$paper_style_status)
+  session$setInputs(palette_name = "cool"); session$flushReact(); session$setInputs(palette_name = "paper"); session$flushReact()
+  chk("R2_N4_paper_choice_still_brings_style_back", identical(unname(style()$gcol[["T4"]]), "#000000") && identical(unname(style()$gcol[["lambda"]]), "#0072B2"))
+})
+Sys.setenv(CFU_PAPER_STYLE = file.path(out_dir, "no_paper_style.json"))
+# N5: the web tester's t2 sequence: type a palette, set an order, clear both, rename ONE sample
+testServer(app, {
+  raw(example); do.call(session$setInputs, modifyList(ui_defaults, list(vfill = "group"))); session$flushReact()
+  base_cols <- style()$gcol
+  session$setInputs(palette = "#000000,#D55E00,#0072B2"); session$flushReact()
+  chk("R2_N5_typed_palette_applies", identical(unname(style()$gcol), c("#000000", "#D55E00", "#0072B2")))
+  session$setInputs(order = "lambda,T7,T4"); session$flushReact()
+  session$setInputs(palette = ""); session$flushReact(); session$setInputs(order = ""); session$flushReact()
+  chk("R2_N5_clearing_palette_restores_colours_from_before", identical(style()$gcol, base_cols),
+      paste(style()$gcol, collapse = " "))
+  ren <- example; ren$group[ren$group == "T4"] <- "T4 renamed (new)"
+  raw(ren); session$flushReact()
+  g <- style()$gcol
+  chk("R2_N5_unrenamed_samples_keep_their_colour", identical(unname(g[["T7"]]), unname(base_cols[["T7"]])) &&
+        identical(unname(g[["lambda"]]), unname(base_cols[["lambda"]])) && !anyDuplicated(g), paste(names(g), g, collapse = " "))
+})
+
+# ---- N6 + N9 (R parts) ------------------------------------------------------------------------------
+# the user's own choice is a NOTE, Levene's finding a WARNING; every p goes through p_eq
+set.seed(5)
+dU <- do.call(rbind, lapply(list(c("a", 1), c("b", 0.01), c("c", 0.01)), function(x) data.frame(group = x[1],
+        replicate = paste0("p", 1:10), value = rnorm(10, 2, as.numeric(x[2])))))
+dU$group <- factor(dU$group, levels = c("a", "b", "c"))
+stU <- plaque_run_stats(dU)
+chk("R2_N6_levene_warning_uses_p_eq", any(grepl("^Levene p < 0.001: group variances differ", stU$warnings)) && !any(grepl("0\\.000", c(stU$warnings, stU$notes))),
+    paste(stU$warnings, collapse = " | "))
+stUn <- plaque_run_stats(dU[dU$group != "c", ], equal_var = "no")
+stUn3 <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "no")
+chk("R2_N6_users_variance_choice_is_a_note_not_a_warning", any(grepl("^Variances were set to 'unequal'", stUn3$notes)) &&
+      !any(grepl("Variances were set", stUn3$warnings)) && grepl("NOTES:\n- Variances were set to 'unequal'", omnibus_text(stUn3)) &&
+      !grepl("WARNINGS:[^N]*Variances were set", omnibus_text(stUn3)))
+stY <- plaque_run_stats(tidy(fx("ct_r1_B_unequal.csv")), equal_var = "yes")
+stY$levene_p <- 1e-5
+chk("R2_N6_p_eq_never_p_equals_0.000", p_eq(0.0004) == "p < 0.001" && p_eq(0.01234) == "p = 0.012" && !grepl("= 0\\.000", omnibus_text(stU)))
+# spread note: only samples that can be tested count; singular / plural
+sp1 <- spread_check(list(a = c(1, 2.1, 3.3, 4.2, 5.1), b = c(2, 2.5, 3.1, 3.9, 4.4), c = 5), "plates")
+chk("R2_N9_spread_note_ignores_untestable_sample", is.null(sp1$note), sp1$note %||% "")
+sp2 <- spread_check(list(a = c(1, 2.1, 3.3), b = c(2, 2.5, 3.1), c = 5), "plates")
+chk("R2_N9_spread_note_counts_testable_plates", grepl("With 3 plates per group", sp2$note), sp2$note %||% "")
+# the copy boxes: the textarea and the output have DIFFERENT ids, no shared input/output id
+ids_in <- regmatches(raw_ui, gregexpr("<textarea[^>]*id=\"[^\"]+\"", raw_ui))[[1]]
+ids_in <- sub(".*id=\"([^\"]+)\"", "\\1", ids_in)
+ids_out <- sub(".*id=\"([^\"]+)\".*", "\\1", regmatches(raw_ui, gregexpr("<[a-z]+ id=\"[^\"]+\" class=\"shiny-text-output\"", raw_ui))[[1]])
+chk("R2_N9_no_shared_input_output_ids", length(ids_in) >= 2 && all(c("key_text", "sentence") %in% ids_out) && !length(intersect(ids_in, ids_out)),
+    paste(c(ids_in, "|", ids_out), collapse = " "))
+# rejected colours are named in the status under the palette box (after typing settles)
+testServer(app, {
+  raw(example); do.call(session$setInputs, ui_defaults); session$setInputs(palette = "#12, nope"); session$flushReact()
+  session$elapse(1000)
+  chk("R2_N9_rejected_colours_named", grepl("Not a colour, left out: '#12', 'nope'\\.", output$palette_status), output$palette_status)
+})
+# repeated notices of one kind replace each other
+chk("R2_N9_notify_takes_an_id", "id" %in% names(formals(shiny::showNotification)))
+src_app <- readLines("app.R", warn = FALSE)
+chk("R2_N9_pdf_font_notice_has_a_fixed_id", any(grepl('notify\\(note, id = "pdf_font_note"\\)', src_app)))
+chk("R2_N9_no_favicon_404", grepl('rel="icon"', htmltools::renderTags(ui)$head, fixed = TRUE) &&
+      grepl('href="data:,"', htmltools::renderTags(ui)$head, fixed = TRUE))
+
+# N2: a tilted-name figure whose names leave less than 1.5 in for the plot says so
+testServer(app, {
+  caps <- paste(c("ESCHERICHIA PHAGE T4 WILD TYPE", "BACILLUS PHAGE SPP1 MUTANT", "ENTEROBACTERIA PHAGE LAMBDA CI857", "WWWW MMMM WWWW MMMM WWWW"), "X")
+  dc <- do.call(rbind, lapply(seq_along(caps), function(i) data.frame(group = caps[i], replicate = rep(paste0("p", 1:3), each = 4),
+                                                                      diameter_mm = rnorm(12, 2 + 0.3 * i, 0.1))))
+  raw(dc); do.call(session$setInputs, modifyList(ui_defaults, list(base_size = 24))); session$flushReact()
+  chk("R2_N2_long_names_at_large_font_say_the_panel_is_small", any(grepl("sample names are long for this font size", figure_notes())), paste(figure_notes(), collapse = " | "))
+  raw(example); session$setInputs(base_size = 14); session$flushReact()
+  chk("R2_N2_no_such_note_for_the_shipped_example", !any(grepl("sample names are long", figure_notes())))
+})
+chk("R2_N2c_capitals_are_wider_than_lowercase", name_width_in("WWWWWWWW", 14) > 1.3 * name_width_in("wwwwwwww", 14))
+
+# ---- final pass: the merged Python wording ---------------------------------------------------------
+stG <- plaque_run_stats(tidy(fx("ct_r2_gate_between.csv")))
+chk("R2_final_gate_sentence_does_not_reject", stG$parametric_used && stG$test == "Welch ANOVA" &&
+      any(grepl("^Every sample has at least 8 plates and Shapiro–Wilk \\(Bonferroni over 3 samples\\) does not reject normality \\(smallest p = 0\\.048, threshold 0\\.05/3 = 0\\.0167\\), so a parametric test is used\\.", stG$notes)),
+    paste(stG$notes, collapse = " | "))
+dRej <- mk8(seed_low); stRej <- plaque_run_stats(dRej)
+chk("R2_final_gate_sentence_rejects", any(grepl("^With at least 8 plates per sample, Shapiro–Wilk \\(Bonferroni over 3 samples\\) rejects normality for A \\(p < 0.001\\) and C \\(p = 0\\.013\\) \\(threshold 0\\.05/3 = 0\\.0167\\), so a rank-based test is used\\.", stRej$notes)),
+    paste(stRej$notes, collapse = " | "))
+stM1 <- plaque_run_stats(tidy(fx("ct_r2_mwu_5v6_noties.csv")), parametric = "nonparametric")
+stM2 <- plaque_run_stats(tidy(fx("ct_r2_mwu_ties.csv")), parametric = "nonparametric")
+chk("R2_final_mannwhitney_exact_without_ties_p", near(stM1$p, 0.017316017316017316, 1e-12) && stM1$p_method == "exact" &&
+      identical(stM1$method_note, "Mann–Whitney U p is exact (no ties, at most 8 per side)."), sprintf("%.12g %s", stM1$p, stM1$method_note))
+chk("R2_final_mannwhitney_asymptotic_with_ties_p", near(stM2$p, 0.025154152614191672, 1e-12) && stM2$p_method == "asymptotic" &&
+      identical(stM2$method_note, "Mann–Whitney U p is asymptotic (normal approximation with tie and continuity correction)."), sprintf("%.12g %s", stM2$p, stM2$method_note))
+chk("R2_final_kruskal_note_asymptotic", any(grepl("^Kruskal–Wallis and Dunn's p are asymptotic \\(chi-squared / normal approximation; with few values per sample they can be far from exact\\)\\.$", stT$notes)))
+spz <- spread_check(list(A = c(2, 2, 2), B = c(2.1, 2.5, 2.9), C = c(3, 3.3, 3.1)), "plates")
+chk("R2_final_zero_spread_advice", grepl("Welch's ANOVA is not an alternative here: A has no spread \\(identical plate-mean values\\)\\.$", spz$note), spz$note %||% "")
+dSt <- tidy(fx("ct_r1_B_unequal.csv"), replicate = "(none)")
+stars_sel <- pairs_to_draw(data.frame(group1 = c("a", "a", "a", "a", "a"), group2 = c("b", "c", "d", "e", "f"), p_adj = c(0.001, NA, 0.2, 0.03, 0.0001),
+                                      signif = p_stars(c(0.001, NA, 0.2, 0.03, 0.0001)), stringsAsFactors = FALSE),
+                           letters[1:6], "auto", "Tukey HSD")
+chk("R2_final_stars_row_na_for_untestable_pair", identical(stars_sel$vsref$labels, c("ref.", "**", "n/a", "ns", "*", "***")) &&
+      grepl("itself is marked ref\\.; n/a = could not be tested, fewer than 2 plates\\)", stars_sel$sentence), stars_sel$sentence %||% "")
