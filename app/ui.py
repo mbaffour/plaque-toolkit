@@ -414,6 +414,19 @@ class MeasureTab(QWidget):
         for w in self._param_rows:
             pl.addWidget(w)
         pl.addWidget(self.open_btn); pl.addWidget(self.redetect_btn); pl.addWidget(self.save_btn)
+        # CT-R3 (desktop-measure N10): on a window both NARROW and SHORT the results column
+        # (summary card + table) folds away, so the canvas gets the full width (its toolbar
+        # wraps onto three rows instead of five) and a usable height; the count, the median
+        # and a warning mark stay on the one-line summary, and this button brings it back
+        self.results_toggle = QToolButton(); self.results_toggle.setCheckable(True)
+        self.results_toggle.setToolTip("Show or hide the results column (the summary numbers and "
+                                       "the per-plaque table); it folds on its own on a narrow "
+                                       "window.")
+        self.results_toggle.clicked.connect(self._results_toggled)
+        self.results_toggle.setVisible(False)
+        self._results_collapsed = False
+        self._results_auto = True          # follows the window size until the user clicks
+        pl.addWidget(self.results_toggle)
 
         # mode helper + progress strip
         self.mode_help = QLabel(MODES[self._def_mode][2]); self.mode_help.setObjectName("ModeHelp")
@@ -421,6 +434,7 @@ class MeasureTab(QWidget):
         self.progress = QProgressBar(); self.progress.setRange(0, 0)   # indeterminate
         self.progress.setVisible(False); self.progress.setMaximumWidth(220)
         self.busy_label = QLabel(""); self.busy_label.setObjectName("ModeHelp")
+        self.busy_label.setVisible(False)
         # CT-R1 F25: Engine / Split-touching changed but the result on screen is the old one
         self.stale_label = QLabel(""); self.stale_label.setVisible(False)
         self.stale_label.setStyleSheet(f"font-weight:700; color:{style.LIGHT['warn']};")
@@ -530,10 +544,16 @@ class MeasureTab(QWidget):
 
     # CT-R2 N10: below this much height for the tab, the parameter rows fold into one line
     _COLLAPSE_BELOW = 640
+    # CT-R3 N10: below this much width for the tab (a 900 px window), on a window short enough
+    # to fold the parameter rows too, the results column folds; the image then keeps this height
+    _RESULTS_FOLD_BELOW = 960
+    _FOLDED_VIEW_MIN = 260
+    _VIEW_MIN = 170
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._auto_fold()
+        self._fit_params_summary()
         # The tab's real minimum height depends on its width (the toolbars wrap). Publish it,
         # so the outer scroll area scrolls only when the window is too small for that minimum
         # and otherwise hands the canvas all the height that is left (CT-R1 F11).
@@ -546,10 +566,23 @@ class MeasureTab(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self._show_status()                    # this tab's own message comes back with it
+        # CT-R3 N10: the tab keeps its own height when only the WINDOW's height changes, so
+        # the folds also follow the page that holds it (a 900x800 -> 900x600 resize)
+        vp = self.parentWidget()
+        if vp is not None and getattr(self, "_watched_vp", None) is not vp:
+            vp.installEventFilter(self)
+            self._watched_vp = vp
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent
+        if obj is getattr(self, "_watched_vp", None) and ev.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._auto_fold)
+        return super().eventFilter(obj, ev)
 
     def _auto_fold(self):
         """Fold the parameter rows on a short window -- only once a plate is on screen: before
         that the Dish, Engine and Plaque size boxes are what the user needs."""
+        self._auto_fold_results()
         if not self._params_auto:
             return
         vp = self.parentWidget()
@@ -557,6 +590,41 @@ class MeasureTab(QWidget):
         want = self.editor is not None and avail < self._COLLAPSE_BELOW
         if want != self._params_collapsed:
             self._set_params_collapsed(want)
+
+    def _auto_fold_results(self):
+        """CT-R3 N10: fold the results column on a window both narrow and short (the parameter
+        fold's own height test), once a plate is on screen. A narrow but TALL window keeps it:
+        there the table and the warning line have room."""
+        vp = self.parentWidget()
+        avail = vp.height() if vp is not None else self.height()
+        small = (self.editor is not None and 0 < self.width() < self._RESULTS_FOLD_BELOW
+                 and avail < self._COLLAPSE_BELOW)
+        self.results_toggle.setVisible(small or self._results_collapsed)
+        if self._results_auto and small != self._results_collapsed:
+            self._set_results_collapsed(small)
+        else:
+            self._apply_view_min()
+
+    def _apply_view_min(self):
+        """With the results column folded the image keeps _FOLDED_VIEW_MIN px of height (the
+        page scrolls a little for the legend row instead of squeezing the image)."""
+        if self.editor is not None:
+            self.editor.view.setMinimumHeight(
+                self._FOLDED_VIEW_MIN if self._results_collapsed else self._VIEW_MIN)
+
+    def _results_toggled(self, _checked=False):
+        self._results_auto = False
+        self._set_results_collapsed(not self._results_collapsed)
+
+    def _set_results_collapsed(self, on):
+        self._results_collapsed = bool(on)
+        self._right.setVisible(not on)
+        self.results_toggle.setText("Results ▸" if on else "Hide results ◂")
+        self.results_toggle.setChecked(on)
+        self.params_summary.setVisible(on or self._params_collapsed)
+        self._update_params_summary()
+        self._apply_view_min()
+        QTimer.singleShot(0, self._sync_min_height)
 
     def _params_toggled(self, _checked=False):
         self._params_auto = False
@@ -568,7 +636,7 @@ class MeasureTab(QWidget):
             w.setVisible(not on)
         self.mode_help.setVisible(not on)
         self._update_params_summary()
-        self.params_summary.setVisible(on)
+        self.params_summary.setVisible(on or getattr(self, "_results_collapsed", False))
         self.params_toggle.setText("Parameters ▾" if on else "Fold ▴")
         self.params_toggle.setChecked(on)
         self._params_box.setTitle("" if on else "Parameters")
@@ -582,11 +650,46 @@ class MeasureTab(QWidget):
 
     def _update_params_summary(self):
         eng = MODES[self.mode.currentIndex()][0].split(" (")[0]
-        size = self.scale_box.currentText() if self.scale_box.isEnabled() else ""
+        size = self.scale_box.currentText().split(" (")[0] if self.scale_box.isEnabled() else ""
         name = os.path.basename(self.image_path) if getattr(self, "image_path", None) else ""
-        self.params_summary.setText(" · ".join(x for x in (
-            name, "Dish %g mm" % self.plate.value(), eng, size,
-            "split touching" if self.watershed.isChecked() else "") if x))
+        parts = [name, "Dish %g mm" % self.plate.value(), eng, size,
+                 "split touching" if self.watershed.isChecked() else ""]
+        flag = ""
+        if getattr(self, "_results_collapsed", False) and getattr(self, "_metrics", None):
+            # CT-R3 N10: the results column is folded: its numbers and a warning mark come
+            # FIRST on this line (an elided line keeps its start)
+            unit = "mm" if "(mm)" in self._metric_caps["median"].text() else "px"
+            res = "%s plaques · median %s %s" % (self._metrics["count"].text(),
+                                                 self._metrics["median"].text(), unit)
+            if self.flag_label.text() and not self.flag_label.isHidden():
+                res += " ⚠"
+                flag = self.flag_label.text()
+            parts.insert(0, res)
+        self._params_summary_full = " · ".join(x for x in parts if x)
+        self.params_summary.setToolTip(self._params_summary_full + (("\n\n" + flag) if flag else ""))
+        if hasattr(self, "results_toggle"):
+            self.results_toggle.setToolTip((flag + "\n\n" if flag else "") +
+                                           "Show or hide the results column (the summary numbers "
+                                           "and the per-plaque table); it folds on its own on a "
+                                           "small window.")
+        self._fit_params_summary()
+
+    def _fit_params_summary(self):
+        """CT-R3 N10: the folded parameter line stays ONE row: the summary is elided to the
+        room the buttons leave (the full text is its tooltip). Real file names are long."""
+        full = getattr(self, "_params_summary_full", "")
+        lab = self.params_summary
+        box = getattr(self, "_params_box", None)
+        if box is None or not lab.isVisibleTo(self) and not lab.isVisible():
+            lab.setMaximumWidth(16777215); lab.setText(full)
+            return
+        others = [w for w in (self.params_toggle, self.open_btn, self.redetect_btn, self.save_btn,
+                              self.results_toggle) if not w.isHidden()]
+        widths = [max(w.width() if w.isVisible() else 0, w.sizeHint().width()) for w in others]
+        room = box.width() - sum(widths) - 10 * (len(others) + 1) - 24
+        room = max(160, room)
+        lab.setMaximumWidth(room)
+        lab.setText(lab.fontMetrics().elidedText(full, Qt.ElideRight, room))
 
     def _sync_min_height(self):
         """Publish the tab's real minimum height for its CURRENT width: the wrapped parameter
@@ -613,7 +716,7 @@ class MeasureTab(QWidget):
                        else cl.minimumSize().height())
         need = (m.top() + m.bottom() + 2 * lay.spacing()
                 + h4w(self._params_box, inner) + h4w(self._strip, inner)
-                + max(canvas_need, self._right.minimumSizeHint().height()))
+                + max(canvas_need, 0 if self._right.isHidden() else self._right.minimumSizeHint().height()))
         if need > 0 and need != self.minimumHeight():
             self.setMinimumHeight(need)
 
@@ -699,6 +802,7 @@ class MeasureTab(QWidget):
             self.flag_label.setVisible(True)
         else:
             self.flag_label.setVisible(False)
+        self._update_params_summary()          # CT-R3 N10: the folded line shows these too
 
     # -- mode handling ------------------------------------------------------ #
     def _mode_key(self):
@@ -876,6 +980,8 @@ class MeasureTab(QWidget):
         self.busy = on
         self.progress.setVisible(on)
         self.busy_label.setText(message if on else "")
+        # CT-R3 N10: an empty status line takes no height (the folded window needs it)
+        self.busy_label.setVisible(bool(on))
         if not on:
             self._busy_timer.stop()
         for w in (self.open_btn, self.redetect_btn, self.save_btn, self.mode, self.plate,

@@ -631,3 +631,32 @@ def test_f7_compile_excel_relative_root_and_a_missing_mode(tmp_path):
     # a relative root that does not exist is named, with the folder it was read from
     p = _run_compile(tmp_path, "--root", "nothere")
     assert p.returncode != 0 and "No folder %s" % (tmp_path / "nothere") in p.stderr
+
+
+# =========================================================================== small window (N10)
+def test_n10_small_window_folds_the_results_column_and_keeps_the_image_260_px(window, qtbot, dialogs, tmp_path):
+    tab = window.measure_tab
+    img = os.path.join(str(tmp_path / "s"), "sample.tif")
+    os.makedirs(os.path.dirname(img)); shutil.copy(SAMPLE_TIF, img)
+    ed = _open(tab, qtbot, dialogs, img)
+    for size in ((1320, 880), (1024, 700), (900, 800)):          # roomy, or narrow but tall
+        window.resize(*size); qtbot.wait(300)
+        assert not tab._right.isHidden() and tab.summary_card.isVisible(), size
+        assert ed.view.minimumHeight() == 170
+    window.resize(900, 600); qtbot.wait(400)
+    assert tab._right.isHidden() and tab.results_toggle.isVisible()
+    assert ed.view.height() >= 260
+    # the numbers and a warning mark stay on the one folded line, which stays ONE row
+    line = tab.params_summary.text()
+    assert line.startswith("41 plaques · median 5.93 mm ⚠")
+    assert tab.flag_label.text() in tab.params_summary.toolTip()
+    assert tab.params_summary.geometry().top() == tab.open_btn.geometry().top() - 0 or \
+        abs(tab.params_summary.geometry().center().y() - tab.open_btn.geometry().center().y()) < 20
+    assert abs(tab.results_toggle.geometry().center().y() - tab.open_btn.geometry().center().y()) < 20
+    # the toggle brings the column back, and the user's choice survives a resize
+    tab.results_toggle.click(); qtbot.wait(100)
+    assert not tab._right.isHidden() and ed.view.minimumHeight() == 170
+    window.resize(880, 590); qtbot.wait(300)
+    assert not tab._right.isHidden()
+    tab.results_toggle.click(); qtbot.wait(100)
+    assert tab._right.isHidden() and ed.view.minimumHeight() == 260
