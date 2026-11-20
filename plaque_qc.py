@@ -101,6 +101,37 @@ def size_summary_lines(flag_strings):
     return [line + ((" (left out: %s)" % why) if why else "")]
 
 
+# CT-R2 detection N2 / Part 3: the standard (block-231) pass outlines a haloed plaque at its
+# dark centre (-45 to -61 %) once it is about 140 px across or wider: its threshold window is
+# about the halo's size. Measured on the frozen benchmark's plate model with the CLI default
+# (validation/detection_benchmark/standard_range.py): haloed discs within +-5 % every time up to
+# 135 px, at the centre from 140 px (1 of 3 at 141 px in the benchmark's own scenes); sharp discs
+# up to 300 px (first failures 250-350 px). It is the frozen engine's limit, not Auto's.
+STANDARD_HALO_MAX_PX = 135
+# warn when the plate's largest outline reaches this: plaques of that size are close enough to
+# the limit that the larger ones on the plate (or the same plate photographed closer) cross it
+STANDARD_HALO_WARN_PX = 100
+
+
+def large_plaque_warning(diams_px, mm_per_px=None):
+    """[warning] when the largest plaque outline (area-equivalent diameter, px) is
+    STANDARD_HALO_WARN_PX or more, else []. Never changes a number."""
+    d = [float(x) for x in diams_px if x is not None and x == x]
+    if not d or max(d) < STANDARD_HALO_WARN_PX:
+        return []
+    where = ("" if not mm_per_px else " (%.1f mm at this image's scale)"
+             % (STANDARD_HALO_MAX_PX * float(mm_per_px)))
+    return ["Plaques wider than about %d px%s may be outlined at their dark centre (the largest "
+            "here is %.0f px); photograph at lower magnification or resize the image."
+            % (STANDARD_HALO_MAX_PX, where, max(d))]
+
+
+def plate_warnings(diams_px, mm_per_px=None):
+    """Per-plate warnings about the plaque sizes (the app's flag line, the CLI's stdout and
+    run_metadata.json): today the large-plaque limit of the standard pass (Part 3)."""
+    return large_plaque_warning(diams_px, mm_per_px)
+
+
 def size_left_out_counts(flag_strings):
     """{'core': n with CORE?, 'no_size': n with NO_SIZE (and not CORE?)} over many rows."""
     core = sum(1 for f in flag_strings if has_flag(f, "CORE?"))

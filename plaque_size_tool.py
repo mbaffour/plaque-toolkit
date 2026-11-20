@@ -965,6 +965,19 @@ def _process_one(image_path, plate_size, run_images, args):
         renumerate_df(red_df)
         renumerate_df(other_df)
 
+        # CT-R2 detection N2 (Part 3): plaques near the size where the standard pass outlines
+        # a haloed plaque at its dark centre -- stdout and run_metadata.json only, every mode
+        _plate_warn = []
+        try:
+            import plaque_qc
+            if len(green_df_copy):
+                _dpx = [2.0 * float(np.sqrt(float(a) / np.pi)) for a in green_df_copy['AREA_PXL']]
+                _plate_warn = plaque_qc.plate_warnings(_dpx, last_calibration.get('mm_per_px'))
+            for _w in _plate_warn:
+                print("  WARNING: " + _w)
+        except Exception:
+            _plate_warn = []
+
         output = draw_contours(clr_high_contrast, green_df_copy, red_df_copy, other_df_copy, plate_df_copy)
 
         if not os.path.exists(out_dir_path):
@@ -985,6 +998,7 @@ def _process_one(image_path, plate_size, run_images, args):
                 "mm_per_px": last_calibration['mm_per_px'],
                 "dish_axis_ratio": (round(float(_ar), 4) if _ar is not None else None),
                 "dish_warnings": list(_dish_warn),
+                "plate_warnings": list(_plate_warn),
                 "csv": "data-green-%s.csv" % output_stem(image_path),
             })
         except Exception as exc:         # pragma: no cover - defensive only
