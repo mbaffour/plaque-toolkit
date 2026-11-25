@@ -406,7 +406,7 @@ def test_N3_plate_bootstrap_of_the_median_is_approximate_below_10_plates(tmp_pat
 # =========================================================================== 7. --detect, sensitivity
 @pytest.mark.parametrize("detect", [0.05, 0.2, 0.6, 3.0])
 def test_detect_plates_needed_matches_statsmodels(tmp_path, detect):
-    from statsmodels.stats.power import TTestIndPower
+    TTestIndPower = pytest.importorskip("statsmodels.stats.power").TTestIndPower
     g = {"A": [2.0, 2.1, 2.25, 2.05], "B": [2.3, 2.2, 2.45, 2.35], "C": [2.6, 2.7, 2.5, 2.65]}
     om = ps.run_stats(_units(g), list("ABC"), "auto", "auto", detect=detect)[0]
     pw = om["power"]
