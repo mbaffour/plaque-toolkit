@@ -202,7 +202,11 @@ def test_published_app_path_unchanged(name, mode):
     assert det["n_plaques"] == exp["n"]
     assert got == exp["plaques"]
     assert (round(det["plate"]["diam_px"], 2) if det["plate"] else None) == exp["dish_px"]
-    assert det["pxl_per_mm"] == exp["ppm"]
+    # The scale is a float from the dish fit: macOS / Python 3.9 and Linux / Python 3.12 differ
+    # in the 8th significant digit on large/Plate_6 (0.04224576390641298 vs 0.04224575906509255,
+    # CI 2026-11), so it is compared to a RELATIVE tolerance of 1e-6. Counts, plaque order and the
+    # rounded pixel values above stay exact.
+    assert det["pxl_per_mm"] == pytest.approx(exp["ppm"], rel=1e-6, abs=0)
     assert all(p["source"] == "auto" for p in det["plaques"])
 
 
