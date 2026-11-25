@@ -53,6 +53,10 @@ hiddenimports += [
     "app", "app.engine_api", "app.workers", "app.ui", "app.widgets", "app.canvas_editor",
     "app.style", "app.env_paths", "app.plaque_canvas",
     "app.imagej_roi", "app.fiji_match", "app.fiji_export", "app.fiji_dialog",
+    "app.agreement", "app.study_tab",
+    # the standalone stats engine, reused in-process by the Analyze tab and run by --smoke
+    # (as in plaque_app_full.spec; plaque_stats/ has no __init__.py, so name it explicitly)
+    "plaque_stats", "plaque_stats.plaque_stats", "plaque_stats.legend_key",
     # the in-process Precise package
     "precise", "precise.pipeline", "precise.combine", "precise.pst_front",
     "_plaqseg", "_plaqseg.run_plaqseg",

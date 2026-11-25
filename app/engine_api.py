@@ -683,5 +683,62 @@ def smoke(extra=None):
         except Exception as e:
             print(f"  {os.path.basename(p)}: ERROR {e}")
             ok = False
+    for name, check in (("stats", _smoke_stats), ("agreement", _smoke_agreement)):
+        try:
+            print(f"  {name}: {check()}")
+        except Exception as e:                       # noqa: BLE001 -- report, then fail the gate
+            import traceback
+            traceback.print_exc()
+            print(f"  {name}: ERROR {type(e).__name__}: {e}")
+            ok = False
     print("SMOKE", "OK" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def _smoke_stats():
+    """One small statistics analysis through the engine the Analyze tab uses (plaque_stats run on
+    its own example data set, written by make_example into a temp folder): proves SciPy / pandas
+    / matplotlib work together in this build. Raises on any error or a missing result."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+    from plaque_stats import plaque_stats as ps      # as the Analyze tab imports it
+    tmp = tempfile.mkdtemp(prefix="plaque_smoke_stats_")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            ps.make_example(tmp)
+            res = ps.run({**ps.DEFAULTS, "data": os.path.join(tmp, "example_data_long.csv"),
+                          "metric": "diameter_mm", "out": os.path.join(tmp, "out"),
+                          "formats": ["png"], "dpi": 40, "_stamp": "", "stats_table": False,
+                          "legend_key": False})
+        om = res["omni"]
+        p = om.get("p")
+        if p is None or not (0.0 <= float(p) <= 1.0):
+            raise RuntimeError("the analysis gave no p-value (%r)" % (p,))
+        pw = om.get("power") or {}
+        if not pw.get("available"):
+            raise RuntimeError("the power estimate is not available: %s" % pw.get("reason"))
+        if not any(f.endswith(".png") for f in os.listdir(res["out"])):
+            raise RuntimeError("the analysis wrote no figure")
+        return "%s, p = %.3g, %d samples, detectable difference %.3g" % (
+            om.get("test"), float(p), len(res["order"]), pw["detectable_diff"])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _smoke_agreement():
+    """One tool-vs-manual agreement computation (app/agreement.py, the Validate tab's maths):
+    Bland-Altman, ICC(A,1) and its exact F interval. Raises on any error or a non-finite value."""
+    import math
+    from app import agreement as ag
+    ref = [0.62, 0.71, 0.80, 0.95, 1.10, 1.22, 1.35, 1.51, 1.66, 1.80]
+    tool = [0.64, 0.70, 0.83, 0.93, 1.13, 1.20, 1.38, 1.49, 1.70, 1.78]
+    s = ag.compute(tool, ref)
+    lo, hi = ag.icc_ci(tool, ref)
+    vals = (s["bias"], s["loa_lo"], s["loa_hi"], s["icc"], s["r"], lo, hi)
+    if not all(math.isfinite(v) for v in vals) or not (lo <= s["icc"] <= hi):
+        raise RuntimeError("non-finite or inconsistent agreement statistics: %r" % (vals,))
+    return "bias %.3g, ICC %.3f [%.3f, %.3f]" % (s["bias"], s["icc"], lo, hi)
