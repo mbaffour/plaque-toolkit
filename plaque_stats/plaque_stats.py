@@ -839,24 +839,90 @@ def dunnett(groups, control, seed=7):
     return pv, ci
 
 
+def _two_sided_t_power_by_integral(tc, dfree, nc):
+    """P(T > tc) + P(T < -tc) for T ~ noncentral t(dfree, nc), from its definition
+    T = (Z + nc) / sqrt(V / dfree), V ~ chi2(dfree): the integral over V of
+    chi2.pdf(V) * [Phi(nc - tc s) + Phi(-tc s - nc)], s = sqrt(V / dfree). It uses only the
+    normal CDF and the chi-square density, so it is finite for every noncentrality (CI 2026-11:
+    SciPy 1.17's nct.sf / nct.cdf return NaN for some moderate-to-large noncentralities where
+    1.13 returned 1.0 / 0.0). It agrees with SciPy 1.13's nct to ~1e-13 where both are defined."""
+    from scipy import integrate, special
+    half = dfree / 2.0
+    lconst = -half * math.log(2.0) - special.gammaln(half)
+    lo, hi = float(st.chi2.ppf(1e-17, dfree)), float(st.chi2.isf(1e-17, dfree))
+
+    def f(v):
+        if v <= 0:
+            return 0.0
+        s = math.sqrt(v / dfree)
+        dens = math.exp(lconst + (half - 1.0) * math.log(v) - v / 2.0)
+        return dens * (float(special.ndtr(nc - tc * s)) + float(special.ndtr(-tc * s - nc)))
+    # the integrand turns over where nc = tc s, and the chi-square mass sits around v = dfree
+    pts = sorted({x for x in (dfree * (nc / tc) ** 2, float(dfree)) if lo < x < hi}) or None
+    val, _err = integrate.quad(f, lo, hi, points=pts, limit=500, epsabs=1e-14, epsrel=1e-12)
+    return float(val)
+
+
 def _power_two_sample(d, n, alpha=0.05):
     """Power of a two-sided two-sample t-test with n per group for a standardised difference d
-    (noncentral t)."""
-    dfree = 2 * n - 2
+    (noncentral t). Finite for every d >= 0 and n >= 2 on every supported SciPy: SciPy's nct is
+    used when it returns finite tail probabilities (so the numbers are those of every earlier
+    release), and the definition of the noncentral t is integrated directly when it does not
+    (SciPy 1.17 returns NaN for some large noncentralities). A ValueError for d < 0, a
+    non-finite d or n < 2 -- those are caller errors, never hidden."""
+    d = float(d)
+    if not (math.isfinite(d) and d >= 0):
+        raise ValueError("standardised difference must be finite and >= 0 (got %r)" % (d,))
+    if int(n) != n or n < 2:
+        raise ValueError("n per group must be an integer >= 2 (got %r)" % (n,))
+    dfree = 2 * int(n) - 2
     nc = d * math.sqrt(n / 2.0)
-    tc = st.t.ppf(1 - alpha / 2.0, dfree)
-    return float(st.nct.sf(tc, dfree, nc) + st.nct.cdf(-tc, dfree, nc))
+    tc = float(st.t.ppf(1 - alpha / 2.0, dfree))
+    import warnings
+    with warnings.catch_warnings(), np.errstate(all="ignore"):
+        warnings.simplefilter("ignore")
+        up = float(st.nct.sf(tc, dfree, nc))
+        low = float(st.nct.cdf(-tc, dfree, nc))
+    if all(math.isfinite(x) and 0.0 <= x <= 1.0 for x in (up, low)):
+        return float(up + low)
+    p = _two_sided_t_power_by_integral(tc, dfree, nc)
+    if not math.isfinite(p):
+        raise ValueError("power could not be computed (d = %r, n = %r)" % (d, n))
+    return min(1.0, max(0.0, p))
 
 
 def plates_needed(d, power=0.80, alpha=0.05, n_max=1000):
     """Smallest n per group that detects a standardised difference d with the given power
-    (None when it would take more than n_max)."""
+    (None when it would take more than n_max). Power rises with n, so this is the first n of
+    the scan whose power reaches the target; every power value is finite (_power_two_sample)."""
     if not (d == d) or d <= 0:
         return None
+    if math.isinf(d):
+        return 2
     for n in range(2, n_max + 1):
         if _power_two_sample(d, n, alpha) >= power:
             return n
     return None
+
+
+def detectable_effect(n, power=0.80, alpha=0.05):
+    """Smallest standardised difference d detected with the given power at n per group. Power
+    rises with d (alpha at d = 0, 1 as d grows), so the bracket is GROWN from a small upper
+    bound until the power reaches the target and the root is found inside it; the solver never
+    starts out at a huge d (it used to bracket [1e-6, 1e4], which walked through the
+    noncentralities where SciPy 1.17's nct is NaN and stopped every analysis, CI 2026-11)."""
+    from scipy.optimize import brentq
+    if not (alpha < power < 1):
+        raise ValueError("power must lie between alpha and 1 (got %r)" % (power,))
+
+    def gap(d):
+        return _power_two_sample(d, n, alpha) - power
+    lo, hi = 0.0, 0.5
+    while gap(hi) < 0:
+        lo, hi = hi, 2.0 * hi
+        if hi > 1e6:
+            raise ValueError("no difference up to 1e6 SD reaches %g power at n = %r" % (power, n))
+    return float(brentq(gap, lo, hi, xtol=1e-14, maxiter=200))
 
 
 def power_summary(groups, power=0.80, alpha=0.05, detect=None):
@@ -873,8 +939,7 @@ def power_summary(groups, power=0.80, alpha=0.05, detect=None):
     if not (sd > 0):
         return {"available": False, "reason": "the units show no spread (pooled SD = 0)"}
     n = int(min(len(v) for v in use.values()))
-    from scipy.optimize import brentq
-    d_det = brentq(lambda d: _power_two_sample(d, n, alpha) - power, 1e-6, 1e4)
+    d_det = detectable_effect(n, power, alpha)
     means = {g: float(np.mean(v)) for g, v in groups.items() if len(v) >= 1}
     diffs = sorted(abs(means[a] - means[b]) for a, b in itertools.combinations(means, 2))
     diffs = [d for d in diffs if d > 0]
@@ -1479,9 +1544,27 @@ def run_stats(df, order, unit, parametric, equal_var="auto", posthoc="auto", con
                      "p < %g." % ("1 p-value is" if tiny == 1 else "%d p-values are" % tiny, P_FLOOR,
                                   "it" if tiny == 1 else "them", "it" if tiny == 1 else "them", P_FLOOR))
     omni["p_floor"] = P_FLOOR
-    omni["power"] = power_summary(groups, detect=det)
-    omni["sensitivity"] = sensitivity_check(groups, order, tg, use_param, ctrl, uw)
-    omni["icc"] = plate_variance_share(df)
+    # The power / sensitivity / variance-share lines are extras: a failure inside one of them
+    # (CI 2026-11: SciPy 1.17's NaNs once stopped every analysis in power_summary) makes that
+    # extra "not available" with the reason and a note; it never fails the analysis.
+    def _extra(what, fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except StatsError:
+            raise
+        except Exception as e:                                     # noqa: BLE001 -- see above
+            why = "it could not be computed: %s: %s" % (type(e).__name__, e)
+            notes.append("The %s is not available (%s); the rest of the analysis is unaffected."
+                         % (what, why))
+            return {"available": False, "reason": why}
+    omni["power"] = _extra("power estimate", power_summary, groups, detect=det)
+    omni["sensitivity"] = _extra("sensitivity check", sensitivity_check, groups, order, tg,
+                                 use_param, ctrl, uw)
+    if (omni["sensitivity"] or {}).get("available") is False:
+        omni["sensitivity"]["text"] = "not available (%s)." % omni["sensitivity"]["reason"]
+    omni["icc"] = _extra("between-plate variance share", plate_variance_share, df)
+    if (omni["icc"] or {}).get("available") is False:
+        omni["icc"]["icc"] = float("nan")
     omni["letters"] = compact_letters(list(order), posthoc) if (k > 2 and ctrl is None and posthoc) else {}
     posthoc = PosthocResult(posthoc or {})
     post = omni.get("posthoc")
