@@ -907,9 +907,12 @@ def _legend_key_module():
 def phage_colours(phages):
     """The one phage -> colour mapping of the overlaid histograms: matplotlib's default colour
     cycle, in phage order (what the histograms always used), now an explicit dict that the bars
-    are drawn from and the legend key is built from."""
+    are drawn from and the legend key is built from. Always '#rrggbb' strings: matplotlib 3.11's
+    default cycle holds RGB tuples where 3.9 held hex strings (CI 2026-11); to_hex gives the same
+    '#1f77b4' ... on both, so the figures do not change."""
     import matplotlib
-    cyc = [d["color"] for d in matplotlib.rcParams["axes.prop_cycle"]] or ["#1f77b4"]
+    from matplotlib.colors import to_hex
+    cyc = [to_hex(d["color"]) for d in matplotlib.rcParams["axes.prop_cycle"]] or ["#1f77b4"]
     return {p: cyc[i % len(cyc)] for i, p in enumerate(phages)}
 
 
